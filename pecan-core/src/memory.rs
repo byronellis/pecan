@@ -46,9 +46,10 @@ impl MemoryManager {
     }
 
     fn setup_db(conn: &mut Connection) -> Result<()> {
-        // Main metadata table with INTEGER PRIMARY KEY for efficient FTS mapping
+        // Main metadata table with explicit INTEGER PRIMARY KEY for reliable rowid
         conn.execute(
             "CREATE TABLE IF NOT EXISTS memories (
+                rowid INTEGER PRIMARY KEY AUTOINCREMENT,
                 id TEXT NOT NULL UNIQUE,
                 content TEXT NOT NULL,
                 summary TEXT NOT NULL,
@@ -58,7 +59,6 @@ impl MemoryManager {
         )?;
 
         // FTS5 Virtual Table for searching
-        // Use external content table for efficiency
         conn.execute(
             "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
                 content,
@@ -69,7 +69,7 @@ impl MemoryManager {
             [],
         )?;
 
-        // Triggers to keep FTS in sync with memories table
+        // Triggers to keep FTS in sync
         conn.execute_batch(
             "CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
                 INSERT INTO memories_fts(rowid, content, summary) VALUES (new.rowid, new.content, new.summary);
@@ -92,9 +92,6 @@ impl MemoryManager {
         }
 
         let tx = self.db_conn.transaction()?;
-        // Clear existing index for clean rebuild if we want (or handle incrementally)
-        // For simplicity now, let's just assume we append to index from log.
-        // A more robust way would be to track the last synced offset in the DB.
         
         let file = fs::File::open(&self.log_path)?;
         let reader = io::BufReader::new(file);
@@ -159,11 +156,19 @@ impl MemoryManager {
     }
 
     pub fn search(&self, query: &str, limit: usize) -> Result<Vec<(String, String)>> {
+        // Sanitize query for FTS5: remove special characters or quote them
+        // For simplicity, we'll just wrap the terms in quotes if they aren't already
+        let sanitized_query = query
+            .split_whitespace()
+            .map(|word| format!("\"{}\"", word.replace('\"', "")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
         let mut stmt = self.db_conn.prepare(
             "SELECT content, summary FROM memories_fts WHERE memories_fts MATCH ? LIMIT ?"
         )?;
         
-        let rows = stmt.query_map(params![query, limit], |row| {
+        let rows = stmt.query_map(params![sanitized_query, limit], |row| {
             Ok((row.get(0)?, row.get(1)?))
         })?;
 
