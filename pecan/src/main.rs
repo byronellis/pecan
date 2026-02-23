@@ -18,6 +18,10 @@ struct Args {
     /// Start in TUI mode
     #[arg(short, long)]
     tui: bool,
+
+    /// Run a single prompt and exit
+    #[arg(short, long)]
+    prompt: Option<String>,
 }
 
 #[tokio::main]
@@ -45,11 +49,25 @@ async fn main() -> anyhow::Result<()> {
 
     let agent = Agent::new(config, "pecan_memory").await?;
 
-    {
-        let mut tools = agent.tools.lock().await;
-        tools.register(Arc::new(pecan_core::tools::ReadFile));
-        tools.register(Arc::new(pecan_core::tools::WriteFile));
-        tools.register(Arc::new(pecan_core::tools::ListDir));
+    // If a prompt is provided, run it and exit
+    if let Some(prompt) = args.prompt {
+        match agent.chat(prompt).await {
+            Ok(response) => {
+                if response == "WAITING_FOR_APPROVAL" {
+                    let pending = agent.pending_tool_call.lock().await;
+                    if let Some(p) = &*pending {
+                        println!("Tool Approval Required: {} with args {}", p.tool_name, p.arguments);
+                    }
+                } else {
+                    println!("{}", response);
+                }
+                return Ok(());
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
     }
 
     // Default to TUI unless explicitly asked for non-tui
