@@ -69,7 +69,7 @@ where
     let mut theme = DRACULA;
 
     let agent = Arc::new(agent);
-    let commands = vec!["/model ", "/theme ", "/quit", "/help", "/clear", "/task ", "/pause", "/resume"];
+    let commands = vec!["/model ", "/theme ", "/quit", "/help", "/clear", "/task ", "/pause", "/resume", "/approve", "/reject "];
     let themes = vec!["dracula", "nord", "default"];
 
     let (sep_left, sep_right) = if is_iterm {
@@ -79,10 +79,11 @@ where
     };
 
     loop {
-        let (task_list, is_paused) = {
+        let (task_list, is_paused, pending_tool) = {
             let stack = agent.task_stack.lock().await;
             let paused = agent.paused.lock().await;
-            (stack.tasks.clone(), *paused)
+            let pending = agent.pending_tool_call.lock().await;
+            (stack.tasks.clone(), *paused, pending.clone())
         };
 
         terminal.draw(|f| {
@@ -117,21 +118,19 @@ where
                 .map(|(role, content)| {
                     if role == "You" {
                         let style = Style::default().bg(theme.user_bg).fg(theme.user_fg);
-                        // Split content by newlines and style each line
                         let mut lines: Vec<Line> = content.lines()
                             .map(|l| Line::from(format!(" {}", l)).style(style))
                             .collect();
-                        lines.push(Line::from("")); // Spacer
+                        lines.push(Line::from("")); 
                         ListItem::new(lines)
                     } else if role == "Agent" {
                         let style = Style::default().fg(theme.agent_text);
                         let mut lines: Vec<Line> = content.lines()
                             .map(|l| Line::from(format!(" {}", l)).style(style))
                             .collect();
-                        lines.push(Line::from("")); // Spacer
+                        lines.push(Line::from("")); 
                         ListItem::new(lines)
                     } else {
-                        // System messages
                         let mut lines = vec![Line::from(vec![Span::styled(format!(" {} ", role), Style::default().fg(Color::Gray))])];
                         for l in content.lines() {
                             lines.push(Line::from(format!(" {}", l)));
@@ -142,7 +141,19 @@ where
                 })
                 .collect();
             
-            if is_thinking {
+            if let Some(p) = &pending_tool {
+                history_items.push(ListItem::new(vec![
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled(" TOOL APPROVAL REQUIRED ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)),
+                        Span::styled(sep_left, Style::default().fg(Color::Yellow)),
+                    ]),
+                    Line::from(format!(" Tool: {}", p.tool_name)),
+                    Line::from(format!(" Args: {}", p.arguments)),
+                    Line::from(" Use /approve or /reject <reason> to continue."),
+                    Line::from(""),
+                ]));
+            } else if is_thinking {
                 history_items.push(ListItem::new(Line::from(" Agent is thinking...").style(Style::default().fg(Color::DarkGray))));
             }
             
@@ -203,7 +214,9 @@ where
         })?;
 
         if let Ok(response) = rx.try_recv() {
-            messages.push(("Agent".to_string(), response));
+            if response != "WAITING_FOR_APPROVAL" {
+                messages.push(("Agent".to_string(), response));
+            }
             is_thinking = false;
         }
 
@@ -216,10 +229,6 @@ where
 
                 if key.modifiers.contains(event::KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
                     return Ok(());
-                }
-
-                if is_thinking {
-                    // Even if thinking, allow pause/resume?
                 }
 
                 match key.code {
@@ -276,6 +285,41 @@ where
                             let mut paused = agent.paused.lock().await;
                             *paused = false;
                             messages.push(("System".to_string(), "Autonomous loop resumed.".to_string()));
+                            continue;
+                        }
+
+                        if user_input.starts_with("/approve") {
+                            is_thinking = true;
+                            let agent_clone = agent.clone();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                match agent_clone.approve_tool_call().await {
+                                    Ok(response) => {
+                                        let _ = tx_clone.send(response).await;
+                                    }
+                                    Err(e) => {
+                                        let _ = tx_clone.send(format!("Error: {}", e)).await;
+                                    }
+                                }
+                            });
+                            continue;
+                        }
+
+                        if user_input.starts_with("/reject ") {
+                            let reason = user_input["/reject ".len()..].trim().to_string();
+                            is_thinking = true;
+                            let agent_clone = agent.clone();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                match agent_clone.reject_tool_call(&reason).await {
+                                    Ok(response) => {
+                                        let _ = tx_clone.send(response).await;
+                                    }
+                                    Err(e) => {
+                                        let _ = tx_clone.send(format!("Error: {}", e)).await;
+                                    }
+                                }
+                            });
                             continue;
                         }
 
@@ -340,7 +384,7 @@ where
                         }
 
                         if user_input.trim() == "/help" {
-                            messages.push(("System".to_string(), "Commands: /model <name>, /theme <name>, /task <desc>, /pause, /resume, /clear, /quit, /help".to_string()));
+                            messages.push(("System".to_string(), "Commands: /model <name>, /theme <name>, /task <desc>, /pause, /resume, /approve, /reject <reason>, /clear, /quit, /help".to_string()));
                             continue;
                         }
 

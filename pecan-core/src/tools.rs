@@ -124,3 +124,40 @@ impl Tool for PushTask {
         Ok(json!({ "status": "task_pushed", "id": id }))
     }
 }
+
+pub struct Shell;
+
+#[async_trait]
+impl Tool for Shell {
+    fn name(&self) -> &str { "shell" }
+    fn description(&self) -> &str { "Executes a shell command." }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "command": { "type": "string", "description": "The command to execute." },
+                "args": { "type": "array", "items": { "type": "string" }, "description": "Arguments for the command." }
+            },
+            "required": ["command"]
+        })
+    }
+    async fn call(&self, arguments: Value) -> anyhow::Result<Value> {
+        let command = arguments["command"].as_str().ok_or_else(|| anyhow::anyhow!("Missing command"))?;
+        let args: Vec<String> = arguments["args"].as_array()
+            .unwrap_or(&vec![])
+            .iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect();
+
+        let output = std::process::Command::new(command)
+            .args(args)
+            .output()?;
+
+        Ok(json!({
+            "status": if output.status.success() { "success" } else { "error" },
+            "stdout": String::from_utf8_lossy(&output.stdout),
+            "stderr": String::from_utf8_lossy(&output.stderr),
+            "exit_code": output.status.code(),
+        }))
+    }
+}

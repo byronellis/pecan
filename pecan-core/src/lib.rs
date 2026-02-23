@@ -92,7 +92,6 @@ impl TaskStack {
     }
 
     pub fn pop(&mut self) -> Option<Task> {
-        // Find first pending task
         let idx = self.tasks.iter().position(|t| t.status == TaskStatus::Pending)?;
         Some(self.tasks.remove(idx))
     }
@@ -118,6 +117,13 @@ impl TaskStack {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingToolCall {
+    pub id: String,
+    pub tool_name: String,
+    pub arguments: serde_json::Value,
+}
+
 pub struct Agent {
     pub provider: Arc<Mutex<Arc<dyn Provider>>>,
     pub state: Arc<Mutex<AgentState>>,
@@ -126,6 +132,7 @@ pub struct Agent {
     pub config: Arc<Mutex<Config>>,
     pub task_stack: Arc<Mutex<TaskStack>>,
     pub paused: Arc<Mutex<bool>>,
+    pub pending_tool_call: Arc<Mutex<Option<PendingToolCall>>>,
 }
 
 impl Agent {
@@ -134,6 +141,7 @@ impl Agent {
         let task_stack = Arc::new(Mutex::new(TaskStack::new()));
         let tools = Arc::new(Mutex::new(ToolRegistry::new()));
         let paused = Arc::new(Mutex::new(false));
+        let pending_tool_call = Arc::new(Mutex::new(None));
 
         {
             let mut registry = tools.lock().await;
@@ -142,6 +150,7 @@ impl Agent {
             registry.register(Arc::new(tools::ListDir));
             registry.register(Arc::new(tools::SpawnSubagent));
             registry.register(Arc::new(tools::PushTask { stack: task_stack.clone() }));
+            registry.register(Arc::new(tools::Shell));
         }
         
         Ok(Self {
@@ -152,6 +161,7 @@ impl Agent {
             config: Arc::new(Mutex::new(config)),
             task_stack,
             paused,
+            pending_tool_call,
         })
     }
 
@@ -178,6 +188,87 @@ impl Agent {
         let mut provider_lock = self.provider.lock().await;
         *provider_lock = provider;
         Ok(())
+    }
+
+    fn check_shell_security(config: &Config, arguments: &serde_json::Value) -> Result<()> {
+        let command = arguments["command"].as_str().ok_or_else(|| anyhow::anyhow!("Missing command"))?;
+        
+        if config.tools.blocked_shell_commands.iter().any(|c| command.contains(c)) {
+            anyhow::bail!("Command '{}' is explicitly blocked in configuration.", command);
+        }
+
+        if !config.tools.allowed_shell_commands.is_empty() && 
+           !config.tools.allowed_shell_commands.iter().any(|c| command.contains(c)) {
+            anyhow::bail!("Command '{}' is not in the allowed list.", command);
+        }
+
+        Ok(())
+    }
+
+    pub async fn approve_tool_call(&self) -> Result<String> {
+        let pending = {
+            let mut p = self.pending_tool_call.lock().await;
+            p.take()
+        };
+
+        if let Some(p) = pending {
+            if p.tool_name == "shell" {
+                let config = self.config.lock().await;
+                if let Err(e) = Self::check_shell_security(&config, &p.arguments) {
+                    return Err(e);
+                }
+            }
+
+            let result = {
+                let tools = self.tools.lock().await;
+                if let Some(tool) = tools.tools.get(&p.tool_name) {
+                    tool.call(p.arguments).await?
+                } else {
+                    serde_json::json!({ "error": format!("Tool {} not found", p.tool_name) })
+                }
+            };
+
+            {
+                let mut state = self.state.lock().await;
+                state.history.push(Message {
+                    role: Role::Tool,
+                    content: Some(result.to_string()),
+                    tool_calls: None,
+                    tool_call_id: Some(p.id),
+                });
+            }
+
+            self.chat_loop_continue().await
+        } else {
+            anyhow::bail!("No pending tool call to approve")
+        }
+    }
+
+    pub async fn reject_tool_call(&self, reason: &str) -> Result<String> {
+        let pending = {
+            let mut p = self.pending_tool_call.lock().await;
+            p.take()
+        };
+
+        if let Some(p) = pending {
+            {
+                let mut state = self.state.lock().await;
+                state.history.push(Message {
+                    role: Role::Tool,
+                    content: Some(serde_json::json!({ "error": "User rejected tool execution", "reason": reason }).to_string()),
+                    tool_calls: None,
+                    tool_call_id: Some(p.id),
+                });
+            }
+
+            self.chat_loop_continue().await
+        } else {
+            anyhow::bail!("No pending tool call to reject")
+        }
+    }
+
+    async fn chat_loop_continue(&self) -> Result<String> {
+        self.chat_internal().await
     }
 
     pub async fn chat(&self, user_input: String) -> Result<String> {
@@ -209,6 +300,10 @@ impl Agent {
             });
         }
 
+        self.chat_internal().await
+    }
+
+    async fn chat_internal(&self) -> Result<String> {
         let mut final_response = String::new();
 
         loop {
@@ -240,10 +335,38 @@ impl Agent {
             }
 
             if let Some(tool_calls) = response.tool_calls {
+                let config = self.config.lock().await;
+                let require_approval = config.tools.require_approval;
+                
+                if require_approval {
+                    let tool_call = &tool_calls[0];
+                    let mut p = self.pending_tool_call.lock().await;
+                    *p = Some(PendingToolCall {
+                        id: tool_call.id.clone(),
+                        tool_name: tool_call.function.name.clone(),
+                        arguments: serde_json::from_str(&tool_call.function.arguments)?,
+                    });
+                    
+                    return Ok("WAITING_FOR_APPROVAL".to_string());
+                }
+
                 for tool_call in tool_calls {
                     let tool_name = &tool_call.function.name;
                     let arguments: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)?;
                     
+                    if tool_name == "shell" {
+                        if let Err(e) = Self::check_shell_security(&config, &arguments) {
+                            let mut state = self.state.lock().await;
+                            state.history.push(Message {
+                                role: Role::Tool,
+                                content: Some(serde_json::json!({ "error": e.to_string() }).to_string()),
+                                tool_calls: None,
+                                tool_call_id: Some(tool_call.id.clone()),
+                            });
+                            continue;
+                        }
+                    }
+
                     let result = {
                         let tools = self.tools.lock().await;
                         if let Some(tool) = tools.tools.get(tool_name) {
@@ -267,13 +390,7 @@ impl Agent {
             final_response = response.content.unwrap_or_default();
             break;
         }
-
-        let summary = self.summarize_interaction(&user_input, &final_response).await?;
-        {
-            let mut memory = self.memory.lock().await;
-            memory.add_memory(&format!("User: {}\nAssistant: {}", user_input, final_response), &summary)?;
-        }
-
+        
         Ok(final_response)
     }
 
@@ -302,7 +419,6 @@ impl Agent {
 
     pub async fn run_autonomous_loop(&self) -> Result<()> {
         loop {
-            // Check if paused
             {
                 let paused = self.paused.lock().await;
                 if *paused {
