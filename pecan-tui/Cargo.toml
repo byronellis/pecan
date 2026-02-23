@@ -5,8 +5,10 @@ edition = "2024"
 
 [dependencies]
 pecan-core = { path = "../pecan-core" }
+pecan-providers = { path = "../pecan-providers" }
 ratatui.workspace = true
 crossterm.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+serde_json.workspace = true
 ratatui-textarea = "0.8.0"

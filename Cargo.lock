@@ -1755,6 +1755,7 @@ dependencies = [
  "serde_yaml",
  "tokio",
  "tracing",
+ "tracing-subscriber",
  "uuid",
 ]
 
@@ -1793,8 +1794,10 @@ dependencies = [
  "anyhow",
  "crossterm 0.28.1",
  "pecan-core",
+ "pecan-providers",
  "ratatui",
  "ratatui-textarea",
+ "serde_json",
  "tokio",
 ]
 

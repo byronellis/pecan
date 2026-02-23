@@ -1,9 +1,7 @@
-use crate::{Tool, TaskStack};
+use crate::Tool;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
-use std::sync::Arc;
-use tokio::sync::Mutex;
 
 pub struct ReadFile;
 
@@ -76,52 +74,6 @@ impl Tool for ListDir {
             entries.push(json!({ "name": name, "is_dir": is_dir }));
         }
         Ok(json!({ "entries": entries }))
-    }
-}
-
-pub struct SpawnSubagent;
-
-#[async_trait]
-impl Tool for SpawnSubagent {
-    fn name(&self) -> &str { "spawn_subagent" }
-    fn description(&self) -> &str { "Spawns a new subagent to handle a subtask." }
-    fn parameters(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "task": { "type": "string", "description": "The task for the subagent to perform." }
-            },
-            "required": ["task"]
-        })
-    }
-    async fn call(&self, arguments: Value) -> anyhow::Result<Value> {
-        let _task = arguments["task"].as_str().ok_or_else(|| anyhow::anyhow!("Missing task"))?;
-        Ok(json!({ "status": "subagent_spawned", "note": "Placeholder for real subagent spawning." }))
-    }
-}
-
-pub struct PushTask {
-    pub stack: Arc<Mutex<TaskStack>>,
-}
-
-#[async_trait]
-impl Tool for PushTask {
-    fn name(&self) -> &str { "push_task" }
-    fn description(&self) -> &str { "Pushes a new task or subtask onto the task stack." }
-    fn parameters(&self) -> Value {
-        json!({
-            "type": "object",
-            "properties": {
-                "description": { "type": "string", "description": "Description of the task." }
-            },
-            "required": ["description"]
-        })
-    }
-    async fn call(&self, arguments: Value) -> anyhow::Result<Value> {
-        let description = arguments["description"].as_str().ok_or_else(|| anyhow::anyhow!("Missing description"))?;
-        let mut stack = self.stack.lock().await;
-        let id = stack.push(description.to_string());
-        Ok(json!({ "status": "task_pushed", "id": id }))
     }
 }
 
