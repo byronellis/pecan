@@ -9,3 +9,4 @@ ratatui.workspace = true
 crossterm.workspace = true
 tokio.workspace = true
 anyhow.workspace = true
+ratatui-textarea = "0.8.0"
