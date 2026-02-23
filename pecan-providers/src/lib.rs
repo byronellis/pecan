@@ -138,7 +138,7 @@ impl Provider for OpenAiProvider {
         let mut request_json = serde_json::to_value(&request)?;
         request_json["model"] = serde_json::Value::String(self.model_id.clone());
 
-        let mut rb = client.post(format!("{}/chat/completions", self.url));
+        let mut rb = client.post(format!("{}/v1/chat/completions", self.url));
         
         if let Some(key) = &self.api_key {
             rb = rb.header("Authorization", format!("Bearer {}", key));
@@ -177,7 +177,7 @@ impl Provider for OpenAiProvider {
 
     async fn get_embedding(&self, text: &str) -> anyhow::Result<Vec<f32>> {
         let client = reqwest::Client::new();
-        let mut rb = client.post(format!("{}/embeddings", self.url));
+        let mut rb = client.post(format!("{}/v1/embeddings", self.url));
         
         if let Some(key) = &self.api_key {
             rb = rb.header("Authorization", format!("Bearer {}", key));
