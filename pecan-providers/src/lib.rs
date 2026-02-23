@@ -74,8 +74,15 @@ impl Provider for LlamaCppProvider {
     // ... existing implementation ...
     async fn chat_completion(&self, request: ChatCompletionRequest) -> anyhow::Result<ChatCompletionResponse> {
         let client = reqwest::Client::new();
+        let base_url = self.url.trim_end_matches('/');
+        let endpoint = if base_url.ends_with("/v1") {
+            format!("{}/chat/completions", base_url)
+        } else {
+            format!("{}/v1/chat/completions", base_url)
+        };
+
         let response = client
-            .post(format!("{}/v1/chat/completions", self.url))
+            .post(endpoint)
             .json(&request)
             .send()
             .await?
@@ -138,7 +145,14 @@ impl Provider for OpenAiProvider {
         let mut request_json = serde_json::to_value(&request)?;
         request_json["model"] = serde_json::Value::String(self.model_id.clone());
 
-        let mut rb = client.post(format!("{}/v1/chat/completions", self.url));
+        let base_url = self.url.trim_end_matches('/');
+        let endpoint = if base_url.ends_with("/v1") {
+            format!("{}/chat/completions", base_url)
+        } else {
+            format!("{}/v1/chat/completions", base_url)
+        };
+
+        let mut rb = client.post(endpoint);
         
         if let Some(key) = &self.api_key {
             rb = rb.header("Authorization", format!("Bearer {}", key));
@@ -177,7 +191,14 @@ impl Provider for OpenAiProvider {
 
     async fn get_embedding(&self, text: &str) -> anyhow::Result<Vec<f32>> {
         let client = reqwest::Client::new();
-        let mut rb = client.post(format!("{}/v1/embeddings", self.url));
+        let base_url = self.url.trim_end_matches('/');
+        let endpoint = if base_url.ends_with("/v1") {
+            format!("{}/embeddings", base_url)
+        } else {
+            format!("{}/v1/embeddings", base_url)
+        };
+
+        let mut rb = client.post(endpoint);
         
         if let Some(key) = &self.api_key {
             rb = rb.header("Authorization", format!("Bearer {}", key));
