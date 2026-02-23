@@ -117,7 +117,15 @@ impl Agent {
             let (messages, tool_defs) = {
                 let h = self.history.lock().await;
                 let t = self.tools.lock().await;
-                (h.clone(), t.get_definitions())
+                // Safety check: ensure assistant messages have either content or tool_calls
+                let filtered: Vec<Message> = h.iter().filter(|m| {
+                    if m.role == Role::Assistant {
+                        m.content.is_some() || (m.tool_calls.is_some() && !m.tool_calls.as_ref().unwrap().is_empty())
+                    } else {
+                        true
+                    }
+                }).cloned().collect();
+                (filtered, t.get_definitions())
             };
 
             tracing::info!("Stepping with {} messages", messages.len());
@@ -135,19 +143,25 @@ impl Agent {
                 Ok(res) => res,
                 Err(e) => {
                     tracing::error!("Provider error: {}", e);
-                    *self.status.lock().await = AgentStatus::Error(e.to_string());
+                    let err_msg = e.to_string();
+                    *self.status.lock().await = AgentStatus::Error(err_msg.clone());
                     return Err(e);
                 }
             };
 
-            tracing::debug!("Model response: {:?}", response);
-
-            self.history.lock().await.push(Message {
-                role: Role::Assistant,
-                content: response.content.clone(),
-                tool_calls: response.tool_calls.clone(),
-                tool_call_id: None,
-            });
+            // Only push if there is content or tool calls to avoid validation errors
+            if response.content.is_some() || (response.tool_calls.is_some() && !response.tool_calls.as_ref().unwrap().is_empty()) {
+                self.history.lock().await.push(Message {
+                    role: Role::Assistant,
+                    content: response.content.clone(),
+                    tool_calls: response.tool_calls.clone(),
+                    tool_call_id: None,
+                });
+            } else if response.content.is_none() && response.tool_calls.is_none() {
+                // If model returns nothing, break the loop
+                *self.status.lock().await = AgentStatus::Idle;
+                return Ok(());
+            }
 
             if let Some(calls) = response.tool_calls {
                 if calls.is_empty() {
@@ -155,7 +169,6 @@ impl Agent {
                     return Ok(());
                 }
 
-                // Check for approval requirements
                 let require_app = self.config.lock().await.tools.require_approval;
                 let approved_tools = self.session_approved_tools.lock().await.clone();
 
@@ -169,8 +182,7 @@ impl Agent {
                         return Ok(());
                     }
 
-                    // Execute automatically
-                    let result = self.run_tool(pending).await?;
+                    let result = self.run_tool(pending.clone()).await?;
                     self.history.lock().await.push(Message {
                         role: Role::Tool,
                         content: Some(result),
@@ -178,8 +190,6 @@ impl Agent {
                         tool_call_id: Some(call.id),
                     });
                 }
-                
-                // If we executed all tools, loop to give results back to model
                 continue;
             }
 

@@ -52,6 +52,7 @@ where
 {
     let mut textarea = TextArea::default();
     textarea.set_cursor_line_style(Style::default());
+    textarea.set_style(Style::default()); // Clear any inherited style
     
     let mut theme = DRACULA;
     let mut spinner_index = 0;
@@ -74,14 +75,16 @@ where
 
         terminal.draw(|f| {
             let input_lines = textarea.lines().len() as u16;
-            let input_height = input_lines.min(10).max(1) + 2; 
+            let input_height = input_lines.min(10).max(1);
 
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(1),               
-                    Constraint::Length(input_height), 
-                    Constraint::Length(1),            
+                    Constraint::Length(1),            // Separator
+                    Constraint::Length(input_height), // Input
+                    Constraint::Length(1),            // Separator
+                    Constraint::Length(1),            // Status
                 ].as_ref())
                 .split(f.area());
 
@@ -90,7 +93,7 @@ where
                 .filter(|m| m.role != Role::System)
                 .map(|m| {
                     if m.role == Role::User {
-                        let style = Style::default().bg(theme.user_bg).fg(theme.user_fg);
+                        let style = Style::default().bg(theme.user_bg).fg(theme.user_fg).remove_modifier(Modifier::UNDERLINED);
                         let content = m.content.as_deref().unwrap_or("");
                         let mut lines: Vec<Line> = content.lines()
                             .map(|l| Line::from(format!(" {}", l)).style(style))
@@ -98,7 +101,7 @@ where
                         lines.push(Line::from("")); 
                         ListItem::new(lines)
                     } else if m.role == Role::Assistant {
-                        let style = Style::default().fg(theme.agent_text);
+                        let style = Style::default().fg(theme.agent_text).remove_modifier(Modifier::UNDERLINED);
                         let content = m.content.as_deref().unwrap_or("");
                         let mut lines: Vec<Line> = Vec::new();
                         
@@ -111,7 +114,7 @@ where
                         if let Some(tool_calls) = &m.tool_calls {
                             for call in tool_calls {
                                 lines.push(Line::from(vec![
-                                    Span::styled(format!(" [Call: {}] ", call.function.name), Style::default().bg(theme.highlight).fg(Color::Black)),
+                                    Span::styled(format!(" [Call: {}] ", call.function.name), Style::default().bg(theme.highlight).fg(Color::Black).remove_modifier(Modifier::UNDERLINED)),
                                 ]));
                             }
                         }
@@ -120,9 +123,9 @@ where
                         ListItem::new(lines)
                     } else {
                         let content = m.content.as_deref().unwrap_or("");
-                        let mut lines = vec![Line::from(vec![Span::styled(" [Tool Result] ", Style::default().fg(Color::Gray))])];
+                        let mut lines = vec![Line::from(vec![Span::styled(" [Tool Result] ", Style::default().fg(Color::Gray).remove_modifier(Modifier::UNDERLINED))])];
                         for l in content.lines() {
-                            lines.push(Line::from(format!(" {}", l)).style(Style::default().fg(Color::DarkGray)));
+                            lines.push(Line::from(format!(" {}", l)).style(Style::default().fg(Color::DarkGray).remove_modifier(Modifier::UNDERLINED)));
                         }
                         lines.push(Line::from(""));
                         ListItem::new(lines)
@@ -134,35 +137,35 @@ where
                 AgentStatus::Thinking => {
                     spinner_index = (spinner_index + 1) % spinner.len();
                     history_items.push(ListItem::new(Line::from(vec![
-                        Span::styled(format!(" {} ", spinner[spinner_index]), Style::default().fg(theme.highlight)),
-                        Span::styled("Agent is working...", Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!(" {} ", spinner[spinner_index]), Style::default().fg(theme.highlight).remove_modifier(Modifier::UNDERLINED)),
+                        Span::styled("Agent is working...", Style::default().fg(Color::DarkGray).remove_modifier(Modifier::UNDERLINED)),
                     ])));
                 }
                 AgentStatus::WaitingForApproval(p) => {
                     let args_display = serde_json::to_string_pretty(&p.args).unwrap_or_else(|_| p.args.to_string());
                     let mut approval_lines = vec![
                         Line::from(vec![
-                            Span::styled(" TOOL APPROVAL REQUIRED ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD)),
-                            Span::styled(sep_left, Style::default().fg(Color::Yellow)),
+                            Span::styled(" TOOL APPROVAL REQUIRED ", Style::default().bg(Color::Yellow).fg(Color::Black).add_modifier(Modifier::BOLD).remove_modifier(Modifier::UNDERLINED)),
+                            Span::styled(sep_left, Style::default().fg(Color::Yellow).remove_modifier(Modifier::UNDERLINED)),
                         ]),
-                        Line::from(format!(" Tool: {}", p.name)),
+                        Line::from(format!(" Tool: {}", p.name)).style(Style::default().remove_modifier(Modifier::UNDERLINED)),
                     ];
                     for line in args_display.lines() {
-                        approval_lines.push(Line::from(format!("   {}", line)).style(Style::default().fg(Color::Yellow)));
+                        approval_lines.push(Line::from(format!("   {}", line)).style(Style::default().fg(Color::Yellow).remove_modifier(Modifier::UNDERLINED)));
                     }
                     approval_lines.push(Line::from(vec![
-                        Span::styled(" [1] Approve ", Style::default().bg(theme.user_bg).fg(theme.user_fg)),
+                        Span::styled(" [1] Approve ", Style::default().bg(theme.user_bg).fg(theme.user_fg).remove_modifier(Modifier::UNDERLINED)),
                         Span::raw("  "),
-                        Span::styled(" [2] Always ", Style::default().bg(theme.user_bg).fg(theme.user_fg)),
+                        Span::styled(" [2] Always ", Style::default().bg(theme.user_bg).fg(theme.user_fg).remove_modifier(Modifier::UNDERLINED)),
                         Span::raw("  "),
-                        Span::styled(" [3] Reject ", Style::default().bg(Color::Red).fg(Color::White)),
+                        Span::styled(" [3] Reject ", Style::default().bg(Color::Red).fg(Color::White).remove_modifier(Modifier::UNDERLINED)),
                     ]));
                     history_items.push(ListItem::new(approval_lines));
                 }
                 AgentStatus::Error(e) => {
                     history_items.push(ListItem::new(Line::from(vec![
-                        Span::styled(" ERROR ", Style::default().bg(Color::Red).fg(Color::White).add_modifier(Modifier::BOLD)),
-                        Span::raw(format!(" {}", e)),
+                        Span::styled(" ERROR ", Style::default().bg(Color::Red).fg(Color::White).add_modifier(Modifier::BOLD).remove_modifier(Modifier::UNDERLINED)),
+                        Span::raw(format!(" {}", e)).style(Style::default().remove_modifier(Modifier::UNDERLINED)),
                     ])));
                 }
                 _ => {}
@@ -174,14 +177,22 @@ where
 
             f.render_stateful_widget(List::new(history_items), chunks[0], &mut list_state);
 
-            textarea.set_block(Block::default().borders(Borders::ALL).title(" Input ").border_style(Style::default().fg(theme.border)));
-            textarea.set_style(Style::default().fg(theme.input_text));
-            f.render_widget(&textarea, chunks[1]);
+            // Separator Line 1
+            f.render_widget(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(theme.border)), chunks[1]);
 
-            let status_style = Style::default().bg(theme.status_bg).fg(theme.status_fg);
+            // Input Area
+            textarea.set_block(Block::default());
+            textarea.set_style(Style::default().fg(theme.input_text).remove_modifier(Modifier::UNDERLINED));
+            f.render_widget(&textarea, chunks[2]);
+
+            // Separator Line 2
+            f.render_widget(Block::default().borders(Borders::TOP).border_style(Style::default().fg(theme.border)), chunks[3]);
+
+            // Status Bar
+            let status_style = Style::default().bg(theme.status_bg).fg(theme.status_fg).remove_modifier(Modifier::UNDERLINED);
             let status_text = vec![
                 Span::styled(" NORMAL ", status_style.add_modifier(Modifier::BOLD)),
-                Span::styled(sep_left, Style::default().fg(theme.status_bg).bg(Color::Black)),
+                Span::styled(sep_left, Style::default().fg(theme.status_bg).bg(Color::Black).remove_modifier(Modifier::UNDERLINED)),
                 Span::raw(format!(" Model: {} ", current_model)),
                 Span::raw(" | "),
                 Span::raw(match status {
@@ -190,9 +201,9 @@ where
                     AgentStatus::WaitingForApproval(_) => "Waiting for Approval",
                     AgentStatus::Error(_) => "Error",
                 }),
-                Span::styled(sep_right, Style::default().fg(theme.status_bg).bg(Color::Black)),
+                Span::styled(sep_right, Style::default().fg(theme.status_bg).bg(Color::Black).remove_modifier(Modifier::UNDERLINED)),
             ];
-            f.render_widget(Paragraph::new(Line::from(status_text)), chunks[2]);
+            f.render_widget(Paragraph::new(Line::from(status_text)), chunks[4]);
         })?;
 
         if event::poll(std::time::Duration::from_millis(50))? {
@@ -232,6 +243,7 @@ where
                     KeyCode::Enter if !key.modifiers.contains(event::KeyModifiers::SHIFT) => {
                         let user_input = textarea.lines().join("\n");
                         textarea = TextArea::default();
+                        textarea.set_style(Style::default());
                         
                         if user_input.trim().is_empty() { continue; }
 
