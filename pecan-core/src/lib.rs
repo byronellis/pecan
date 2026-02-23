@@ -80,6 +80,7 @@ pub struct Agent {
     pub config: Arc<Mutex<Config>>,
     pub status: Arc<Mutex<AgentStatus>>,
     pub session_approved_tools: Arc<Mutex<HashSet<String>>>,
+    pub build_info: String,
 }
 
 impl Agent {
@@ -109,6 +110,7 @@ impl Agent {
             config: Arc::new(Mutex::new(config)),
             status: Arc::new(Mutex::new(AgentStatus::Idle)),
             session_approved_tools: Arc::new(Mutex::new(HashSet::new())),
+            build_info: format!("v0.1.0-{}", chrono::Utc::now().format("%H:%M:%S")),
         })
     }
 
@@ -117,18 +119,59 @@ impl Agent {
             let (messages, tool_defs) = {
                 let h = self.history.lock().await;
                 let t = self.tools.lock().await;
-                // Safety check: ensure assistant messages have either content or tool_calls
-                let filtered: Vec<Message> = h.iter().filter(|m| {
-                    if m.role == Role::Assistant {
-                        m.content.is_some() || (m.tool_calls.is_some() && !m.tool_calls.as_ref().unwrap().is_empty())
-                    } else {
-                        true
+                
+                // Construct validated history for the provider
+                let mut filtered = Vec::new();
+                for (i, m) in h.iter().enumerate() {
+                    match m.role {
+                        Role::Assistant => {
+                            let content = m.content.as_ref().filter(|s| !s.is_empty()).cloned();
+                            let calls = m.tool_calls.as_ref().filter(|c| !c.is_empty()).cloned();
+                            
+                            if content.is_some() || calls.is_some() {
+                                // If there are tool calls, we MUST check if they are all satisfied
+                                if let Some(calls_list) = &calls {
+                                    let mut satisfied = true;
+                                    for call in calls_list {
+                                        let has_result = h.iter().skip(i + 1).any(|rm| rm.role == Role::Tool && rm.tool_call_id.as_deref() == Some(&call.id));
+                                        if !has_result {
+                                            satisfied = false;
+                                            break;
+                                        }
+                                    }
+                                    
+                                    // If NOT all tool calls are satisfied, and this is the LAST assistant message,
+                                    // we should not call the model yet.
+                                    if !satisfied && i == h.iter().rposition(|rm| rm.role == Role::Assistant).unwrap() {
+                                        tracing::info!("Waiting for tool results for call: {:?}", calls_list);
+                                        return Ok(());
+                                    }
+                                }
+
+                                filtered.push(Message {
+                                    role: Role::Assistant,
+                                    content,
+                                    tool_calls: calls,
+                                    tool_call_id: None,
+                                });
+                            }
+                        }
+                        Role::Tool => {
+                            // Ensure tool messages have a valid content (even if empty string)
+                            filtered.push(Message {
+                                role: Role::Tool,
+                                content: Some(m.content.clone().unwrap_or_else(|| "".to_string())),
+                                tool_calls: None,
+                                tool_call_id: m.tool_call_id.clone(),
+                            });
+                        }
+                        _ => filtered.push(m.clone()),
                     }
-                }).cloned().collect();
+                }
                 (filtered, t.get_definitions())
             };
 
-            tracing::info!("Stepping with {} messages", messages.len());
+            tracing::info!("Stepping with {} validated messages", messages.len());
             *self.status.lock().await = AgentStatus::Thinking;
 
             let request = ChatCompletionRequest {
@@ -143,22 +186,22 @@ impl Agent {
                 Ok(res) => res,
                 Err(e) => {
                     tracing::error!("Provider error: {}", e);
-                    let err_msg = e.to_string();
-                    *self.status.lock().await = AgentStatus::Error(err_msg.clone());
+                    *self.status.lock().await = AgentStatus::Error(e.to_string());
                     return Err(e);
                 }
             };
 
-            // Only push if there is content or tool calls to avoid validation errors
-            if response.content.is_some() || (response.tool_calls.is_some() && !response.tool_calls.as_ref().unwrap().is_empty()) {
+            let content = response.content.as_ref().filter(|s| !s.is_empty()).cloned();
+            let has_tool_calls = response.tool_calls.as_ref().map(|c| !c.is_empty()).unwrap_or(false);
+
+            if content.is_some() || has_tool_calls {
                 self.history.lock().await.push(Message {
                     role: Role::Assistant,
-                    content: response.content.clone(),
+                    content,
                     tool_calls: response.tool_calls.clone(),
                     tool_call_id: None,
                 });
-            } else if response.content.is_none() && response.tool_calls.is_none() {
-                // If model returns nothing, break the loop
+            } else {
                 *self.status.lock().await = AgentStatus::Idle;
                 return Ok(());
             }
@@ -179,7 +222,7 @@ impl Agent {
                     if require_app && !approved_tools.contains(&pending.name) {
                         tracing::info!("Tool {} requires approval", pending.name);
                         *self.status.lock().await = AgentStatus::WaitingForApproval(pending);
-                        return Ok(());
+                        return Ok(()); 
                     }
 
                     let result = self.run_tool(pending.clone()).await?;
@@ -223,6 +266,40 @@ impl Agent {
             tool_calls: None,
             tool_call_id: Some(call.id),
         });
+        
+        let more_pending = {
+            let h = self.history.lock().await;
+            if let Some(last_assistant_idx) = h.iter().rposition(|m| m.role == Role::Assistant && m.tool_calls.is_some()) {
+                let last_assistant = &h[last_assistant_idx];
+                let calls = last_assistant.tool_calls.as_ref().unwrap();
+                
+                let mut next_call = None;
+                for call in calls {
+                    let has_result = h.iter().skip(last_assistant_idx + 1).any(|m| m.role == Role::Tool && m.tool_call_id.as_deref() == Some(&call.id));
+                    if !has_result {
+                        let args = serde_json::from_str(&call.function.arguments).unwrap_or_default();
+                        next_call = Some(PendingToolCall { id: call.id.clone(), name: call.function.name.clone(), args });
+                        break;
+                    }
+                }
+                next_call
+            } else {
+                None
+            }
+        };
+
+        if let Some(next) = more_pending {
+            let require_app = self.config.lock().await.tools.require_approval;
+            let approved_tools = self.session_approved_tools.lock().await.clone();
+
+            if require_app && !approved_tools.contains(&next.name) {
+                *self.status.lock().await = AgentStatus::WaitingForApproval(next);
+                return Ok(());
+            } else {
+                return Box::pin(self.execute_tool(next)).await;
+            }
+        }
+
         self.step().await
     }
 
