@@ -313,6 +313,8 @@ impl Agent {
                 (state.history.clone(), tools.get_definitions())
             };
 
+            tracing::info!("Sending request to model with {} messages", messages.len());
+
             let request = ChatCompletionRequest {
                 messages,
                 temperature: Some(0.7),
@@ -335,59 +337,65 @@ impl Agent {
             }
 
             if let Some(tool_calls) = response.tool_calls {
-                let config = self.config.lock().await;
-                let require_approval = config.tools.require_approval;
-                
-                if require_approval {
-                    let tool_call = &tool_calls[0];
-                    let mut p = self.pending_tool_call.lock().await;
-                    *p = Some(PendingToolCall {
-                        id: tool_call.id.clone(),
-                        tool_name: tool_call.function.name.clone(),
-                        arguments: serde_json::from_str(&tool_call.function.arguments)?,
-                    });
+                if !tool_calls.is_empty() {
+                    let config = self.config.lock().await;
+                    let require_approval = config.tools.require_approval;
                     
-                    return Ok("WAITING_FOR_APPROVAL".to_string());
-                }
-
-                for tool_call in tool_calls {
-                    let tool_name = &tool_call.function.name;
-                    let arguments: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)?;
-                    
-                    if tool_name == "shell" {
-                        if let Err(e) = Self::check_shell_security(&config, &arguments) {
-                            let mut state = self.state.lock().await;
-                            state.history.push(Message {
-                                role: Role::Tool,
-                                content: Some(serde_json::json!({ "error": e.to_string() }).to_string()),
-                                tool_calls: None,
-                                tool_call_id: Some(tool_call.id.clone()),
-                            });
-                            continue;
-                        }
+                    if require_approval {
+                        tracing::info!("Tool approval required for {}", tool_calls[0].function.name);
+                        let tool_call = &tool_calls[0];
+                        let mut p = self.pending_tool_call.lock().await;
+                        *p = Some(PendingToolCall {
+                            id: tool_call.id.clone(),
+                            tool_name: tool_call.function.name.clone(),
+                            arguments: serde_json::from_str(&tool_call.function.arguments)?,
+                        });
+                        
+                        return Ok("WAITING_FOR_APPROVAL".to_string());
                     }
 
-                    let result = {
-                        let tools = self.tools.lock().await;
-                        if let Some(tool) = tools.tools.get(tool_name) {
-                            tool.call(arguments).await?
-                        } else {
-                            serde_json::json!({ "error": format!("Tool {} not found", tool_name) })
-                        }
-                    };
+                    for tool_call in tool_calls {
+                        let tool_name = &tool_call.function.name;
+                        let arguments: serde_json::Value = serde_json::from_str(&tool_call.function.arguments)?;
+                        
+                        tracing::info!("Executing tool: {} with args: {}", tool_name, arguments);
 
-                    let mut state = self.state.lock().await;
-                    state.history.push(Message {
-                        role: Role::Tool,
-                        content: Some(result.to_string()),
-                        tool_calls: None,
-                        tool_call_id: Some(tool_call.id),
-                    });
+                        if tool_name == "shell" {
+                            if let Err(e) = Self::check_shell_security(&config, &arguments) {
+                                let mut state = self.state.lock().await;
+                                state.history.push(Message {
+                                    role: Role::Tool,
+                                    content: Some(serde_json::json!({ "error": e.to_string() }).to_string()),
+                                    tool_calls: None,
+                                    tool_call_id: Some(tool_call.id.clone()),
+                                });
+                                continue;
+                            }
+                        }
+
+                        let result = {
+                            let tools = self.tools.lock().await;
+                            if let Some(tool) = tools.tools.get(tool_name) {
+                                tool.call(arguments).await?
+                            } else {
+                                serde_json::json!({ "error": format!("Tool {} not found", tool_name) })
+                            }
+                        };
+
+                        let mut state = self.state.lock().await;
+                        state.history.push(Message {
+                            role: Role::Tool,
+                            content: Some(result.to_string()),
+                            tool_calls: None,
+                            tool_call_id: Some(tool_call.id),
+                        });
+                    }
+                    continue;
                 }
-                continue;
             }
 
             final_response = response.content.unwrap_or_default();
+            tracing::info!("Model returned final response: {}", final_response);
             break;
         }
         

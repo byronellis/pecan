@@ -312,7 +312,7 @@ impl Provider for OpenAiProvider {
             rb = rb.header("Authorization", format!("Bearer {}", key));
         }
 
-        let response = rb
+        let response_json = rb
             .json(&serde_json::json!({
                 "input": text,
                 "model": "text-embedding-3-small"
@@ -322,10 +322,18 @@ impl Provider for OpenAiProvider {
             .json::<serde_json::Value>()
             .await?;
 
-        let embedding = response["data"][0]["embedding"]
-            .as_array()
-            .ok_or_else(|| anyhow::anyhow!("Embeddings not supported or invalid response: {:?}", response))?
-            .iter()
+        let data = response_json.get("data")
+            .and_then(|d| d.as_array())
+            .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: 'data' missing"))?;
+        
+        let first = data.get(0)
+            .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: 'data' empty"))?;
+            
+        let embedding_json = first.get("embedding")
+            .and_then(|e| e.as_array())
+            .ok_or_else(|| anyhow::anyhow!("Invalid embedding response: 'embedding' missing"))?;
+
+        let embedding: Vec<f32> = embedding_json.iter()
             .filter_map(|v| v.as_f64().map(|f| f as f32))
             .collect();
 
