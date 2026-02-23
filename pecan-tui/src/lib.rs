@@ -77,8 +77,8 @@ where
     <B as ratatui::prelude::Backend>::Error: std::error::Error + Send + Sync + 'static,
 {
     let mut textarea = TextArea::default();
-    textarea.set_cursor_line_style(Style::default().remove_modifier(Modifier::UNDERLINED));
-    textarea.set_style(Style::default());
+    textarea.set_cursor_line_style(Style::default());
+    textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
     
     let mut theme = DRACULA;
     let mut spinner_index = 0;
@@ -225,9 +225,7 @@ where
             f.render_widget(Block::default().borders(Borders::BOTTOM).border_style(clean_style.fg(theme.border)), chunks[1]);
 
             textarea.set_block(Block::default());
-            textarea.set_style(clean_style.fg(theme.input_text));
-            // Ensure cursor line style is always clean
-            textarea.set_cursor_line_style(Style::default().remove_modifier(Modifier::UNDERLINED));
+            textarea.set_style(Style::default().fg(theme.input_text));
             f.render_widget(&textarea, chunks[2]);
 
             f.render_widget(Block::default().borders(Borders::TOP).border_style(clean_style.fg(theme.border)), chunks[3]);
@@ -286,9 +284,8 @@ where
                 match key.code {
                     KeyCode::Enter if !key.modifiers.contains(event::KeyModifiers::SHIFT) => {
                         let user_input = textarea.lines().join("\n");
-                        textarea = TextArea::default();
-                        textarea.set_cursor_line_style(Style::default().remove_modifier(Modifier::UNDERLINED));
-                        textarea.set_style(clean_style.fg(theme.input_text));
+                        textarea.select_all();
+                        textarea.cut();
                         
                         if user_input.trim().is_empty() { continue; }
 
