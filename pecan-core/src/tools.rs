@@ -1,8 +1,9 @@
-use crate::Tool;
+use crate::{Tool, TaskStack};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::fs;
-use std::path::Path;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 pub struct ReadFile;
 
@@ -78,10 +79,7 @@ impl Tool for ListDir {
     }
 }
 
-pub struct SpawnSubagent {
-    // We'd need a way to communicate back to the server's session manager or provider factory
-    // For now, let's keep it abstract
-}
+pub struct SpawnSubagent;
 
 #[async_trait]
 impl Tool for SpawnSubagent {
@@ -98,7 +96,31 @@ impl Tool for SpawnSubagent {
     }
     async fn call(&self, arguments: Value) -> anyhow::Result<Value> {
         let _task = arguments["task"].as_str().ok_or_else(|| anyhow::anyhow!("Missing task"))?;
-        // Simplified: just return a mock response for now
-        Ok(json!({ "status": "subagent_spawned", "note": "This is a placeholder for real subagent spawning via the server." }))
+        Ok(json!({ "status": "subagent_spawned", "note": "Placeholder for real subagent spawning." }))
+    }
+}
+
+pub struct PushTask {
+    pub stack: Arc<Mutex<TaskStack>>,
+}
+
+#[async_trait]
+impl Tool for PushTask {
+    fn name(&self) -> &str { "push_task" }
+    fn description(&self) -> &str { "Pushes a new task or subtask onto the task stack." }
+    fn parameters(&self) -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "description": { "type": "string", "description": "Description of the task." }
+            },
+            "required": ["description"]
+        })
+    }
+    async fn call(&self, arguments: Value) -> anyhow::Result<Value> {
+        let description = arguments["description"].as_str().ok_or_else(|| anyhow::anyhow!("Missing description"))?;
+        let mut stack = self.stack.lock().await;
+        let id = stack.push(description.to_string());
+        Ok(json!({ "status": "task_pushed", "id": id }))
     }
 }

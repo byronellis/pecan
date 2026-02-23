@@ -1,5 +1,5 @@
 [package]
-name = "pecan-cli"
+name = "pecan"
 version = "0.1.0"
 edition = "2024"
 

@@ -2,7 +2,7 @@ mod theme;
 
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, Paragraph},
@@ -69,7 +69,7 @@ where
     let mut theme = DRACULA;
 
     let agent = Arc::new(agent);
-    let commands = vec!["/model ", "/theme ", "/quit", "/help", "/clear"];
+    let commands = vec!["/model ", "/theme ", "/quit", "/help", "/clear", "/task ", "/pause", "/resume"];
     let themes = vec!["dracula", "nord", "default"];
 
     let (sep_left, sep_right) = if is_iterm {
@@ -79,17 +79,28 @@ where
     };
 
     loop {
+        let (task_list, is_paused) = {
+            let stack = agent.task_stack.lock().await;
+            let paused = agent.paused.lock().await;
+            (stack.tasks.clone(), *paused)
+        };
+
         terminal.draw(|f| {
             let input_lines = textarea.lines().len() as u16;
             let input_height = input_lines.min(10); 
 
             // LAYOUT: 
-            // [Chat Area] (Min 1)
-            // [Divider] (1)
-            // [Input] (input_height)
-            // [Divider] (1)
-            // [Status Bar] (1)
-            let chunks = Layout::default()
+            // Main horizontal split for Sidebar
+            let main_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([
+                    Constraint::Min(1), // Chat & Input
+                    Constraint::Length(if !task_list.is_empty() { 30 } else { 0 }), // Sidebar
+                ].as_ref())
+                .split(f.area());
+
+            // Left side: Vertical layout for Chat, Dividers, Input, Status
+            let left_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Min(1),               // Chat
@@ -98,27 +109,35 @@ where
                     Constraint::Length(1),            // Divider
                     Constraint::Length(1),            // Status
                 ].as_ref())
-                .split(f.area());
+                .split(main_chunks[0]);
 
             // 1. Chat Area
             let mut history_items: Vec<ListItem> = messages
                 .iter()
                 .map(|(role, content)| {
                     if role == "You" {
-                        // Reversed style for user input
-                        let style = Style::default().bg(theme.user_text).fg(Color::Black).add_modifier(Modifier::BOLD);
-                        ListItem::new(vec![
-                            Line::from(vec![Span::styled(format!(" {} ", role), style)]),
-                            Line::from(format!(" {}", content)),
-                            Line::from(""), // Spacer
-                        ])
+                        let style = Style::default().bg(theme.user_bg).fg(theme.user_fg);
+                        // Split content by newlines and style each line
+                        let mut lines: Vec<Line> = content.lines()
+                            .map(|l| Line::from(format!(" {}", l)).style(style))
+                            .collect();
+                        lines.push(Line::from("")); // Spacer
+                        ListItem::new(lines)
+                    } else if role == "Agent" {
+                        let style = Style::default().fg(theme.agent_text);
+                        let mut lines: Vec<Line> = content.lines()
+                            .map(|l| Line::from(format!(" {}", l)).style(style))
+                            .collect();
+                        lines.push(Line::from("")); // Spacer
+                        ListItem::new(lines)
                     } else {
-                        let style = Style::default().fg(theme.agent_text).add_modifier(Modifier::BOLD);
-                        ListItem::new(vec![
-                            Line::from(vec![Span::styled(format!(" {} ", role), style)]),
-                            Line::from(format!(" {}", content)),
-                            Line::from(""), // Spacer
-                        ])
+                        // System messages
+                        let mut lines = vec![Line::from(vec![Span::styled(format!(" {} ", role), Style::default().fg(Color::Gray))])];
+                        for l in content.lines() {
+                            lines.push(Line::from(format!(" {}", l)));
+                        }
+                        lines.push(Line::from(""));
+                        ListItem::new(lines)
                     }
                 })
                 .collect();
@@ -128,18 +147,46 @@ where
             }
             
             let history_list = List::new(history_items);
-            f.render_widget(history_list, chunks[0]);
+            f.render_widget(history_list, left_chunks[0]);
+
+            // Sidebar: Task Stack
+            if !task_list.is_empty() {
+                let mut task_items: Vec<ListItem> = vec![
+                    ListItem::new(Line::from(vec![
+                        Span::styled(" TASK STACK ", Style::default().bg(theme.status_bg).fg(theme.status_fg).add_modifier(Modifier::BOLD)),
+                        Span::styled(sep_left, Style::default().fg(theme.status_bg)),
+                    ])),
+                    ListItem::new(Line::from("")),
+                ];
+
+                for (i, task) in task_list.iter().enumerate() {
+                    let status_symbol = match task.status {
+                        pecan_core::TaskStatus::Pending => " [ ] ",
+                        pecan_core::TaskStatus::InProgress => " [*] ",
+                        pecan_core::TaskStatus::Completed => " [x] ",
+                        pecan_core::TaskStatus::Failed(_) => " [!] ",
+                    };
+                    task_items.push(ListItem::new(Line::from(vec![
+                        Span::raw(format!("{}.{}", i + 1, status_symbol)),
+                        Span::raw(&task.description),
+                    ])));
+                }
+
+                let sidebar = List::new(task_items)
+                    .block(Block::default().borders(Borders::LEFT).border_style(Style::default().fg(theme.border)));
+                f.render_widget(sidebar, main_chunks[1]);
+            }
 
             // 2. Divider Above Input
-            f.render_widget(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(theme.border)), chunks[1]);
+            f.render_widget(Block::default().borders(Borders::BOTTOM).border_style(Style::default().fg(theme.border)), left_chunks[1]);
 
             // 3. Input Area
             textarea.set_style(Style::default().fg(theme.input_text));
-            textarea.set_block(Block::default()); // No internal borders
-            f.render_widget(&textarea, chunks[2]);
+            textarea.set_block(Block::default()); 
+            f.render_widget(&textarea, left_chunks[2]);
 
             // 4. Divider Below Input
-            f.render_widget(Block::default().borders(Borders::TOP).border_style(Style::default().fg(theme.border)), chunks[3]);
+            f.render_widget(Block::default().borders(Borders::TOP).border_style(Style::default().fg(theme.border)), left_chunks[3]);
 
             // 5. Status Bar
             let status_style = Style::default().bg(theme.status_bg).fg(theme.status_fg);
@@ -148,11 +195,11 @@ where
                 Span::styled(sep_left, Style::default().fg(theme.status_bg).bg(Color::Black)),
                 Span::raw(format!(" Model: {} ", current_model)),
                 Span::raw(" | "),
-                Span::raw(if is_thinking { "Thinking..." } else { "Ready" }),
+                Span::raw(if is_paused { "Paused" } else if is_thinking { "Thinking..." } else { "Ready" }),
                 Span::styled(sep_right, Style::default().fg(theme.status_bg).bg(Color::Black)),
             ];
             let status_bar = Paragraph::new(Line::from(status_text));
-            f.render_widget(status_bar, chunks[4]);
+            f.render_widget(status_bar, left_chunks[4]);
         })?;
 
         if let Ok(response) = rx.try_recv() {
@@ -172,7 +219,7 @@ where
                 }
 
                 if is_thinking {
-                    continue;
+                    // Even if thinking, allow pause/resume?
                 }
 
                 match key.code {
@@ -218,6 +265,20 @@ where
                             continue;
                         }
                         
+                        if user_input.starts_with("/pause") {
+                            let mut paused = agent.paused.lock().await;
+                            *paused = true;
+                            messages.push(("System".to_string(), "Autonomous loop paused.".to_string()));
+                            continue;
+                        }
+
+                        if user_input.starts_with("/resume") {
+                            let mut paused = agent.paused.lock().await;
+                            *paused = false;
+                            messages.push(("System".to_string(), "Autonomous loop resumed.".to_string()));
+                            continue;
+                        }
+
                         if user_input.starts_with("/model ") {
                             let model_name = user_input["/model ".len()..].trim().to_string();
                             current_model = model_name.clone();
@@ -252,12 +313,34 @@ where
                             continue;
                         }
 
+                        if user_input.starts_with("/task ") {
+                            let task_desc = user_input["/task ".len()..].trim().to_string();
+                            let agent_clone = agent.clone();
+                            let tx_clone = tx.clone();
+                            tokio::spawn(async move {
+                                {
+                                    let mut stack = agent_clone.task_stack.lock().await;
+                                    stack.push(task_desc.clone());
+                                }
+                                let _ = tx_clone.send(format!("Started autonomous task: {}", task_desc)).await;
+                                match agent_clone.run_autonomous_loop().await {
+                                    Ok(_) => {
+                                        let _ = tx_clone.send("Autonomous loop finished.".to_string()).await;
+                                    }
+                                    Err(e) => {
+                                        let _ = tx_clone.send(format!("Autonomous loop failed: {}", e)).await;
+                                    }
+                                }
+                            });
+                            continue;
+                        }
+
                         if user_input.trim() == "exit" || user_input.trim() == "quit" || user_input.trim() == "/quit" || user_input.trim() == "/exit" {
                             return Ok(());
                         }
 
                         if user_input.trim() == "/help" {
-                            messages.push(("System".to_string(), "Commands: /model <name>, /theme <name>, /clear, /quit, /help".to_string()));
+                            messages.push(("System".to_string(), "Commands: /model <name>, /theme <name>, /task <desc>, /pause, /resume, /clear, /quit, /help".to_string()));
                             continue;
                         }
 

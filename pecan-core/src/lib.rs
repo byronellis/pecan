@@ -10,6 +10,8 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use std::collections::HashMap;
+use uuid::Uuid;
+use chrono::{DateTime, Utc};
 
 #[async_trait::async_trait]
 pub trait Tool: Send + Sync {
@@ -53,24 +55,103 @@ pub struct AgentState {
     pub history: Vec<Message>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Task {
+    pub id: Uuid,
+    pub description: String,
+    pub status: TaskStatus,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum TaskStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Failed(String),
+}
+
+pub struct TaskStack {
+    pub tasks: Vec<Task>,
+}
+
+impl TaskStack {
+    pub fn new() -> Self {
+        Self { tasks: Vec::new() }
+    }
+
+    pub fn push(&mut self, description: String) -> Uuid {
+        let id = Uuid::new_v4();
+        self.tasks.push(Task {
+            id,
+            description,
+            status: TaskStatus::Pending,
+            created_at: Utc::now(),
+        });
+        id
+    }
+
+    pub fn pop(&mut self) -> Option<Task> {
+        // Find first pending task
+        let idx = self.tasks.iter().position(|t| t.status == TaskStatus::Pending)?;
+        Some(self.tasks.remove(idx))
+    }
+
+    pub fn cancel_task(&mut self, id: Uuid) {
+        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+            task.status = TaskStatus::Failed("Cancelled by user".to_string());
+        }
+    }
+
+    pub fn clear_completed(&mut self) {
+        self.tasks.retain(|t| matches!(t.status, TaskStatus::Pending | TaskStatus::InProgress));
+    }
+
+    pub fn peek(&self) -> Option<&Task> {
+        self.tasks.iter().find(|t| t.status == TaskStatus::Pending)
+    }
+
+    pub fn update_status(&mut self, id: Uuid, status: TaskStatus) {
+        if let Some(task) = self.tasks.iter_mut().find(|t| t.id == id) {
+            task.status = status;
+        }
+    }
+}
+
 pub struct Agent {
     pub provider: Arc<Mutex<Arc<dyn Provider>>>,
     pub state: Arc<Mutex<AgentState>>,
     pub tools: Arc<Mutex<ToolRegistry>>,
     pub memory: Arc<Mutex<MemoryManager>>,
     pub config: Arc<Mutex<Config>>,
+    pub task_stack: Arc<Mutex<TaskStack>>,
+    pub paused: Arc<Mutex<bool>>,
 }
 
 impl Agent {
     pub async fn new(config: Config, memory_path: &str) -> Result<Self> {
         let provider: Arc<dyn Provider> = Self::create_provider(&config, &config.default_model)?;
+        let task_stack = Arc::new(Mutex::new(TaskStack::new()));
+        let tools = Arc::new(Mutex::new(ToolRegistry::new()));
+        let paused = Arc::new(Mutex::new(false));
+
+        {
+            let mut registry = tools.lock().await;
+            registry.register(Arc::new(tools::ReadFile));
+            registry.register(Arc::new(tools::WriteFile));
+            registry.register(Arc::new(tools::ListDir));
+            registry.register(Arc::new(tools::SpawnSubagent));
+            registry.register(Arc::new(tools::PushTask { stack: task_stack.clone() }));
+        }
         
         Ok(Self {
             provider: Arc::new(Mutex::new(provider)),
             state: Arc::new(Mutex::new(AgentState { history: Vec::new() })),
-            tools: Arc::new(Mutex::new(ToolRegistry::new())),
+            tools,
             memory: Arc::new(Mutex::new(MemoryManager::new(memory_path)?)),
             config: Arc::new(Mutex::new(config)),
+            task_stack,
+            paused,
         })
     }
 
@@ -100,7 +181,6 @@ impl Agent {
     }
 
     pub async fn chat(&self, user_input: String) -> Result<String> {
-        // 1. Retrieve relevant memories
         let memories = {
             let memory = self.memory.lock().await;
             memory.search(&user_input, 5)?
@@ -108,8 +188,6 @@ impl Agent {
 
         {
             let mut state = self.state.lock().await;
-            
-            // If there are memories, inject them as a system message or similar
             if !memories.is_empty() {
                 let mut context = String::from("Relevant past interactions:\n");
                 for (content, summary) in memories {
@@ -190,7 +268,6 @@ impl Agent {
             break;
         }
 
-        // 2. Summarize and store the interaction
         let summary = self.summarize_interaction(&user_input, &final_response).await?;
         {
             let mut memory = self.memory.lock().await;
@@ -221,5 +298,39 @@ impl Agent {
         let provider = self.provider.lock().await;
         let response = provider.chat_completion(request).await?;
         Ok(response.content.unwrap_or_else(|| "Interaction summary".to_string()))
+    }
+
+    pub async fn run_autonomous_loop(&self) -> Result<()> {
+        loop {
+            // Check if paused
+            {
+                let paused = self.paused.lock().await;
+                if *paused {
+                    drop(paused);
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                    continue;
+                }
+            }
+
+            let next_task = {
+                let mut stack = self.task_stack.lock().await;
+                stack.pop()
+            };
+
+            let task = match next_task {
+                Some(t) => t,
+                None => break, 
+            };
+
+            let prompt = format!(
+                "Current Task: {}\n\nExecute the next step for this task using available tools. \
+                If the task is finished, explain what you did. \
+                If you need to break it down further, you can use the 'push_task' tool.", 
+                task.description
+            );
+            
+            let _response = self.chat(prompt).await?;
+        }
+        Ok(())
     }
 }
