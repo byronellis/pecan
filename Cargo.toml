@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "pecan-core",
+    "pecan-providers",
+    "pecan-tui",
+    "pecan-server",
+    "pecan-cli",
+]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1.0"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+ratatui = "0.26"
+crossterm = "0.27"
+clap = { version = "4.4", features = ["derive"] }
+reqwest = { version = "0.11", features = ["json"] }
+async-trait = "0.1"
+uuid = { version = "1.6", features = ["v4", "serde"] }
+serde_yaml = "0.9"
+directories = "5.0"
+axum = "0.7"
+tower-http = { version = "0.5", features = ["full"] }

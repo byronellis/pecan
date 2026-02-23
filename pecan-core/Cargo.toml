@@ -1,0 +1,19 @@
+[package]
+name = "pecan-core"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pecan-providers = { path = "../pecan-providers" }
+anyhow.workspace = true
+async-trait.workspace = true
+serde.workspace = true
+tracing.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true
+directories.workspace = true
+dirs = "5.0"
+uuid.workspace = true
+rusqlite = { version = "0.31", features = ["bundled"] }
+chrono = { version = "0.4", features = ["serde"] }

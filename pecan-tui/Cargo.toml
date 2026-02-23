@@ -1,0 +1,11 @@
+[package]
+name = "pecan-tui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+pecan-core = { path = "../pecan-core" }
+ratatui.workspace = true
+crossterm.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
