@@ -12,3 +12,4 @@ tokio.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 ratatui-textarea = "0.8.0"
+terminal-colorsaurus = "1.0.3"

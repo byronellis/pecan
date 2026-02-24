@@ -16,8 +16,9 @@ use ratatui::crossterm::{
 use std::io;
 use pecan_core::{Agent, AgentStatus};
 use pecan_providers::Role;
-use theme::{DRACULA, NORD, DEFAULT};
+use theme::{DRACULA, NORD, DEFAULT, LIGHT};
 use ratatui_textarea::TextArea;
+use terminal_colorsaurus::{theme_mode, QueryOptions, ThemeMode};
 
 fn wrap_text(text: &str, width: u16) -> Vec<String> {
     if width == 0 { return vec![text.to_string()]; }
@@ -48,6 +49,12 @@ fn wrap_text(text: &str, width: u16) -> Vec<String> {
 pub async fn run_tui(agent: Agent) -> anyhow::Result<()> {
     let is_iterm = std::env::var("TERM_PROGRAM").map(|v| v == "iTerm.app").unwrap_or(false);
     
+    // Detect theme before modifying terminal state
+    let initial_theme = match theme_mode(QueryOptions::default()) {
+        Ok(ThemeMode::Light) => LIGHT,
+        _ => DRACULA,
+    };
+    
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -55,7 +62,7 @@ pub async fn run_tui(agent: Agent) -> anyhow::Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let res = run_loop(&mut terminal, agent, is_iterm).await;
+    let res = run_loop(&mut terminal, agent, is_iterm, initial_theme).await;
 
     disable_raw_mode()?;
     execute!(
@@ -72,6 +79,7 @@ async fn run_loop<B: ratatui::prelude::Backend>(
     terminal: &mut Terminal<B>,
     agent: Agent,
     is_iterm: bool,
+    initial_theme: theme::Theme,
 ) -> anyhow::Result<()> 
 where
     <B as ratatui::prelude::Backend>::Error: std::error::Error + Send + Sync + 'static,
@@ -80,7 +88,7 @@ where
     textarea.set_cursor_line_style(Style::default());
     textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
     
-    let mut theme = DRACULA;
+    let mut theme = initial_theme;
     let mut spinner_index = 0;
     let spinner = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     let mut list_state = ListState::default();
@@ -304,6 +312,7 @@ where
                                 "dracula" => theme = DRACULA,
                                 "nord" => theme = NORD,
                                 "default" => theme = DEFAULT,
+                                "light" => theme = LIGHT,
                                 _ => {}
                             }
                             continue;

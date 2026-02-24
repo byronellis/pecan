@@ -56,3 +56,17 @@ pub const DEFAULT: Theme = Theme {
     user_bg: Color::Rgb(40, 40, 40),
     user_fg: Color::White,
 };
+
+pub const LIGHT: Theme = Theme {
+    border: Color::Rgb(200, 200, 200),
+    text: Color::Rgb(50, 50, 50),
+    highlight: Color::Rgb(0, 100, 200),
+    header_bg: Color::Rgb(240, 240, 240),
+    header_fg: Color::Rgb(0, 0, 0),
+    status_bg: Color::Rgb(230, 230, 230),
+    status_fg: Color::Rgb(0, 100, 200),
+    input_text: Color::Rgb(0, 0, 0), // Dark text for input
+    agent_text: Color::Rgb(40, 120, 60), // Dark green for agent
+    user_bg: Color::Rgb(235, 235, 235), // Light gray background for user
+    user_fg: Color::Rgb(50, 50, 50), // Dark gray text for user
+};
