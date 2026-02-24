@@ -76,8 +76,13 @@ async fn chat(
         let agent = agent.clone();
         drop(sessions); // Release sessions lock
 
-        match agent.chat(req.message).await {
-            Ok(response) => Json(ChatResponse { response }),
+        match agent.add_user_message(req.message).await {
+            Ok(_) => {
+                let history = agent.history.lock().await;
+                let last_msg = history.iter().rev().find(|m| m.role == pecan_providers::Role::Assistant);
+                let response = last_msg.and_then(|m| m.content.clone()).unwrap_or_else(|| "No response".to_string());
+                Json(ChatResponse { response })
+            },
             Err(e) => Json(ChatResponse {
                 response: format!("Error: {}", e),
             }),
