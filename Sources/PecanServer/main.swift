@@ -68,9 +68,10 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     // Spawn the agent locally for Phase 1
                     print("Spawning agent for session \(sessionID)...")
                     let task = Process()
-                    // Assuming the swift command is available and we are running in the project directory
-                    task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-                    task.arguments = ["swift", "run", "pecan-agent", sessionID]
+                    // Use the built binary directly to avoid SPM locks
+                    let currentPath = FileManager.default.currentDirectoryPath
+                    task.executableURL = URL(fileURLWithPath: "\(currentPath)/.build/debug/pecan-agent")
+                    task.arguments = [sessionID]
                     try task.run()
 
                 case .userInput(let req):
