@@ -107,6 +107,7 @@ message HostCommand {
         LLMCompletionResponse completion_response = 2;
         ToolExecutionResponse tool_response = 3;
         ShutdownCommand shutdown = 4;
+        ProcessInput process_input = 5;
     }
 }
 
@@ -128,4 +129,8 @@ message ToolExecutionResponse {
 
 message ShutdownCommand {
     string reason = 1;
+}
+
+message ProcessInput {
+    string text = 1;
 }
