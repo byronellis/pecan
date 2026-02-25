@@ -25,8 +25,14 @@ The client application used to interact with the server:
 
 ## Key Concepts
 
-### Containerized Execution
-Agents execute code, run tests, and manipulate files inside a dedicated container. This prevents an agent from accidentally deleting the user's home directory or exfiltrating sensitive local data.
+### Pluggable VM / Container Execution
+Agents execute code, run tests, and manipulate files inside a dedicated, isolated environment. This prevents an agent from accidentally deleting the user's home directory or exfiltrating sensitive local data. The architecture is designed to be pluggable:
+- **macOS Native:** Utilizes Apple's `Virtualization.framework` for native, incredibly fast, and lightweight Linux VMs without requiring Docker.
+- **Cross-Platform / Linux:** Utilizes `Firecracker` microVMs for near-instant startup times and strong hardware-level isolation.
+- **Fallbacks:** Designed to easily plug in traditional container engines like Docker or Podman in the future if needed.
+
+### Tailscale Integration
+The server can optionally join a Tailnet (using a userspace implementation or by interfacing with a local Tailscale daemon), making the agent and its server accessible securely from any device on the same Tailnet without exposing it to the public internet. This enables remote execution and monitoring of autonomous loops.
 
 ### gRPC Control Plane
 All agent capabilities (reasoning, fetching web pages, creating files outside the container) are routed through the gRPC connection to the server. The server acts as a strict policy engine, deciding what the agent is allowed to do.
