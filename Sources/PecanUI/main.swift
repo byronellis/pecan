@@ -24,10 +24,16 @@ func formatMarkdown(_ text: String) -> String {
 }
 
 func main() async throws {
+    // Handle Ctrl+C (SIGINT)
+    signal(SIGINT) { _ in
+        print("\r\nExiting Pecan UI...\r")
+        exit(0)
+    }
+    
     // Load config just to verify we can parse ~/.pecan/config.yaml
     do {
         let config = try Config.load()
-        print("Loaded config. Default model: \(config.defaultModel ?? config.models.first?.key ?? "unknown")")
+        print("Loaded config. Default model: \(config.defaultModel ?? config.models.first?.key ?? "unknown")\r", terminator: "\n")
     } catch {
         // Suppress warning if not setup yet
     }
@@ -49,8 +55,8 @@ func main() async throws {
     // UI Setup
     clearScreen()
     moveTo(1, 1)
-    print("🥜 Pecan Interactive UI".bold)
-    print("Connecting to server at 127.0.0.1:3000...\n")
+    print("🥜 Pecan Interactive UI".bold + "\r", terminator: "\n")
+    print("Connecting to server at 127.0.0.1:3000...\r\n", terminator: "\n")
     
     var currentSessionID: String? = nil
 
@@ -61,26 +67,26 @@ func main() async throws {
                 switch message.payload {
                 case .sessionStarted(let started):
                     currentSessionID = started.sessionID
-                    print("\n[System]".yellow + " Session started: \(started.sessionID)")
-                    print("> ", terminator: "")
+                    print("\r\n[System]".yellow + " Session started: \(started.sessionID)\r", terminator: "\n")
+                    print("\r> ", terminator: "")
                     fflush(stdout)
                     
                 case .agentOutput(let output):
                     // Use standard print to leverage terminal's native scrollback
-                    print("\r\n[Agent]".green + " \(formatMarkdown(output.text))")
-                    print("\n> ", terminator: "")
+                    print("\r\n[Agent]".green + " \(formatMarkdown(output.text))\r", terminator: "\n")
+                    print("\r> ", terminator: "")
                     fflush(stdout)
                     
                 case .approvalRequest(let req):
-                    print("\r\n[System]".yellow + " Tool Approval Required: \(req.toolName)")
-                    print("Arguments: \(req.argumentsJson)")
-                    print("Approve? (y/n)")
-                    print("> ", terminator: "")
+                    print("\r\n[System]".yellow + " Tool Approval Required: \(req.toolName)\r", terminator: "\n")
+                    print("Arguments: \(req.argumentsJson)\r", terminator: "\n")
+                    print("Approve? (y/n)\r", terminator: "\n")
+                    print("\r> ", terminator: "")
                     fflush(stdout)
                     
                 case .taskCompleted(let comp):
-                    print("\r\n[System]".yellow + " Task completed: \(comp.sessionID)")
-                    print("> ", terminator: "")
+                    print("\r\n[System]".yellow + " Task completed: \(comp.sessionID)\r", terminator: "\n")
+                    print("\r> ", terminator: "")
                     fflush(stdout)
                     
                 case nil:
@@ -88,7 +94,7 @@ func main() async throws {
                 }
             }
         } catch {
-            print("\n[System] Disconnected from server: \(error)")
+            print("\r\n[System] Disconnected from server: \(error)\r", terminator: "\n")
         }
     }
     
@@ -112,10 +118,10 @@ func main() async throws {
             // Echo locally for clarity (Terminal handles the scrollback inherently)
             moveUp()
             clearLine()
-            print("[You]".blue + " \(trimmed)")
+            print("\r[You]".blue + " \(trimmed)\r", terminator: "\n")
             
             guard let sid = currentSessionID else {
-                print("[System]".yellow + " Waiting for session ID...")
+                print("\r[System]".yellow + " Waiting for session ID...\r", terminator: "\n")
                 continue
             }
             
@@ -127,9 +133,11 @@ func main() async throws {
             
             try await call.requestStream.send(msg)
         }
+        print("\r> ", terminator: "")
+        fflush(stdout)
     }
     
-    print("\nExiting Pecan UI...")
+    print("\r\nExiting Pecan UI...\r", terminator: "\n")
     
     // Cleanup
     call.requestStream.finish()
