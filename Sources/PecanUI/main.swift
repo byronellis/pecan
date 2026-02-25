@@ -23,6 +23,113 @@ func formatMarkdown(_ text: String) -> String {
     return formatted
 }
 
+actor TerminalManager {
+    static let shared = TerminalManager()
+    
+    var currentInputBuffer = ""
+    var cursorPosition = 0
+    var prompt = "> "
+    
+    func printMessage(_ message: String) {
+        // Clear current line
+        print("\r\u{1B}[K", terminator: "")
+        // Print message
+        print(message + "\r", terminator: "\n")
+        // Redraw input line
+        redrawInput()
+    }
+    
+    func redrawInput() {
+        print("\r\u{1B}[K\(prompt)\(currentInputBuffer)", terminator: "")
+        if cursorPosition < currentInputBuffer.count {
+            print("\u{1B}[\(currentInputBuffer.count - cursorPosition)D", terminator: "")
+        }
+        fflush(stdout)
+    }
+    
+    func insertChar(_ char: Character) {
+        let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition)
+        currentInputBuffer.insert(char, at: idx)
+        cursorPosition += 1
+        redrawInput()
+    }
+    
+    func backspace() {
+        if cursorPosition > 0 {
+            let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition - 1)
+            currentInputBuffer.remove(at: idx)
+            cursorPosition -= 1
+            redrawInput()
+        }
+    }
+    
+    func moveCursorLeft() {
+        if cursorPosition > 0 {
+            cursorPosition -= 1
+            redrawInput()
+        }
+    }
+    
+    func moveCursorRight() {
+        if cursorPosition < currentInputBuffer.count {
+            cursorPosition += 1
+            redrawInput()
+        }
+    }
+    
+    func clearInput() {
+        currentInputBuffer = ""
+        cursorPosition = 0
+        redrawInput()
+    }
+    
+    func getAndClearInput() -> String {
+        let text = currentInputBuffer
+        currentInputBuffer = ""
+        cursorPosition = 0
+        // Don't redraw yet, let the caller print the newline
+        return text
+    }
+}
+
+func readInputLine() async -> String? {
+    await TerminalManager.shared.redrawInput()
+    
+    while true {
+        if keyPressed() {
+            let char = readChar()
+            let ascii = char.asciiValue ?? 0
+            
+            if ascii == 3 { // Ctrl+C
+                return nil
+            } else if ascii == 4 { // Ctrl+D
+                let buf = await TerminalManager.shared.currentInputBuffer
+                if buf.isEmpty { return nil }
+            } else if ascii == 13 || ascii == 10 { // Enter
+                print("\r\n", terminator: "")
+                return await TerminalManager.shared.getAndClearInput()
+            } else if ascii == 127 { // Backspace
+                await TerminalManager.shared.backspace()
+            } else if ascii == 27 { // ESC sequence
+                let next1 = readChar()
+                if next1 == "[" {
+                    let next2 = readChar()
+                    if next2 == "D" { // Left
+                        await TerminalManager.shared.moveCursorLeft()
+                    } else if next2 == "C" { // Right
+                        await TerminalManager.shared.moveCursorRight()
+                    }
+                }
+            } else if ascii >= 32 {
+                await TerminalManager.shared.insertChar(char)
+            }
+        } else {
+            // Tiny sleep to prevent 100% CPU while polling
+            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+        }
+    }
+}
+
 func main() async throws {
     // Handle Ctrl+C (SIGINT)
     signal(SIGINT) { _ in
@@ -67,34 +174,24 @@ func main() async throws {
                 switch message.payload {
                 case .sessionStarted(let started):
                     currentSessionID = started.sessionID
-                    print("\r\n[System]".yellow + " Session started: \(started.sessionID)\r", terminator: "\n")
-                    print("\r> ", terminator: "")
-                    fflush(stdout)
+                    await TerminalManager.shared.printMessage("[System]".yellow + " Session started: \(started.sessionID)")
                     
                 case .agentOutput(let output):
                     // Use standard print to leverage terminal's native scrollback
-                    print("\r\n[Agent]".green + " \(formatMarkdown(output.text))\r", terminator: "\n")
-                    print("\r> ", terminator: "")
-                    fflush(stdout)
+                    await TerminalManager.shared.printMessage("[Agent]".green + " \(formatMarkdown(output.text))")
                     
                 case .approvalRequest(let req):
-                    print("\r\n[System]".yellow + " Tool Approval Required: \(req.toolName)\r", terminator: "\n")
-                    print("Arguments: \(req.argumentsJson)\r", terminator: "\n")
-                    print("Approve? (y/n)\r", terminator: "\n")
-                    print("\r> ", terminator: "")
-                    fflush(stdout)
+                    await TerminalManager.shared.printMessage("[System]".yellow + " Tool Approval Required: \(req.toolName)\r\nArguments: \(req.argumentsJson)\r\nApprove? (y/n)")
                     
                 case .taskCompleted(let comp):
-                    print("\r\n[System]".yellow + " Task completed: \(comp.sessionID)\r", terminator: "\n")
-                    print("\r> ", terminator: "")
-                    fflush(stdout)
+                    await TerminalManager.shared.printMessage("[System]".yellow + " Task completed: \(comp.sessionID)")
                     
                 case nil:
                     break
                 }
             }
         } catch {
-            print("\r\n[System] Disconnected from server: \(error)\r", terminator: "\n")
+            await TerminalManager.shared.printMessage("[System] Disconnected from server: \(error)")
         }
     }
     
@@ -107,7 +204,7 @@ func main() async throws {
     
     // Input Loop
     while true {
-        guard let line = readLine() else { break }
+        guard let line = await readInputLine() else { break }
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         
         if trimmed == "/quit" || trimmed == "exit" {
@@ -116,12 +213,10 @@ func main() async throws {
         
         if !trimmed.isEmpty {
             // Echo locally for clarity (Terminal handles the scrollback inherently)
-            moveUp()
-            clearLine()
-            print("\r[You]".blue + " \(trimmed)\r", terminator: "\n")
+            await TerminalManager.shared.printMessage("[You]".blue + " \(trimmed)")
             
             guard let sid = currentSessionID else {
-                print("\r[System]".yellow + " Waiting for session ID...\r", terminator: "\n")
+                await TerminalManager.shared.printMessage("[System]".yellow + " Waiting for session ID...")
                 continue
             }
             
@@ -133,8 +228,6 @@ func main() async throws {
             
             try await call.requestStream.send(msg)
         }
-        print("\r> ", terminator: "")
-        fflush(stdout)
     }
     
     print("\r\nExiting Pecan UI...\r", terminator: "\n")
