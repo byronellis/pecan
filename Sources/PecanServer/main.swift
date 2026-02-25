@@ -101,6 +101,12 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
 }
 
 final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
+    let config: Config
+    
+    init(config: Config) {
+        self.config = config
+    }
+    
     func connect(
         requestStream: GRPCAsyncRequestStream<Pecan_AgentEvent>,
         responseStream: GRPCAsyncResponseStreamWriter<Pecan_HostCommand>,
@@ -137,7 +143,35 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     
                 case .completionRequest(let req):
                     print("LLM Request from agent: \(req.requestID)")
-                    // To be implemented: actually hit the LLM API here.
+                    let defaultModelKey = config.defaultModel ?? config.models.keys.first ?? ""
+                    if let modelConfig = config.models[defaultModelKey] {
+                        let provider = ProviderFactory.create(config: modelConfig)
+                        do {
+                            let responseString = try await provider.complete(payloadJSON: req.payloadJson)
+                            var cmdMsg = Pecan_HostCommand()
+                            var compResp = Pecan_LLMCompletionResponse()
+                            compResp.requestID = req.requestID
+                            compResp.responseJson = responseString
+                            cmdMsg.completionResponse = compResp
+                            try await responseStream.send(cmdMsg)
+                        } catch {
+                            print("Provider error: \(error)")
+                            var cmdMsg = Pecan_HostCommand()
+                            var compResp = Pecan_LLMCompletionResponse()
+                            compResp.requestID = req.requestID
+                            compResp.errorMessage = error.localizedDescription
+                            cmdMsg.completionResponse = compResp
+                            try await responseStream.send(cmdMsg)
+                        }
+                    } else {
+                        print("Error: No valid model configuration found.")
+                        var cmdMsg = Pecan_HostCommand()
+                        var compResp = Pecan_LLMCompletionResponse()
+                        compResp.requestID = req.requestID
+                        compResp.errorMessage = "No valid model configuration found"
+                        cmdMsg.completionResponse = compResp
+                        try await responseStream.send(cmdMsg)
+                    }
                     
                 case .toolRequest(let req):
                     print("Tool Request from agent: \(req.toolName)")
@@ -155,14 +189,15 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
 }
 
 func main() async throws {
+    let config = try Config.load()
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
     
     let server = try await Server.insecure(group: group)
-        .withServiceProviders([ClientServiceProvider(), AgentServiceProvider()])
+        .withServiceProviders([ClientServiceProvider(), AgentServiceProvider(config: config)])
         .bind(host: "0.0.0.0", port: 3000)
         .get()
     
-    print("Pecan Server started on port \(server.channel.localAddress?.port ?? 3000)")
+    print("Pecan Server started on port \(server.channel.localAddress?.port ?? 3000) with default model: \(config.defaultModel ?? "unknown")")
     
     try await server.onClose.get()
     try await group.shutdownGracefully()

@@ -53,19 +53,56 @@ func main() async throws {
             case .processInput(let input):
                 print("Received process_input from Server: \(input.text)")
                 
-                // Simulate "thinking" and responding
-                try await Task.sleep(nanoseconds: 1_000_000_000) // 1s
+                // Construct a simple OpenAI-compatible payload
+                let payload: [String: Any] = [
+                    "messages": [
+                        ["role": "system", "content": "You are a helpful coding assistant. Keep your answers concise unless asked otherwise."],
+                        ["role": "user", "content": input.text]
+                    ]
+                ]
                 
-                // For now, since we aren't doing real LLM calls yet, we just reply via progress
-                // Normally the agent would send an LLMCompletionRequest here.
-                var respMsg = Pecan_AgentEvent()
-                var prog = Pecan_TaskProgress()
-                prog.statusMessage = "Agent processed input: '\(input.text)'. (LLM integration pending)"
-                respMsg.progress = prog
-                try await call.requestStream.send(respMsg)
+                do {
+                    let jsonData = try JSONSerialization.data(withJSONObject: payload, options: [])
+                    let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
+                    
+                    var reqMsg = Pecan_AgentEvent()
+                    var compReq = Pecan_LLMCompletionRequest()
+                    compReq.requestID = UUID().uuidString
+                    compReq.payloadJson = jsonString
+                    reqMsg.completionRequest = compReq
+                    
+                    try await call.requestStream.send(reqMsg)
+                    print("Sent LLM request to server.")
+                } catch {
+                    print("Failed to construct LLM payload: \(error)")
+                }
                 
             case .completionResponse(let resp):
-                print("Received completion_response: \(resp.responseJson)")
+                print("Received completion_response for request \(resp.requestID)")
+                
+                var finalText = ""
+                
+                if !resp.errorMessage.isEmpty {
+                    finalText = "Error from LLM Provider: \(resp.errorMessage)"
+                } else {
+                    // Try to parse OpenAI format
+                    if let data = resp.responseJson.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
+                       let choices = json["choices"] as? [[String: Any]],
+                       let firstChoice = choices.first,
+                       let message = firstChoice["message"] as? [String: Any],
+                       let content = message["content"] as? String {
+                        finalText = content
+                    } else {
+                        finalText = "Could not parse response: \(resp.responseJson)"
+                    }
+                }
+                
+                var respMsg = Pecan_AgentEvent()
+                var prog = Pecan_TaskProgress()
+                prog.statusMessage = finalText
+                respMsg.progress = prog
+                try await call.requestStream.send(respMsg)
                 
             case .toolResponse(let resp):
                 print("Received tool_response: \(resp.resultJson)")

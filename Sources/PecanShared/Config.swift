@@ -1,24 +1,36 @@
 import Foundation
 import Yams
 
-public struct Config: Codable {
-    public struct Models: Codable {
+public struct Config: Codable, Sendable {
+    public struct Models: Codable, Sendable {
         public let defaultModel: String
     }
     
-    public struct ModelProvider: Codable {
-        public let provider: String
+    public struct ModelProvider: Codable, Sendable {
+        public let name: String?
+        public let provider: String?
         public let url: String
         public let apiKey: String?
         public let modelId: String?
+        public let description: String?
+        
+        enum CodingKeys: String, CodingKey {
+            case name, provider, url, description
+            case apiKey = "api_key"
+            case modelId = "model_id"
+        }
+        
+        public var resolvedProvider: String {
+            return provider ?? "openai"
+        }
     }
     
-    public struct Tools: Codable {
-        public let requireApproval: Bool
+    public struct Tools: Codable, Sendable {
+        public let requireApproval: Bool?
     }
     
     public let models: [String: ModelProvider]
-    public let tools: Tools
+    public let tools: Tools?
     public let defaultModel: String? // Optional at root depending on structure
     
     enum CodingKeys: String, CodingKey {
