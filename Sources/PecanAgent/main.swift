@@ -36,6 +36,8 @@ func main() async throws {
     regMsg.register = reg
     try await call.requestStream.send(regMsg)
     
+    var availableModels: [String] = []
+    
     // Listen for commands from Server
     do {
         for try await command in call.responseStream {
@@ -50,32 +52,56 @@ func main() async throws {
                 progMsg.progress = prog
                 try await call.requestStream.send(progMsg)
                 
+                // Ask for models
+                var modelsReqMsg = Pecan_AgentEvent()
+                var modelsReq = Pecan_GetModelsRequest()
+                modelsReq.requestID = UUID().uuidString
+                modelsReqMsg.getModels = modelsReq
+                try await call.requestStream.send(modelsReqMsg)
+                
+                // Add a system prompt to context
+                var ctxMsg = Pecan_AgentEvent()
+                var ctxCmd = Pecan_ContextCommand()
+                ctxCmd.requestID = UUID().uuidString
+                var addMsg = Pecan_AddContextMessage()
+                addMsg.section = .system
+                addMsg.role = "system"
+                addMsg.content = "You are a helpful coding assistant. Keep your answers concise unless asked otherwise."
+                ctxCmd.addMessage = addMsg
+                ctxMsg.contextCommand = ctxCmd
+                try await call.requestStream.send(ctxMsg)
+                
+            case .modelsResponse(let resp):
+                availableModels = resp.models.map { $0.key }
+                print("Agent received available models: \(availableModels)")
+                
+            case .contextResponse(let resp):
+                print("Agent received context response: \(resp.infoJson)")
+                
             case .processInput(let input):
                 print("Received process_input from Server: \(input.text)")
                 
-                // Construct a simple OpenAI-compatible payload
-                let payload: [String: Any] = [
-                    "messages": [
-                        ["role": "system", "content": "You are a helpful coding assistant. Keep your answers concise unless asked otherwise."],
-                        ["role": "user", "content": input.text]
-                    ]
-                ]
+                // Add user message to context
+                var ctxMsg = Pecan_AgentEvent()
+                var ctxCmd = Pecan_ContextCommand()
+                ctxCmd.requestID = UUID().uuidString
+                var addMsg = Pecan_AddContextMessage()
+                addMsg.section = .conversation
+                addMsg.role = "user"
+                addMsg.content = input.text
+                ctxCmd.addMessage = addMsg
+                ctxMsg.contextCommand = ctxCmd
+                try await call.requestStream.send(ctxMsg)
                 
-                do {
-                    let jsonData = try JSONSerialization.data(withJSONObject: payload, options: [])
-                    let jsonString = String(data: jsonData, encoding: .utf8) ?? "{}"
-                    
-                    var reqMsg = Pecan_AgentEvent()
-                    var compReq = Pecan_LLMCompletionRequest()
-                    compReq.requestID = UUID().uuidString
-                    compReq.payloadJson = jsonString
-                    reqMsg.completionRequest = compReq
-                    
-                    try await call.requestStream.send(reqMsg)
-                    print("Sent LLM request to server.")
-                } catch {
-                    print("Failed to construct LLM payload: \(error)")
-                }
+                // Request completion
+                var reqMsg = Pecan_AgentEvent()
+                var compReq = Pecan_LLMCompletionRequest()
+                compReq.requestID = UUID().uuidString
+                compReq.modelKey = availableModels.first ?? "" // Let the agent pick a model or fallback to default
+                compReq.paramsJson = "" // Default params
+                reqMsg.completionRequest = compReq
+                try await call.requestStream.send(reqMsg)
+                print("Sent LLM request to server.")
                 
             case .completionResponse(let resp):
                 print("Received completion_response for request \(resp.requestID)")
@@ -93,6 +119,19 @@ func main() async throws {
                        let message = firstChoice["message"] as? [String: Any],
                        let content = message["content"] as? String {
                         finalText = content
+                        
+                        // Save assistant response to context
+                        var ctxMsg = Pecan_AgentEvent()
+                        var ctxCmd = Pecan_ContextCommand()
+                        ctxCmd.requestID = UUID().uuidString
+                        var addMsg = Pecan_AddContextMessage()
+                        addMsg.section = .conversation
+                        addMsg.role = "assistant"
+                        addMsg.content = content
+                        ctxCmd.addMessage = addMsg
+                        ctxMsg.contextCommand = ctxCmd
+                        try await call.requestStream.send(ctxMsg)
+                        
                     } else {
                         finalText = "Could not parse response: \(resp.responseJson)"
                     }

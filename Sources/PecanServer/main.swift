@@ -10,6 +10,15 @@ actor SessionManager {
     private var uiStreams: [String: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>] = [:]
     private var agentStreams: [String: GRPCAsyncResponseStreamWriter<Pecan_HostCommand>] = [:]
     
+    // Context Storage
+    // sessionID -> ContextSection -> [Message]
+    struct ContextMessage {
+        let role: String
+        let content: String
+        let metadataJson: String
+    }
+    private var context: [String: [Pecan_ContextSection: [ContextMessage]]] = [:]
+    
     func registerUI(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>) {
         uiStreams[sessionID] = stream
     }
@@ -34,9 +43,49 @@ actor SessionManager {
         }
     }
     
+    func addContextMessage(sessionID: String, section: Pecan_ContextSection, role: String, content: String, metadata: String) {
+        if context[sessionID] == nil {
+            context[sessionID] = [:]
+        }
+        if context[sessionID]![section] == nil {
+            context[sessionID]![section] = []
+        }
+        context[sessionID]![section]!.append(ContextMessage(role: role, content: content, metadataJson: metadata))
+    }
+
+    func getContext(sessionID: String) -> [[String: Any]] {
+        var messages: [[String: Any]] = []
+        let sections: [Pecan_ContextSection] = [.system, .conversation, .tools]
+        
+        for section in sections {
+            if let sectionMsgs = context[sessionID]?[section] {
+                for msg in sectionMsgs {
+                    var dict: [String: Any] = ["role": msg.role, "content": msg.content]
+                    if !msg.metadataJson.isEmpty,
+                       let data = msg.metadataJson.data(using: .utf8),
+                       let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                        for (k, v) in meta {
+                            dict[k] = v
+                        }
+                    }
+                    messages.append(dict)
+                }
+            }
+        }
+        return messages
+    }
+    
+    func compactContext(sessionID: String, section: Pecan_ContextSection, keepRecent: Int) {
+        if let count = context[sessionID]?[section]?.count, count > keepRecent {
+            let keep = Array(context[sessionID]![section]!.suffix(keepRecent))
+            context[sessionID]![section] = keep
+        }
+    }
+    
     func removeSession(sessionID: String) {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
+        context.removeValue(forKey: sessionID)
     }
 }
 
@@ -141,13 +190,60 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     srvMsg.agentOutput = out
                     try await SessionManager.shared.sendToUI(sessionID: sid, message: srvMsg)
                     
+                case .getModels(let req):
+                    print("Agent requested models list.")
+                    var cmdMsg = Pecan_HostCommand()
+                    var resp = Pecan_GetModelsResponse()
+                    resp.requestID = req.requestID
+                    for (key, modelConfig) in config.models {
+                        var info = Pecan_GetModelsResponse.ModelInfo()
+                        info.key = key
+                        info.name = modelConfig.name ?? key
+                        info.description_p = modelConfig.description ?? "No description"
+                        resp.models.append(info)
+                    }
+                    cmdMsg.modelsResponse = resp
+                    try await responseStream.send(cmdMsg)
+                    
+                case .contextCommand(let cmd):
+                    guard let sid = activeSessionID else { continue }
+                    switch cmd.action {
+                    case .addMessage(let addMsg):
+                        await SessionManager.shared.addContextMessage(sessionID: sid, section: addMsg.section, role: addMsg.role, content: addMsg.content, metadata: addMsg.metadataJson)
+                    case .compact(let compact):
+                        await SessionManager.shared.compactContext(sessionID: sid, section: compact.section, keepRecent: Int(compact.keepRecentMessages))
+                    case .getInfo(_):
+                        var cmdMsg = Pecan_HostCommand()
+                        var resp = Pecan_ContextResponse()
+                        resp.requestID = cmd.requestID
+                        resp.infoJson = "{\"status\": \"info not fully implemented\"}"
+                        cmdMsg.contextResponse = resp
+                        try await responseStream.send(cmdMsg)
+                    case nil: break
+                    }
+
                 case .completionRequest(let req):
-                    print("LLM Request from agent: \(req.requestID)")
-                    let defaultModelKey = config.defaultModel ?? config.models.keys.first ?? ""
-                    if let modelConfig = config.models[defaultModelKey] {
+                    guard let sid = activeSessionID else { continue }
+                    let modelKey = req.modelKey.isEmpty ? (config.defaultModel ?? config.models.keys.first ?? "") : req.modelKey
+                    print("LLM Request from agent: \(req.requestID) using model: \(modelKey)")
+                    
+                    if let modelConfig = config.models[modelKey] {
                         let provider = ProviderFactory.create(config: modelConfig)
                         do {
-                            let responseString = try await provider.complete(payloadJSON: req.payloadJson)
+                            let contextMessages = await SessionManager.shared.getContext(sessionID: sid)
+                            var payload: [String: Any] = ["messages": contextMessages]
+                            if !req.paramsJson.isEmpty {
+                                if let data = req.paramsJson.data(using: .utf8),
+                                   let params = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                                    for (k, v) in params {
+                                        payload[k] = v
+                                    }
+                                }
+                            }
+                            let payloadData = try JSONSerialization.data(withJSONObject: payload)
+                            let payloadString = String(data: payloadData, encoding: .utf8)!
+                            
+                            let responseString = try await provider.complete(payloadJSON: payloadString)
                             var cmdMsg = Pecan_HostCommand()
                             var compResp = Pecan_LLMCompletionResponse()
                             compResp.requestID = req.requestID
@@ -164,11 +260,11 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                             try await responseStream.send(cmdMsg)
                         }
                     } else {
-                        print("Error: No valid model configuration found.")
+                        print("Error: No valid model configuration found for key \(modelKey).")
                         var cmdMsg = Pecan_HostCommand()
                         var compResp = Pecan_LLMCompletionResponse()
                         compResp.requestID = req.requestID
-                        compResp.errorMessage = "No valid model configuration found"
+                        compResp.errorMessage = "No valid model configuration found for key \(modelKey)."
                         cmdMsg.completionResponse = compResp
                         try await responseStream.send(cmdMsg)
                     }

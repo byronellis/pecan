@@ -77,6 +77,8 @@ message AgentEvent {
         LLMCompletionRequest completion_request = 2;
         ToolExecutionRequest tool_request = 3;
         TaskProgress progress = 4;
+        GetModelsRequest get_models = 5;
+        ContextCommand context_command = 6;
     }
 }
 
@@ -85,10 +87,45 @@ message AgentRegistration {
     string session_id = 2;
 }
 
+message GetModelsRequest {
+    string request_id = 1;
+}
+
+enum ContextSection {
+    SYSTEM = 0;
+    CONVERSATION = 1;
+    TOOLS = 2;
+}
+
+message ContextCommand {
+    string request_id = 1;
+    oneof action {
+        AddContextMessage add_message = 2;
+        GetContextInfo get_info = 3;
+        CompactContext compact = 4;
+    }
+}
+
+message AddContextMessage {
+    ContextSection section = 1;
+    string role = 2;
+    string content = 3;
+    string metadata_json = 4; // tool calls, etc.
+}
+
+message GetContextInfo {
+    // Empty for now, just asks for sizes
+}
+
+message CompactContext {
+    ContextSection section = 1;
+    int32 keep_recent_messages = 2;
+}
+
 message LLMCompletionRequest {
     string request_id = 1;
-    // Messages, tool definitions, etc., serialized as JSON or further modeled here
-    string payload_json = 2; 
+    string model_key = 2; // e.g., 'qwen3' or 'mock'
+    string params_json = 3; // optional overrides like temperature
 }
 
 message ToolExecutionRequest {
@@ -108,7 +145,25 @@ message HostCommand {
         ToolExecutionResponse tool_response = 3;
         ShutdownCommand shutdown = 4;
         ProcessInput process_input = 5;
+        GetModelsResponse models_response = 6;
+        ContextResponse context_response = 7;
     }
+}
+
+message GetModelsResponse {
+    string request_id = 1;
+    message ModelInfo {
+        string key = 1;
+        string name = 2;
+        string description = 3;
+    }
+    repeated ModelInfo models = 2;
+}
+
+message ContextResponse {
+    string request_id = 1;
+    string info_json = 2;
+    string error_message = 3;
 }
 
 message RegistrationResponse {
