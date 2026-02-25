@@ -1,37 +1,35 @@
-# Pecan: Persistent Local Agent Framework
+# Pecan: Persistent Agent Framework
 
-Pecan is a Rust-based coding agent designed for local and network-local models (llama.cpp, vLLM, MLX, Ollama). It emphasizes persistence, secure remote access, and a Zellij-like multiplexed interface.
+Pecan is a Swift-based coding agent framework that emphasizes secure, isolated execution via containers. The architecture centers around a powerful server, a clean user interface, and isolated agents that rely entirely on the server for capabilities.
 
 ## Architecture
 
-### 1. `pecan-server` (The Daemon)
-A persistent background process that:
-- Manages agent sessions and "Ralph Wiggum Loops" (autonomous/semi-autonomous execution loops).
-- Stores conversation history and state.
-- Hosts a communication socket (Unix Domain Socket or TCP via Tailscale).
-- Integrates with Tailscale for secure, peer-to-peer remote access.
+### 1. `pecan-server` (The Host Daemon)
+A persistent gRPC background process that acts as the control plane:
+- Manages agent sessions and autonomous execution loops.
+- Owns the connection to LLM providers (e.g., OpenAI, Anthropic, local MLX/llama.cpp models).
+- Owns all external internet access.
+- Spawns and manages isolated containers for agents to run in.
+- Handles tool execution requests from the isolated agents via gRPC.
 
-### 2. `pecan-core`
-The engine shared by both the server and local CLI:
-- **Agent Loop:** Reasoning and execution logic.
-- **Tool Registry:** Standardized interface for agent capabilities (shell, FS, web).
-- **Persistence:** Layer for saving/loading agent states.
+### 2. `pecan-agent` (The Isolated Worker)
+The agent process that actually runs *inside* the container:
+- Completely isolated from the internet. No direct access to LLM APIs or external resources.
+- Connects back to the `pecan-server` via gRPC to request LLM completions, run tools, or interact with the user.
+- Operates within a controlled, potentially virtualized filesystem environment (VFS).
 
-### 3. `pecan-providers`
-Abstractions for LLM backends:
-- **Local:** `llama.cpp` (direct/HTTP), `MLX`, `Ollama`.
-- **Remote/Network:** `vLLM`, DGX Spark-based servers.
-
-### 4. `pecan-tui`
-A Zellij-inspired interface:
-- **Ratatui Frontend:** Rich terminal interface.
-- **Multiplexing:** Ability to attach/detach from `pecan-server` sessions.
-- **Web-based TUI:** Rendering the TUI in a browser for remote access.
+### 3. `pecan` (The User Interface)
+The client application used to interact with the server:
+- Connects to the `pecan-server` to start new tasks, monitor progress, and provide Human-in-the-Loop (HITL) approvals.
+- Could be a rich terminal application (TUI) or a macOS native app.
 
 ## Key Concepts
 
-### Ralph Wiggum Loops
-Autonomous execution loops where the agent pursues a goal persistently. The server manages these loops, allowing the user to check in on progress, intervene, or "attach" to the loop's UI session.
+### Containerized Execution
+Agents execute code, run tests, and manipulate files inside a dedicated container. This prevents an agent from accidentally deleting the user's home directory or exfiltrating sensitive local data.
 
-### Tailscale Awareness
-The server can optionally join a Tailnet using `tsnet`, making the agent accessible from any device on the same tailnet without exposing it to the public internet.
+### gRPC Control Plane
+All agent capabilities (reasoning, fetching web pages, creating files outside the container) are routed through the gRPC connection to the server. The server acts as a strict policy engine, deciding what the agent is allowed to do.
+
+### Virtual Filesystem (VFS) & Diffing
+The container may utilize a virtual filesystem that tracks the agent's changes as a "diff" against the original workspace. This allows the user to review all changes the agent made during its session before committing them to the actual host filesystem.
