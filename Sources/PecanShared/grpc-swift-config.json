@@ -1,0 +1,12 @@
+{
+  "invocations": [
+    {
+      "protoFiles": [
+        "pecan.proto"
+      ],
+      "visibility": "public",
+      "server": true,
+      "client": true
+    }
+  ]
+}

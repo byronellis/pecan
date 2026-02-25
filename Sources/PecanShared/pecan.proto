@@ -1,0 +1,131 @@
+syntax = "proto3";
+
+package pecan;
+
+// ==========================================
+// UI -> Server Communication
+// ==========================================
+service ClientService {
+    // Bidirectional stream for the UI client to talk to the Server
+    rpc StreamEvents(stream ClientMessage) returns (stream ServerMessage);
+}
+
+message ClientMessage {
+    oneof payload {
+        StartTaskRequest start_task = 1;
+        TaskInput user_input = 2;
+        ToolApproval tool_approval = 3;
+    }
+}
+
+message StartTaskRequest {
+    string initial_prompt = 1;
+}
+
+message TaskInput {
+    string session_id = 1;
+    string text = 2;
+}
+
+message ToolApproval {
+    string session_id = 1;
+    string tool_call_id = 2;
+    bool approved = 3;
+    string reject_reason = 4;
+}
+
+message ServerMessage {
+    oneof payload {
+        SessionStarted session_started = 1;
+        AgentOutput agent_output = 2;
+        ToolApprovalRequest approval_request = 3;
+        TaskCompleted task_completed = 4;
+    }
+}
+
+message SessionStarted {
+    string session_id = 1;
+}
+
+message AgentOutput {
+    string session_id = 1;
+    string text = 2;
+}
+
+message ToolApprovalRequest {
+    string session_id = 1;
+    string tool_call_id = 2;
+    string tool_name = 3;
+    string arguments_json = 4;
+}
+
+message TaskCompleted {
+    string session_id = 1;
+}
+
+// ==========================================
+// Agent -> Server Communication
+// ==========================================
+service AgentService {
+    // Bidirectional stream for the isolated Agent to talk to the Server
+    rpc Connect(stream AgentEvent) returns (stream HostCommand);
+}
+
+message AgentEvent {
+    oneof payload {
+        AgentRegistration register = 1;
+        LLMCompletionRequest completion_request = 2;
+        ToolExecutionRequest tool_request = 3;
+        TaskProgress progress = 4;
+    }
+}
+
+message AgentRegistration {
+    string agent_id = 1;
+    string session_id = 2;
+}
+
+message LLMCompletionRequest {
+    string request_id = 1;
+    // Messages, tool definitions, etc., serialized as JSON or further modeled here
+    string payload_json = 2; 
+}
+
+message ToolExecutionRequest {
+    string request_id = 1;
+    string tool_name = 2;
+    string arguments_json = 3;
+}
+
+message TaskProgress {
+    string status_message = 1;
+}
+
+message HostCommand {
+    oneof payload {
+        RegistrationResponse registration_response = 1;
+        LLMCompletionResponse completion_response = 2;
+        ToolExecutionResponse tool_response = 3;
+        ShutdownCommand shutdown = 4;
+    }
+}
+
+message RegistrationResponse {
+    bool success = 1;
+}
+
+message LLMCompletionResponse {
+    string request_id = 1;
+    string response_json = 2;
+    string error_message = 3;
+}
+
+message ToolExecutionResponse {
+    string request_id = 1;
+    string result_json = 2;
+    string error_message = 3;
+}
+
+message ShutdownCommand {
+    string reason = 1;
+}
