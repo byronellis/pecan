@@ -92,36 +92,72 @@ actor TerminalManager {
     }
 }
 
+enum InputKey {
+    case ctrlC
+    case ctrlD
+    case enter
+    case backspace
+    case escape
+    case arrowLeft
+    case arrowRight
+    case character(Character)
+    case unknown(UInt8)
+}
+
+func nextKey() -> InputKey? {
+    guard keyPressed() else { return nil }
+    let char = readChar()
+    let ascii = char.asciiValue ?? 0
+    
+    switch ascii {
+    case 3: return .ctrlC
+    case 4: return .ctrlD
+    case 10, 13: return .enter
+    case 127: return .backspace
+    case 27:
+        // ESC sequence
+        let next1 = readChar()
+        if next1 == "[" {
+            let next2 = readChar()
+            if next2 == "D" { return .arrowLeft }
+            if next2 == "C" { return .arrowRight }
+        }
+        return .escape
+    case 32...126:
+        return .character(char)
+    default:
+        // Attempt to pass through other printable characters (e.g. unicode)
+        if char.isASCII == false {
+            return .character(char)
+        }
+        return .unknown(ascii)
+    }
+}
+
 func readInputLine() async -> String? {
     await TerminalManager.shared.redrawInput()
     
     while true {
-        if keyPressed() {
-            let char = readChar()
-            let ascii = char.asciiValue ?? 0
-            
-            if ascii == 3 { // Ctrl+C
+        if let key = nextKey() {
+            switch key {
+            case .ctrlC:
                 return nil
-            } else if ascii == 4 { // Ctrl+D
+            case .ctrlD:
                 let buf = await TerminalManager.shared.currentInputBuffer
                 if buf.isEmpty { return nil }
-            } else if ascii == 13 || ascii == 10 { // Enter
+            case .enter:
                 print("\r\n", terminator: "")
                 return await TerminalManager.shared.getAndClearInput()
-            } else if ascii == 127 { // Backspace
+            case .backspace:
                 await TerminalManager.shared.backspace()
-            } else if ascii == 27 { // ESC sequence
-                let next1 = readChar()
-                if next1 == "[" {
-                    let next2 = readChar()
-                    if next2 == "D" { // Left
-                        await TerminalManager.shared.moveCursorLeft()
-                    } else if next2 == "C" { // Right
-                        await TerminalManager.shared.moveCursorRight()
-                    }
-                }
-            } else if ascii >= 32 {
-                await TerminalManager.shared.insertChar(char)
+            case .arrowLeft:
+                await TerminalManager.shared.moveCursorLeft()
+            case .arrowRight:
+                await TerminalManager.shared.moveCursorRight()
+            case .character(let c):
+                await TerminalManager.shared.insertChar(c)
+            case .escape, .unknown:
+                break
             }
         } else {
             // Tiny sleep to prevent 100% CPU while polling
