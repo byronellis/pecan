@@ -188,7 +188,20 @@ func main() async throws {
         target: .host("127.0.0.1", port: 3000),
         transportSecurity: .plaintext,
         eventLoopGroup: group
-    )
+    ) { config in
+        config.keepalive = ClientConnectionKeepalive(
+            interval: .seconds(15),
+            timeout: .seconds(10),
+            permitWithoutCalls: true,
+            maximumPingsWithoutData: 0
+        )
+        config.connectionBackoff = ConnectionBackoff(
+            initialBackoff: 1.0,
+            maximumBackoff: 60.0,
+            multiplier: 1.6,
+            jitter: 0.2
+        )
+    }
 
     let client = Pecan_ClientServiceAsyncClient(channel: channel)
     
