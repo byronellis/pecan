@@ -28,7 +28,7 @@ public actor ToolManager {
         return try await tool.execute(argumentsJSON: argumentsJSON)
     }
     
-    public func getToolDefinitions() -> [[String: Any]] {
+    public func getToolDefinitions() throws -> Data {
         var definitions: [[String: Any]] = []
         for (_, tool) in tools {
             var def: [String: Any] = [
@@ -47,7 +47,7 @@ public actor ToolManager {
             }
             definitions.append(def)
         }
-        return definitions
+        return try JSONSerialization.data(withJSONObject: definitions)
     }
     
     public func loadTools() {

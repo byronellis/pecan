@@ -56,7 +56,7 @@ actor SessionManager {
         context[sessionID]![section]!.append(ContextMessage(role: role, content: content, metadataJson: metadata))
     }
 
-    func getContext(sessionID: String) -> [[String: Any]] {
+    func getContext(sessionID: String) throws -> Data {
         var messages: [[String: Any]] = []
         let sections: [Pecan_ContextSection] = [.system, .conversation, .tools]
         
@@ -75,7 +75,7 @@ actor SessionManager {
                 }
             }
         }
-        return messages
+        return try JSONSerialization.data(withJSONObject: messages)
     }
     
     func compactContext(sessionID: String, section: Pecan_ContextSection, keepRecent: Int) {
@@ -243,7 +243,12 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     if let modelConfig = config.models[modelKey] {
                         let provider = ProviderFactory.create(config: modelConfig)
                         do {
-                            let contextMessages = await SessionManager.shared.getContext(sessionID: sid)
+                            let contextData = try await SessionManager.shared.getContext(sessionID: sid)
+                            var contextMessages: [[String: Any]] = []
+                            if let decoded = try JSONSerialization.jsonObject(with: contextData) as? [[String: Any]] {
+                                contextMessages = decoded
+                            }
+                            
                             var payload: [String: Any] = ["messages": contextMessages]
                             
                             // Tools are now injected by the agent directly via paramsJson
@@ -308,6 +313,9 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
 
 func main() async throws {
     let config = try Config.load()
+    
+    // Switch to container-based execution
+    await SpawnerFactory.shared.useVirtualizationFramework()
     
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
     

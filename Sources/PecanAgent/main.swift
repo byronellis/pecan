@@ -9,13 +9,14 @@ let logger = Logger(label: "com.pecan.agent")
 func main() async throws {
     let args = CommandLine.arguments
     guard args.count > 1 else {
-        logger.error("Usage: pecan-agent <session_id>")
+        logger.error("Usage: pecan-agent <session_id> [host_address]")
         exit(1)
     }
     
     let sessionID = args[1]
+    let hostAddress = args.count > 2 ? args[2] : "127.0.0.1"
     let agentID = UUID().uuidString
-    logger.info("Pecan Agent \(agentID) Starting for session: \(sessionID)")
+    logger.info("Pecan Agent \(agentID) Starting for session: \(sessionID) connecting to \(hostAddress):3000")
     
     // Load local tools
     await ToolManager.shared.loadTools()
@@ -24,7 +25,7 @@ func main() async throws {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
     let channel = try GRPCChannelPool.with(
-        target: .host("127.0.0.1", port: 3000),
+        target: .host(hostAddress, port: 3000),
         transportSecurity: .plaintext,
         eventLoopGroup: group
     ) { config in
@@ -118,8 +119,9 @@ func main() async throws {
                 compReq.requestID = UUID().uuidString
                 compReq.modelKey = ""
                 
-                let toolDefs = await ToolManager.shared.getToolDefinitions()
-                if !toolDefs.isEmpty {
+                if let toolData = try? await ToolManager.shared.getToolDefinitions(),
+                   let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
+                   !toolDefs.isEmpty {
                     let params = ["tools": toolDefs]
                     if let data = try? JSONSerialization.data(withJSONObject: params),
                        let str = String(data: data, encoding: .utf8) {
@@ -233,8 +235,9 @@ func main() async throws {
                     compReq.requestID = UUID().uuidString
                     compReq.modelKey = "" 
                     
-                    let toolDefs = await ToolManager.shared.getToolDefinitions()
-                    if !toolDefs.isEmpty {
+                    if let toolData = try? await ToolManager.shared.getToolDefinitions(),
+                       let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
+                       !toolDefs.isEmpty {
                         let params = ["tools": toolDefs]
                         if let data = try? JSONSerialization.data(withJSONObject: params),
                            let str = String(data: data, encoding: .utf8) {

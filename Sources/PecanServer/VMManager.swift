@@ -1,11 +1,12 @@
 import Foundation
 #if os(macOS)
-import Virtualization
+import Containerization
+import ContainerizationOS
 #endif
 import PecanShared
 import Logging
 
-public protocol AgentSpawner {
+public protocol AgentSpawner: Sendable {
     func spawnAgent(sessionID: String) async throws
     func terminateAgent(sessionID: String) async throws
 }
@@ -41,99 +42,86 @@ public actor LocalProcessSpawner: AgentSpawner {
 }
 
 #if os(macOS)
-/// A spawner that creates an isolated Linux VM using Apple's Virtualization.framework.
-/// Note: This requires a Linux kernel, initrd, and a rootfs, along with a cross-compiled Linux pecan-agent binary.
-public actor VZLinuxSpawner: AgentSpawner {
-    private var vms: [String: VZVirtualMachine] = [:]
+/// A spawner that creates an isolated Linux VM using Apple's Containerization framework.
+@available(macOS 15.0, *)
+public actor AppleContainerSpawner: AgentSpawner {
+    private var containers: [String: LinuxContainer] = [:]
     
     public init() {}
     
     public func spawnAgent(sessionID: String) async throws {
-        logger.info("Setting up Virtualization.framework Linux VM for session \(sessionID)...")
+        logger.info("Setting up Containerization VM for session \(sessionID)...")
         
-        let config = VZVirtualMachineConfiguration()
-        config.platform = VZGenericPlatformConfiguration()
-        
-        // Define paths (In a real scenario, these would be downloaded or bundled)
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let vmDir = homeDir.appendingPathComponent(".pecan/vm")
-        let kernelURL = vmDir.appendingPathComponent("vmlinuz")
-        let initrdURL = vmDir.appendingPathComponent("initrd.img")
-        let diskURL = vmDir.appendingPathComponent("rootfs.ext4")
+        let kernelPath = vmDir.appendingPathComponent("vmlinuz").path
         
-        // For development/stubbing, we check if the files exist. If not, we throw an informative error.
-        guard FileManager.default.fileExists(atPath: kernelURL.path),
-              FileManager.default.fileExists(atPath: diskURL.path) else {
-            logger.error("Missing VM assets at \(vmDir.path). Falling back to LocalProcessSpawner or failing.")
-            throw NSError(domain: "VZLinuxSpawner", code: 1, userInfo: [NSLocalizedDescriptionKey: "Linux kernel or rootfs missing. Please provision ~/.pecan/vm/ with vmlinuz and rootfs.ext4"])
+        guard FileManager.default.fileExists(atPath: kernelPath) else {
+            logger.error("Missing VM kernel at \(kernelPath). Falling back to LocalProcessSpawner.")
+            throw NSError(domain: "AppleContainerSpawner", code: 1, userInfo: [NSLocalizedDescriptionKey: "Linux kernel missing. Please run ./build_linux_vm.sh or provision ~/.pecan/vm/vmlinuz"])
         }
         
-        let bootLoader = VZLinuxBootLoader(kernelURL: kernelURL)
-        if FileManager.default.fileExists(atPath: initrdURL.path) {
-            bootLoader.initialRamdiskURL = initrdURL
-        }
+        let initfsReference = "ghcr.io/apple/containerization/vminit:0.13.0"
         
-        // Command line tells the kernel to mount the rootfs and run our agent initialization
-        // We can pass the sessionID into the kernel command line so the agent knows who it is.
-        bootLoader.commandLine = "console=hvc0 root=/dev/vda rw init=/bin/pecan-agent-init session_id=\(sessionID)"
-        config.bootLoader = bootLoader
+        var manager = try await ContainerManager(
+            kernel: Kernel(path: URL(fileURLWithPath: kernelPath), platform: .linuxArm),
+            initfsReference: initfsReference
+        )
         
-        config.cpuCount = 2
-        config.memorySize = 1024 * 1024 * 1024 // 1GB
+        // Let's use a minimal Alpine image as the base
+        let imageReference = "docker.io/library/alpine:3.19"
+        logger.info("Creating container from \(imageReference)...")
         
-        // Setup rootfs block device
-        let diskAttachment = try VZDiskImageStorageDeviceAttachment(url: diskURL, readOnly: false)
-        config.storageDevices = [VZVirtioBlockDeviceConfiguration(attachment: diskAttachment)]
-        
-        // Virtio Console (serial port) for logging
-        let consoleConfig = VZVirtioConsoleDeviceSerialPortConfiguration()
-        let stdioAttachment = VZFileHandleSerialPortAttachment(fileHandleForReading: nil, fileHandleForWriting: .standardOutput)
-        consoleConfig.attachment = stdioAttachment
-        config.serialPorts = [consoleConfig]
-        
-        // Networking (NAT to access the host's gRPC server at 10.0.2.2 usually, or specific host IP)
-        let networkConfig = VZVirtioNetworkDeviceConfiguration()
-        networkConfig.attachment = VZNATNetworkDeviceAttachment()
-        config.networkDevices = [networkConfig]
-        
-        // Shared directory for Virtual Filesystem (VFS)
-        // We can share a specific workspace directory with the VM
-        let workspaceDir = vmDir.appendingPathComponent("workspace_\(sessionID)")
-        try? FileManager.default.createDirectory(at: workspaceDir, withIntermediateDirectories: true)
-        let share = VZSharedDirectory(url: workspaceDir, readOnly: false)
-        let fsConfig = VZVirtioFileSystemDeviceConfiguration(tag: "pecan_vfs")
-        fsConfig.share = VZSingleDirectoryShare(directory: share)
-        config.directorySharingDevices = [fsConfig]
-        
-        try config.validate()
-        
-        let vm = VZVirtualMachine(configuration: config)
-        
-        // Start the VM
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            vm.start { result in
-                switch result {
-                case .success:
-                    continuation.resume()
-                case .failure(let error):
-                    continuation.resume(throwing: error)
-                }
+        let container = try await manager.create(
+            sessionID,
+            reference: imageReference,
+            rootfsSizeInBytes: 1024 * 1024 * 1024 // 1GB
+        ) { @Sendable config in
+            config.cpus = 2
+            config.memoryInBytes = 512 * 1024 * 1024 // 512 MB
+            
+            // Pipe the container's output back to our server's standard out
+            if let currentTerm = try? Terminal.current {
+                config.process.stdout = currentTerm
+                config.process.stderr = currentTerm
             }
+            
+            // Mount the directory containing our statically compiled agent and tools
+            let currentPath = FileManager.default.currentDirectoryPath
+            let agentMount = Mount.share(source: "\(currentPath)/.build/aarch64-swift-linux-musl/release", destination: "/opt/pecan")
+            
+            // Also mount the tools directory
+            let toolsMount = Mount.share(source: "\(homeDir.path)/.pecan/tools", destination: "/root/.pecan/tools")
+            
+            config.mounts.append(agentMount)
+            config.mounts.append(toolsMount)
+            
+            // Host IP inside an Apple NAT network is usually 192.168.64.1 or handled automatically by DHCP
+            // We'll pass an empty string for the host so the agent falls back to detecting its gateway
+            config.process.arguments = ["/opt/pecan/pecan-agent", sessionID, "192.168.64.1"]
+            config.process.workingDirectory = "/opt/pecan"
         }
         
-        vms[sessionID] = vm
-        logger.info("Linux VM started successfully for session \(sessionID)")
+        try await container.create()
+        try await container.start()
+        
+        containers[sessionID] = container
+        logger.info("Apple Container started successfully for session \(sessionID)")
+        
+        // We can optionally wait for the container to exit in a background task
+        Task.detached {
+            let code = try? await container.wait()
+            try? await container.stop()
+            try? manager.delete(sessionID)
+            print("Container for session \(sessionID) exited with code \(String(describing: code))")
+        }
     }
     
     public func terminateAgent(sessionID: String) async throws {
-        if let vm = vms[sessionID] {
-            if vm.canRequestStop {
-                try vm.requestStop()
-            } else {
-                vm.stop { _ in }
-            }
-            vms.removeValue(forKey: sessionID)
-            logger.info("Terminated Linux VM for session \(sessionID)")
+        if let container = containers[sessionID] {
+            try await container.stop()
+            containers.removeValue(forKey: sessionID)
+            logger.info("Terminated Apple Container for session \(sessionID)")
         }
     }
 }
@@ -143,15 +131,13 @@ public actor VZLinuxSpawner: AgentSpawner {
 public actor SpawnerFactory {
     public static let shared = SpawnerFactory()
     
-    // For now, we default to local process until the user provisions the Linux kernel assets.
-    // We can make this configurable via Config.swift in the future.
     public var activeSpawner: AgentSpawner = LocalProcessSpawner()
     
     public func useVirtualizationFramework() {
         #if os(macOS)
-        activeSpawner = VZLinuxSpawner()
+        activeSpawner = AppleContainerSpawner()
         #else
-        logger.warning("Virtualization.framework is only available on macOS. Falling back to LocalProcessSpawner.")
+        logger.warning("Virtualization framework via apple/containerization is only available on macOS. Falling back to LocalProcessSpawner.")
         #endif
     }
     

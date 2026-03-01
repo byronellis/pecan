@@ -166,6 +166,18 @@ func readInputLine() async -> String? {
     }
 }
 
+actor SessionState {
+    private var sessionID: String?
+    
+    func setID(_ id: String) {
+        self.sessionID = id
+    }
+    
+    func getID() -> String? {
+        return sessionID
+    }
+}
+
 func main() async throws {
     // Handle Ctrl+C (SIGINT)
     signal(SIGINT) { _ in
@@ -214,7 +226,7 @@ func main() async throws {
     print("🥜 Pecan Interactive UI".bold + "\r", terminator: "\n")
     print("Connecting to server at 127.0.0.1:3000...\r\n", terminator: "\n")
     
-    var currentSessionID: String? = nil
+    let sessionState = SessionState()
 
     // Start a task to listen for server messages
     let receiverTask = Task {
@@ -222,7 +234,7 @@ func main() async throws {
             for try await message in call.responseStream {
                 switch message.payload {
                 case .sessionStarted(let started):
-                    currentSessionID = started.sessionID
+                    await sessionState.setID(started.sessionID)
                     await TerminalManager.shared.printMessage("[System]".yellow + " Session started: \(started.sessionID)")
                     
                 case .agentOutput(let output):
@@ -264,7 +276,7 @@ func main() async throws {
             // Echo locally for clarity (Terminal handles the scrollback inherently)
             await TerminalManager.shared.printMessage("[You]".blue + " \(trimmed)")
             
-            guard let sid = currentSessionID else {
+            guard let sid = await sessionState.getID() else {
                 await TerminalManager.shared.printMessage("[System]".yellow + " Waiting for session ID...")
                 continue
             }
