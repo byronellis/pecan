@@ -110,11 +110,12 @@ func main() async throws {
                 var reqMsg = Pecan_AgentEvent()
                 var compReq = Pecan_LLMCompletionRequest()
                 compReq.requestID = UUID().uuidString
-                compReq.modelKey = availableModels.first ?? "" // Let the agent pick a model or fallback to default
+                // Send an empty string to instruct the server to use the user's configured default model
+                compReq.modelKey = ""
                 compReq.paramsJson = "" // Default params
                 reqMsg.completionRequest = compReq
                 try await call.requestStream.send(reqMsg)
-                print("Sent LLM request to server.")
+                print("Sent LLM request to server using default model.")
                 
             case .completionResponse(let resp):
                 print("Received completion_response for request \(resp.requestID)")
