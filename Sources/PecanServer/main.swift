@@ -2,6 +2,9 @@ import Foundation
 import GRPC
 import NIO
 import PecanShared
+import Logging
+
+let logger = Logger(label: "com.pecan.server")
 
 actor SessionManager {
     static let shared = SessionManager()
@@ -31,7 +34,7 @@ actor SessionManager {
         if let stream = uiStreams[sessionID] {
             try await stream.send(message)
         } else {
-            print("No UI stream found for session \(sessionID)")
+            logger.warning("No UI stream found for session \(sessionID)")
         }
     }
     
@@ -39,7 +42,7 @@ actor SessionManager {
         if let stream = agentStreams[sessionID] {
             try await stream.send(command)
         } else {
-            print("No Agent stream found for session \(sessionID)")
+            logger.warning("No Agent stream found for session \(sessionID)")
         }
     }
     
@@ -95,7 +98,7 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
         responseStream: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>,
         context: GRPCAsyncServerCallContext
     ) async throws {
-        print("UI Client connected.")
+        logger.info("UI Client connected.")
         var activeSessionID: String? = nil
         
         do {
@@ -115,7 +118,7 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     try await responseStream.send(response)
                     
                     // Spawn the agent locally for Phase 1
-                    print("Spawning agent for session \(sessionID)...")
+                    logger.info("Spawning agent for session \(sessionID)...")
                     let task = Process()
                     // Use the built binary directly to avoid SPM locks
                     let currentPath = FileManager.default.currentDirectoryPath
@@ -124,7 +127,7 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     try task.run()
 
                 case .userInput(let req):
-                    print("Routing user input to agent for session \(req.sessionID)")
+                    logger.debug("Routing user input to agent for session \(req.sessionID)")
                     var cmdMsg = Pecan_HostCommand()
                     var processInput = Pecan_ProcessInput()
                     processInput.text = req.text
@@ -133,19 +136,19 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     try await SessionManager.shared.sendToAgent(sessionID: req.sessionID, command: cmdMsg)
 
                 case .toolApproval(let req):
-                    print("Received tool approval: \(req.approved) for \(req.toolCallID)")
+                    logger.info("Received tool approval: \(req.approved) for \(req.toolCallID)")
                 case nil:
                     break
                 }
             }
         } catch {
-            print("UI Stream error or disconnected: \(error)")
+            logger.error("UI Stream error or disconnected: \(error)")
         }
         
         if let sid = activeSessionID {
             await SessionManager.shared.removeSession(sessionID: sid)
         }
-        print("UI Client disconnected.")
+        logger.info("UI Client disconnected.")
     }
 }
 
@@ -161,14 +164,14 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
         responseStream: GRPCAsyncResponseStreamWriter<Pecan_HostCommand>,
         context: GRPCAsyncServerCallContext
     ) async throws {
-        print("Agent Client connected.")
+        logger.info("Agent Client connected.")
         var activeSessionID: String? = nil
         
         do {
             for try await event in requestStream {
                 switch event.payload {
                 case .register(let reg):
-                    print("Agent \(reg.agentID) registered for session \(reg.sessionID)")
+                    logger.info("Agent \(reg.agentID) registered for session \(reg.sessionID)")
                     activeSessionID = reg.sessionID
                     
                     await SessionManager.shared.registerAgent(sessionID: reg.sessionID, stream: responseStream)
@@ -181,7 +184,7 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     
                 case .progress(let prog):
                     guard let sid = activeSessionID else { continue }
-                    print("Progress from agent: \(prog.statusMessage)")
+                    logger.debug("Progress from agent: \(prog.statusMessage)")
                     // Route to UI
                     var srvMsg = Pecan_ServerMessage()
                     var out = Pecan_AgentOutput()
@@ -191,7 +194,7 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     try await SessionManager.shared.sendToUI(sessionID: sid, message: srvMsg)
                     
                 case .getModels(let req):
-                    print("Agent requested models list.")
+                    logger.debug("Agent requested models list.")
                     var cmdMsg = Pecan_HostCommand()
                     var resp = Pecan_GetModelsResponse()
                     resp.requestID = req.requestID
@@ -225,7 +228,7 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                 case .completionRequest(let req):
                     guard let sid = activeSessionID else { continue }
                     let modelKey = req.modelKey.isEmpty ? (config.defaultModel ?? config.models.keys.first ?? "") : req.modelKey
-                    print("LLM Request from agent: \(req.requestID) using model: \(modelKey)")
+                    logger.info("LLM Request from agent: \(req.requestID) using model: \(modelKey)")
                     
                     if let modelConfig = config.models[modelKey] {
                         let provider = ProviderFactory.create(config: modelConfig)
@@ -251,7 +254,7 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                             cmdMsg.completionResponse = compResp
                             try await responseStream.send(cmdMsg)
                         } catch {
-                            print("Provider error: \(error)")
+                            logger.error("Provider error: \(error)")
                             var cmdMsg = Pecan_HostCommand()
                             var compResp = Pecan_LLMCompletionResponse()
                             compResp.requestID = req.requestID
@@ -260,7 +263,7 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                             try await responseStream.send(cmdMsg)
                         }
                     } else {
-                        print("Error: No valid model configuration found for key \(modelKey).")
+                        logger.error("Error: No valid model configuration found for key \(modelKey).")
                         var cmdMsg = Pecan_HostCommand()
                         var compResp = Pecan_LLMCompletionResponse()
                         compResp.requestID = req.requestID
@@ -270,17 +273,17 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     }
                     
                 case .toolRequest(let req):
-                    print("Tool Request from agent: \(req.toolName)")
+                    logger.info("Tool Request from agent: \(req.toolName)")
                     
                 case nil:
                     break
                 }
             }
         } catch {
-            print("Agent Stream error or disconnected: \(error)")
+            logger.error("Agent Stream error or disconnected: \(error)")
         }
         
-        print("Agent Client disconnected.")
+        logger.info("Agent Client disconnected.")
     }
 }
 
@@ -293,7 +296,7 @@ func main() async throws {
         .bind(host: "0.0.0.0", port: 3000)
         .get()
     
-    print("Pecan Server started on port \(server.channel.localAddress?.port ?? 3000) with default model: \(config.defaultModel ?? "unknown")")
+    logger.info("Pecan Server started on port \(server.channel.localAddress?.port ?? 3000) with default model: \(config.defaultModel ?? "unknown")")
     
     try await server.onClose.get()
     try await group.shutdownGracefully()
@@ -303,7 +306,7 @@ Task {
     do {
         try await main()
     } catch {
-        print("Server error: \(error)")
+        logger.critical("Server error: \(error)")
         exit(1)
     }
 }

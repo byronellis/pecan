@@ -18,6 +18,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.25.2"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.6"),
         .package(url: "https://github.com/pakLebah/ANSITerminal.git", from: "0.0.3"),
+        .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
     ],
     targets: [
         .target(
@@ -26,6 +27,7 @@ let package = Package(
                 .product(name: "GRPC", package: "grpc-swift"),
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
                 .product(name: "Yams", package: "Yams"),
+                .product(name: "Logging", package: "swift-log"),
             ],
             exclude: [
                 "pecan.proto",

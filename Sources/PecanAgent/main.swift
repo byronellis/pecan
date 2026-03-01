@@ -2,17 +2,20 @@ import Foundation
 import GRPC
 import NIO
 import PecanShared
+import Logging
+
+let logger = Logger(label: "com.pecan.agent")
 
 func main() async throws {
     let args = CommandLine.arguments
     guard args.count > 1 else {
-        print("Usage: pecan-agent <session_id>")
+        logger.error("Usage: pecan-agent <session_id>")
         exit(1)
     }
     
     let sessionID = args[1]
     let agentID = UUID().uuidString
-    print("Pecan Agent \(agentID) Starting for session: \(sessionID)")
+    logger.info("Pecan Agent \(agentID) Starting for session: \(sessionID)")
     
     // Setup gRPC Client
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -56,7 +59,7 @@ func main() async throws {
         for try await command in call.responseStream {
             switch command.payload {
             case .registrationResponse(let resp):
-                print("Registration successful: \(resp.success)")
+                logger.info("Registration successful: \(resp.success)")
                 
                 // Immediately send a progress update that we are alive
                 var progMsg = Pecan_AgentEvent()
@@ -86,13 +89,13 @@ func main() async throws {
                 
             case .modelsResponse(let resp):
                 availableModels = resp.models.map { $0.key }
-                print("Agent received available models: \(availableModels)")
+                logger.info("Agent received available models: \(availableModels)")
                 
             case .contextResponse(let resp):
-                print("Agent received context response: \(resp.infoJson)")
+                logger.debug("Agent received context response: \(resp.infoJson)")
                 
             case .processInput(let input):
-                print("Received process_input from Server: \(input.text)")
+                logger.info("Received process_input from Server: \(input.text)")
                 
                 // Add user message to context
                 var ctxMsg = Pecan_AgentEvent()
@@ -115,10 +118,10 @@ func main() async throws {
                 compReq.paramsJson = "" // Default params
                 reqMsg.completionRequest = compReq
                 try await call.requestStream.send(reqMsg)
-                print("Sent LLM request to server using default model.")
+                logger.info("Sent LLM request to server using default model.")
                 
             case .completionResponse(let resp):
-                print("Received completion_response for request \(resp.requestID)")
+                logger.info("Received completion_response for request \(resp.requestID)")
                 
                 var finalText = ""
                 
@@ -158,10 +161,10 @@ func main() async throws {
                 try await call.requestStream.send(respMsg)
                 
             case .toolResponse(let resp):
-                print("Received tool_response: \(resp.resultJson)")
+                logger.info("Received tool_response: \(resp.resultJson)")
                 
             case .shutdown(let req):
-                print("Received shutdown command: \(req.reason)")
+                logger.warning("Received shutdown command: \(req.reason)")
                 break
                 
             case nil:
@@ -169,11 +172,11 @@ func main() async throws {
             }
         }
     } catch {
-        print("Disconnected from server: \(error)")
+        logger.error("Disconnected from server: \(error)")
     }
     
     call.requestStream.finish()
-    print("Pecan Agent Shutting Down.")
+    logger.info("Pecan Agent Shutting Down.")
     
     try await channel.close().get()
     try await group.shutdownGracefully()
@@ -183,7 +186,7 @@ Task {
     do {
         try await main()
     } catch {
-        print("Error: \(error)")
+        logger.critical("Error: \(error)")
         exit(1)
     }
     exit(0)
