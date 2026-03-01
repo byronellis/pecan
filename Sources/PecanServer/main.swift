@@ -85,10 +85,16 @@ actor SessionManager {
         }
     }
     
-    func removeSession(sessionID: String) {
+    func removeSession(sessionID: String) async {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
         context.removeValue(forKey: sessionID)
+        
+        do {
+            try await SpawnerFactory.shared.terminate(sessionID: sessionID)
+        } catch {
+            logger.error("Failed to terminate agent VM for session \(sessionID): \(error)")
+        }
     }
 }
 
@@ -117,14 +123,18 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     response.sessionStarted = started
                     try await responseStream.send(response)
                     
-                    // Spawn the agent locally for Phase 1
-                    logger.info("Spawning agent for session \(sessionID)...")
-                    let task = Process()
-                    // Use the built binary directly to avoid SPM locks
-                    let currentPath = FileManager.default.currentDirectoryPath
-                    task.executableURL = URL(fileURLWithPath: "\(currentPath)/.build/debug/pecan-agent")
-                    task.arguments = [sessionID]
-                    try task.run()
+                    // Spawn the agent using the Pluggable VM architecture
+                    do {
+                        try await SpawnerFactory.shared.spawn(sessionID: sessionID)
+                    } catch {
+                        logger.error("Failed to spawn agent: \(error)")
+                        var errorMsg = Pecan_ServerMessage()
+                        var out = Pecan_AgentOutput()
+                        out.sessionID = sessionID
+                        out.text = "System Error: Failed to spawn isolated agent VM. (\(error.localizedDescription))"
+                        errorMsg.agentOutput = out
+                        try await responseStream.send(errorMsg)
+                    }
 
                 case .userInput(let req):
                     logger.debug("Routing user input to agent for session \(req.sessionID)")
