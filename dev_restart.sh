@@ -6,6 +6,12 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-./dev_stop.sh
-./dev_start.sh &
-echo "Server restarted in background. Tail .run/server.log to see output."
+if [ -f .run/server.pid ]; then
+    kill $(cat .run/server.pid) 2>/dev/null
+    rm .run/server.pid
+fi
+
+# Kill any dangling pecan-agent processes
+pkill -f pecan-agent 2>/dev/null
+
+echo "Server killed. The dev_start.sh loop will automatically restart it in 1s."
