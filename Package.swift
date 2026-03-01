@@ -1,4 +1,4 @@
-// swift-tools-version: 5.9
+// swift-tools-version: 6.0
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -6,12 +6,13 @@ import PackageDescription
 let package = Package(
     name: "pecan",
     platforms: [
-        .macOS(.v14)
+        .macOS(.v15)
     ],
     products: [
         .executable(name: "pecan-server", targets: ["PecanServer"]),
         .executable(name: "pecan", targets: ["PecanUI"]),
         .executable(name: "pecan-agent", targets: ["PecanAgent"]),
+        .executable(name: "pecan-builder", targets: ["PecanBuilder"]),
     ],
     dependencies: [
         .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.23.0"),
@@ -20,6 +21,7 @@ let package = Package(
         .package(url: "https://github.com/pakLebah/ANSITerminal.git", from: "0.0.3"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
         .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
+        .package(url: "https://github.com/apple/containerization.git", branch: "main"),
     ],
     targets: [
         .target(
@@ -37,8 +39,16 @@ let package = Package(
             ]
         ),
         .executableTarget(
+            name: "PecanBuilder",
+            dependencies: [
+                .product(name: "Containerization", package: "containerization")
+            ]),
+        .executableTarget(
             name: "PecanServer",
-            dependencies: ["PecanShared"]),
+            dependencies: [
+                "PecanShared",
+                .product(name: "Containerization", package: "containerization")
+            ]),
         .executableTarget(
             name: "PecanUI",
             dependencies: [
