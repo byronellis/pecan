@@ -38,10 +38,7 @@ let package = Package(
         ),
         .executableTarget(
             name: "PecanServer",
-            dependencies: [
-                "PecanShared",
-                .product(name: "Lua", package: "LuaSwift")
-            ]),
+            dependencies: ["PecanShared"]),
         .executableTarget(
             name: "PecanUI",
             dependencies: [
@@ -50,6 +47,9 @@ let package = Package(
             ]),
         .executableTarget(
             name: "PecanAgent",
-            dependencies: ["PecanShared"]),
+            dependencies: [
+                "PecanShared",
+                .product(name: "Lua", package: "LuaSwift")
+            ]),
     ]
 )

@@ -17,6 +17,9 @@ func main() async throws {
     let agentID = UUID().uuidString
     logger.info("Pecan Agent \(agentID) Starting for session: \(sessionID)")
     
+    // Load local tools
+    await ToolManager.shared.loadTools()
+    
     // Setup gRPC Client
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
@@ -113,9 +116,19 @@ func main() async throws {
                 var reqMsg = Pecan_AgentEvent()
                 var compReq = Pecan_LLMCompletionRequest()
                 compReq.requestID = UUID().uuidString
-                // Send an empty string to instruct the server to use the user's configured default model
                 compReq.modelKey = ""
-                compReq.paramsJson = "" // Default params
+                
+                let toolDefs = await ToolManager.shared.getToolDefinitions()
+                if !toolDefs.isEmpty {
+                    let params = ["tools": toolDefs]
+                    if let data = try? JSONSerialization.data(withJSONObject: params),
+                       let str = String(data: data, encoding: .utf8) {
+                        compReq.paramsJson = str
+                    }
+                } else {
+                    compReq.paramsJson = ""
+                }
+                
                 reqMsg.completionRequest = compReq
                 try await call.requestStream.send(reqMsg)
                 logger.info("Sent LLM request to server using default model.")
@@ -182,18 +195,58 @@ func main() async throws {
                            let arguments = function["arguments"] as? String,
                            let callId = toolCall["id"] as? String {
                             
-                            logger.info("Executing tool: \(name)")
+                            logger.info("Executing tool: \(name) locally")
                             
-                            var reqMsg = Pecan_AgentEvent()
-                            var toolReq = Pecan_ToolExecutionRequest()
-                            toolReq.requestID = callId
-                            toolReq.toolName = name
-                            toolReq.argumentsJson = arguments
-                            reqMsg.toolRequest = toolReq
+                            var resultStr = ""
+                            do {
+                                resultStr = try await ToolManager.shared.executeTool(name: name, argumentsJSON: arguments)
+                            } catch {
+                                logger.error("Local tool execution failed: \(error)")
+                                resultStr = "Error: \(error.localizedDescription)"
+                            }
                             
-                            try await call.requestStream.send(reqMsg)
+                            // Add tool result to context
+                            var ctxMsg = Pecan_AgentEvent()
+                            var ctxCmd = Pecan_ContextCommand()
+                            ctxCmd.requestID = UUID().uuidString
+                            var addMsg = Pecan_AddContextMessage()
+                            addMsg.section = .conversation
+                            addMsg.role = "tool"
+                            addMsg.content = resultStr
+                            
+                            // Pass the tool_call_id via metadata
+                            let meta: [String: Any] = ["tool_call_id": callId]
+                            if let metaData = try? JSONSerialization.data(withJSONObject: meta),
+                               let metaStr = String(data: metaData, encoding: .utf8) {
+                                addMsg.metadataJson = metaStr
+                            }
+                            
+                            ctxCmd.addMessage = addMsg
+                            ctxMsg.contextCommand = ctxCmd
+                            try await call.requestStream.send(ctxMsg)
                         }
                     }
+                    
+                    // Request next completion from LLM after the tool has run
+                    var reqMsg = Pecan_AgentEvent()
+                    var compReq = Pecan_LLMCompletionRequest()
+                    compReq.requestID = UUID().uuidString
+                    compReq.modelKey = "" 
+                    
+                    let toolDefs = await ToolManager.shared.getToolDefinitions()
+                    if !toolDefs.isEmpty {
+                        let params = ["tools": toolDefs]
+                        if let data = try? JSONSerialization.data(withJSONObject: params),
+                           let str = String(data: data, encoding: .utf8) {
+                            compReq.paramsJson = str
+                        }
+                    } else {
+                        compReq.paramsJson = ""
+                    }
+                    
+                    reqMsg.completionRequest = compReq
+                    try await call.requestStream.send(reqMsg)
+                    
                 } else {
                     var respMsg = Pecan_AgentEvent()
                     var prog = Pecan_TaskProgress()
@@ -203,43 +256,7 @@ func main() async throws {
                 }
                 
             case .toolResponse(let resp):
-                logger.info("Received tool_response for \(resp.requestID)")
-                
-                // Add tool result to context
-                var ctxMsg = Pecan_AgentEvent()
-                var ctxCmd = Pecan_ContextCommand()
-                ctxCmd.requestID = UUID().uuidString
-                var addMsg = Pecan_AddContextMessage()
-                addMsg.section = .conversation
-                addMsg.role = "tool"
-                
-                if !resp.errorMessage.isEmpty {
-                    addMsg.content = "Error: \(resp.errorMessage)"
-                } else {
-                    addMsg.content = resp.resultJson
-                }
-                
-                // Pass the tool_call_id via metadata
-                let meta: [String: Any] = ["tool_call_id": resp.requestID]
-                if let metaData = try? JSONSerialization.data(withJSONObject: meta),
-                   let metaStr = String(data: metaData, encoding: .utf8) {
-                    addMsg.metadataJson = metaStr
-                }
-                
-                ctxCmd.addMessage = addMsg
-                ctxMsg.contextCommand = ctxCmd
-                try await call.requestStream.send(ctxMsg)
-                
-                // Request next completion from LLM after the tool has run
-                // TODO: if multiple tools are executing concurrently, we should wait for all of them before requesting completion again.
-                // For a naive implementation, we'll just request it right away and hope it's sequential.
-                var reqMsg = Pecan_AgentEvent()
-                var compReq = Pecan_LLMCompletionRequest()
-                compReq.requestID = UUID().uuidString
-                compReq.modelKey = "" 
-                compReq.paramsJson = ""
-                reqMsg.completionRequest = compReq
-                try await call.requestStream.send(reqMsg)
+                logger.info("Received tool_response from server for \(resp.requestID) - currently unused by local tool execution flow")
                 
             case .shutdown(let req):
                 logger.warning("Received shutdown command: \(req.reason)")
