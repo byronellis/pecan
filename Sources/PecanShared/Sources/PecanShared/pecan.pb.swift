@@ -20,14 +20,52 @@ fileprivate struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobuf.ProtobufAP
   typealias Version = _2
 }
 
-struct Pecan_ClientMessage: Sendable {
+public enum Pecan_ContextSection: SwiftProtobuf.Enum, Swift.CaseIterable {
+  public typealias RawValue = Int
+  case system // = 0
+  case conversation // = 1
+  case tools // = 2
+  case UNRECOGNIZED(Int)
+
+  public init() {
+    self = .system
+  }
+
+  public init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .system
+    case 1: self = .conversation
+    case 2: self = .tools
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  public var rawValue: Int {
+    switch self {
+    case .system: return 0
+    case .conversation: return 1
+    case .tools: return 2
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  public static let allCases: [Pecan_ContextSection] = [
+    .system,
+    .conversation,
+    .tools,
+  ]
+
+}
+
+public struct Pecan_ClientMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var payload: Pecan_ClientMessage.OneOf_Payload? = nil
+  public var payload: Pecan_ClientMessage.OneOf_Payload? = nil
 
-  var startTask: Pecan_StartTaskRequest {
+  public var startTask: Pecan_StartTaskRequest {
     get {
       if case .startTask(let v)? = payload {return v}
       return Pecan_StartTaskRequest()
@@ -35,7 +73,7 @@ struct Pecan_ClientMessage: Sendable {
     set {payload = .startTask(newValue)}
   }
 
-  var userInput: Pecan_TaskInput {
+  public var userInput: Pecan_TaskInput {
     get {
       if case .userInput(let v)? = payload {return v}
       return Pecan_TaskInput()
@@ -43,7 +81,7 @@ struct Pecan_ClientMessage: Sendable {
     set {payload = .userInput(newValue)}
   }
 
-  var toolApproval: Pecan_ToolApproval {
+  public var toolApproval: Pecan_ToolApproval {
     get {
       if case .toolApproval(let v)? = payload {return v}
       return Pecan_ToolApproval()
@@ -51,70 +89,70 @@ struct Pecan_ClientMessage: Sendable {
     set {payload = .toolApproval(newValue)}
   }
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  enum OneOf_Payload: Equatable, Sendable {
+  public enum OneOf_Payload: Equatable, Sendable {
     case startTask(Pecan_StartTaskRequest)
     case userInput(Pecan_TaskInput)
     case toolApproval(Pecan_ToolApproval)
 
   }
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_StartTaskRequest: Sendable {
+public struct Pecan_StartTaskRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var initialPrompt: String = String()
+  public var initialPrompt: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_TaskInput: Sendable {
+public struct Pecan_TaskInput: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var sessionID: String = String()
+  public var sessionID: String = String()
 
-  var text: String = String()
+  public var text: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_ToolApproval: Sendable {
+public struct Pecan_ToolApproval: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var sessionID: String = String()
+  public var sessionID: String = String()
 
-  var toolCallID: String = String()
+  public var toolCallID: String = String()
 
-  var approved: Bool = false
+  public var approved: Bool = false
 
-  var rejectReason: String = String()
+  public var rejectReason: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_ServerMessage: Sendable {
+public struct Pecan_ServerMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var payload: Pecan_ServerMessage.OneOf_Payload? = nil
+  public var payload: Pecan_ServerMessage.OneOf_Payload? = nil
 
-  var sessionStarted: Pecan_SessionStarted {
+  public var sessionStarted: Pecan_SessionStarted {
     get {
       if case .sessionStarted(let v)? = payload {return v}
       return Pecan_SessionStarted()
@@ -122,7 +160,7 @@ struct Pecan_ServerMessage: Sendable {
     set {payload = .sessionStarted(newValue)}
   }
 
-  var agentOutput: Pecan_AgentOutput {
+  public var agentOutput: Pecan_AgentOutput {
     get {
       if case .agentOutput(let v)? = payload {return v}
       return Pecan_AgentOutput()
@@ -130,7 +168,7 @@ struct Pecan_ServerMessage: Sendable {
     set {payload = .agentOutput(newValue)}
   }
 
-  var approvalRequest: Pecan_ToolApprovalRequest {
+  public var approvalRequest: Pecan_ToolApprovalRequest {
     get {
       if case .approvalRequest(let v)? = payload {return v}
       return Pecan_ToolApprovalRequest()
@@ -138,7 +176,7 @@ struct Pecan_ServerMessage: Sendable {
     set {payload = .approvalRequest(newValue)}
   }
 
-  var taskCompleted: Pecan_TaskCompleted {
+  public var taskCompleted: Pecan_TaskCompleted {
     get {
       if case .taskCompleted(let v)? = payload {return v}
       return Pecan_TaskCompleted()
@@ -146,9 +184,9 @@ struct Pecan_ServerMessage: Sendable {
     set {payload = .taskCompleted(newValue)}
   }
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  enum OneOf_Payload: Equatable, Sendable {
+  public enum OneOf_Payload: Equatable, Sendable {
     case sessionStarted(Pecan_SessionStarted)
     case agentOutput(Pecan_AgentOutput)
     case approvalRequest(Pecan_ToolApprovalRequest)
@@ -156,73 +194,73 @@ struct Pecan_ServerMessage: Sendable {
 
   }
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_SessionStarted: Sendable {
+public struct Pecan_SessionStarted: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var sessionID: String = String()
+  public var sessionID: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_AgentOutput: Sendable {
+public struct Pecan_AgentOutput: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var sessionID: String = String()
+  public var sessionID: String = String()
 
-  var text: String = String()
+  public var text: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_ToolApprovalRequest: Sendable {
+public struct Pecan_ToolApprovalRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var sessionID: String = String()
+  public var sessionID: String = String()
 
-  var toolCallID: String = String()
+  public var toolCallID: String = String()
 
-  var toolName: String = String()
+  public var toolName: String = String()
 
-  var argumentsJson: String = String()
+  public var argumentsJson: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_TaskCompleted: Sendable {
+public struct Pecan_TaskCompleted: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var sessionID: String = String()
+  public var sessionID: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_AgentEvent: Sendable {
+public struct Pecan_AgentEvent: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var payload: Pecan_AgentEvent.OneOf_Payload? = nil
+  public var payload: Pecan_AgentEvent.OneOf_Payload? = nil
 
-  var register: Pecan_AgentRegistration {
+  public var register: Pecan_AgentRegistration {
     get {
       if case .register(let v)? = payload {return v}
       return Pecan_AgentRegistration()
@@ -230,7 +268,7 @@ struct Pecan_AgentEvent: Sendable {
     set {payload = .register(newValue)}
   }
 
-  var completionRequest: Pecan_LLMCompletionRequest {
+  public var completionRequest: Pecan_LLMCompletionRequest {
     get {
       if case .completionRequest(let v)? = payload {return v}
       return Pecan_LLMCompletionRequest()
@@ -238,7 +276,7 @@ struct Pecan_AgentEvent: Sendable {
     set {payload = .completionRequest(newValue)}
   }
 
-  var toolRequest: Pecan_ToolExecutionRequest {
+  public var toolRequest: Pecan_ToolExecutionRequest {
     get {
       if case .toolRequest(let v)? = payload {return v}
       return Pecan_ToolExecutionRequest()
@@ -246,7 +284,7 @@ struct Pecan_AgentEvent: Sendable {
     set {payload = .toolRequest(newValue)}
   }
 
-  var progress: Pecan_TaskProgress {
+  public var progress: Pecan_TaskProgress {
     get {
       if case .progress(let v)? = payload {return v}
       return Pecan_TaskProgress()
@@ -254,84 +292,206 @@ struct Pecan_AgentEvent: Sendable {
     set {payload = .progress(newValue)}
   }
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var getModels: Pecan_GetModelsRequest {
+    get {
+      if case .getModels(let v)? = payload {return v}
+      return Pecan_GetModelsRequest()
+    }
+    set {payload = .getModels(newValue)}
+  }
 
-  enum OneOf_Payload: Equatable, Sendable {
+  public var contextCommand: Pecan_ContextCommand {
+    get {
+      if case .contextCommand(let v)? = payload {return v}
+      return Pecan_ContextCommand()
+    }
+    set {payload = .contextCommand(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_Payload: Equatable, Sendable {
     case register(Pecan_AgentRegistration)
     case completionRequest(Pecan_LLMCompletionRequest)
     case toolRequest(Pecan_ToolExecutionRequest)
     case progress(Pecan_TaskProgress)
+    case getModels(Pecan_GetModelsRequest)
+    case contextCommand(Pecan_ContextCommand)
 
   }
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_AgentRegistration: Sendable {
+public struct Pecan_AgentRegistration: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var agentID: String = String()
+  public var agentID: String = String()
 
-  var sessionID: String = String()
+  public var sessionID: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_LLMCompletionRequest: Sendable {
+public struct Pecan_GetModelsRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var requestID: String = String()
+  public var requestID: String = String()
 
-  /// Messages, tool definitions, etc., serialized as JSON or further modeled here
-  var payloadJson: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
+  public init() {}
 }
 
-struct Pecan_ToolExecutionRequest: Sendable {
+public struct Pecan_ContextCommand: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var requestID: String = String()
+  public var requestID: String = String()
 
-  var toolName: String = String()
+  public var action: Pecan_ContextCommand.OneOf_Action? = nil
 
-  var argumentsJson: String = String()
+  public var addMessage: Pecan_AddContextMessage {
+    get {
+      if case .addMessage(let v)? = action {return v}
+      return Pecan_AddContextMessage()
+    }
+    set {action = .addMessage(newValue)}
+  }
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var getInfo: Pecan_GetContextInfo {
+    get {
+      if case .getInfo(let v)? = action {return v}
+      return Pecan_GetContextInfo()
+    }
+    set {action = .getInfo(newValue)}
+  }
 
-  init() {}
+  public var compact: Pecan_CompactContext {
+    get {
+      if case .compact(let v)? = action {return v}
+      return Pecan_CompactContext()
+    }
+    set {action = .compact(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_Action: Equatable, Sendable {
+    case addMessage(Pecan_AddContextMessage)
+    case getInfo(Pecan_GetContextInfo)
+    case compact(Pecan_CompactContext)
+
+  }
+
+  public init() {}
 }
 
-struct Pecan_TaskProgress: Sendable {
+public struct Pecan_AddContextMessage: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var statusMessage: String = String()
+  public var section: Pecan_ContextSection = .system
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var role: String = String()
 
-  init() {}
+  public var content: String = String()
+
+  /// tool calls, etc.
+  public var metadataJson: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
 }
 
-struct Pecan_HostCommand: Sendable {
+/// Empty for now, just asks for sizes
+public struct Pecan_GetContextInfo: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var payload: Pecan_HostCommand.OneOf_Payload? = nil
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  var registrationResponse: Pecan_RegistrationResponse {
+  public init() {}
+}
+
+public struct Pecan_CompactContext: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var section: Pecan_ContextSection = .system
+
+  public var keepRecentMessages: Int32 = 0
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pecan_LLMCompletionRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var requestID: String = String()
+
+  /// e.g., 'qwen3' or 'mock'
+  public var modelKey: String = String()
+
+  /// optional overrides like temperature
+  public var paramsJson: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pecan_ToolExecutionRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var requestID: String = String()
+
+  public var toolName: String = String()
+
+  public var argumentsJson: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pecan_TaskProgress: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var statusMessage: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pecan_HostCommand: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var payload: Pecan_HostCommand.OneOf_Payload? = nil
+
+  public var registrationResponse: Pecan_RegistrationResponse {
     get {
       if case .registrationResponse(let v)? = payload {return v}
       return Pecan_RegistrationResponse()
@@ -339,7 +499,7 @@ struct Pecan_HostCommand: Sendable {
     set {payload = .registrationResponse(newValue)}
   }
 
-  var completionResponse: Pecan_LLMCompletionResponse {
+  public var completionResponse: Pecan_LLMCompletionResponse {
     get {
       if case .completionResponse(let v)? = payload {return v}
       return Pecan_LLMCompletionResponse()
@@ -347,7 +507,7 @@ struct Pecan_HostCommand: Sendable {
     set {payload = .completionResponse(newValue)}
   }
 
-  var toolResponse: Pecan_ToolExecutionResponse {
+  public var toolResponse: Pecan_ToolExecutionResponse {
     get {
       if case .toolResponse(let v)? = payload {return v}
       return Pecan_ToolExecutionResponse()
@@ -355,7 +515,7 @@ struct Pecan_HostCommand: Sendable {
     set {payload = .toolResponse(newValue)}
   }
 
-  var shutdown: Pecan_ShutdownCommand {
+  public var shutdown: Pecan_ShutdownCommand {
     get {
       if case .shutdown(let v)? = payload {return v}
       return Pecan_ShutdownCommand()
@@ -363,84 +523,173 @@ struct Pecan_HostCommand: Sendable {
     set {payload = .shutdown(newValue)}
   }
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var processInput: Pecan_ProcessInput {
+    get {
+      if case .processInput(let v)? = payload {return v}
+      return Pecan_ProcessInput()
+    }
+    set {payload = .processInput(newValue)}
+  }
 
-  enum OneOf_Payload: Equatable, Sendable {
+  public var modelsResponse: Pecan_GetModelsResponse {
+    get {
+      if case .modelsResponse(let v)? = payload {return v}
+      return Pecan_GetModelsResponse()
+    }
+    set {payload = .modelsResponse(newValue)}
+  }
+
+  public var contextResponse: Pecan_ContextResponse {
+    get {
+      if case .contextResponse(let v)? = payload {return v}
+      return Pecan_ContextResponse()
+    }
+    set {payload = .contextResponse(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_Payload: Equatable, Sendable {
     case registrationResponse(Pecan_RegistrationResponse)
     case completionResponse(Pecan_LLMCompletionResponse)
     case toolResponse(Pecan_ToolExecutionResponse)
     case shutdown(Pecan_ShutdownCommand)
+    case processInput(Pecan_ProcessInput)
+    case modelsResponse(Pecan_GetModelsResponse)
+    case contextResponse(Pecan_ContextResponse)
 
   }
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_RegistrationResponse: Sendable {
+public struct Pecan_GetModelsResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var success: Bool = false
+  public var requestID: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var models: [Pecan_GetModelsResponse.ModelInfo] = []
 
-  init() {}
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public struct ModelInfo: Sendable {
+    // SwiftProtobuf.Message conformance is added in an extension below. See the
+    // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+    // methods supported on all messages.
+
+    public var key: String = String()
+
+    public var name: String = String()
+
+    public var description_p: String = String()
+
+    public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+    public init() {}
+  }
+
+  public init() {}
 }
 
-struct Pecan_LLMCompletionResponse: Sendable {
+public struct Pecan_ContextResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var requestID: String = String()
+  public var requestID: String = String()
 
-  var responseJson: String = String()
+  public var infoJson: String = String()
 
-  var errorMessage: String = String()
+  public var errorMessage: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  init() {}
+  public init() {}
 }
 
-struct Pecan_ToolExecutionResponse: Sendable {
+public struct Pecan_RegistrationResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var requestID: String = String()
+  public var success: Bool = false
 
-  var resultJson: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
 
-  var errorMessage: String = String()
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
+  public init() {}
 }
 
-struct Pecan_ShutdownCommand: Sendable {
+public struct Pecan_LLMCompletionResponse: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var reason: String = String()
+  public var requestID: String = String()
 
-  var unknownFields = SwiftProtobuf.UnknownStorage()
+  public var responseJson: String = String()
 
-  init() {}
+  public var errorMessage: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pecan_ToolExecutionResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var requestID: String = String()
+
+  public var resultJson: String = String()
+
+  public var errorMessage: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pecan_ShutdownCommand: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var reason: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+public struct Pecan_ProcessInput: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var text: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
 }
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate let _protobuf_package = "pecan"
 
-extension Pecan_ClientMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ClientMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}start_task\0\u{3}user_input\0\u{3}tool_approval\0")
+extension Pecan_ContextSection: SwiftProtobuf._ProtoNameProviding {
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0SYSTEM\0\u{1}CONVERSATION\0\u{1}TOOLS\0")
+}
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+extension Pecan_ClientMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ClientMessage"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}start_task\0\u{3}user_input\0\u{3}tool_approval\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -490,7 +739,7 @@ extension Pecan_ClientMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -513,7 +762,7 @@ extension Pecan_ClientMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_ClientMessage, rhs: Pecan_ClientMessage) -> Bool {
+  public static func ==(lhs: Pecan_ClientMessage, rhs: Pecan_ClientMessage) -> Bool {
     if lhs.payload != rhs.payload {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -521,10 +770,10 @@ extension Pecan_ClientMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
 }
 
 extension Pecan_StartTaskRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".StartTaskRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}initial_prompt\0")
+  public static let protoMessageName: String = _protobuf_package + ".StartTaskRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}initial_prompt\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -536,14 +785,14 @@ extension Pecan_StartTaskRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageI
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.initialPrompt.isEmpty {
       try visitor.visitSingularStringField(value: self.initialPrompt, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_StartTaskRequest, rhs: Pecan_StartTaskRequest) -> Bool {
+  public static func ==(lhs: Pecan_StartTaskRequest, rhs: Pecan_StartTaskRequest) -> Bool {
     if lhs.initialPrompt != rhs.initialPrompt {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -551,10 +800,10 @@ extension Pecan_StartTaskRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageI
 }
 
 extension Pecan_TaskInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".TaskInput"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}text\0")
+  public static let protoMessageName: String = _protobuf_package + ".TaskInput"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}text\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -567,7 +816,7 @@ extension Pecan_TaskInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplemen
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.sessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
     }
@@ -577,7 +826,7 @@ extension Pecan_TaskInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplemen
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_TaskInput, rhs: Pecan_TaskInput) -> Bool {
+  public static func ==(lhs: Pecan_TaskInput, rhs: Pecan_TaskInput) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.text != rhs.text {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -586,10 +835,10 @@ extension Pecan_TaskInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplemen
 }
 
 extension Pecan_ToolApproval: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ToolApproval"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}tool_call_id\0\u{1}approved\0\u{3}reject_reason\0")
+  public static let protoMessageName: String = _protobuf_package + ".ToolApproval"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}tool_call_id\0\u{1}approved\0\u{3}reject_reason\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -604,7 +853,7 @@ extension Pecan_ToolApproval: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.sessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
     }
@@ -620,7 +869,7 @@ extension Pecan_ToolApproval: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_ToolApproval, rhs: Pecan_ToolApproval) -> Bool {
+  public static func ==(lhs: Pecan_ToolApproval, rhs: Pecan_ToolApproval) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.toolCallID != rhs.toolCallID {return false}
     if lhs.approved != rhs.approved {return false}
@@ -631,10 +880,10 @@ extension Pecan_ToolApproval: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
 }
 
 extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ServerMessage"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_started\0\u{3}agent_output\0\u{3}approval_request\0\u{3}task_completed\0")
+  public static let protoMessageName: String = _protobuf_package + ".ServerMessage"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_started\0\u{3}agent_output\0\u{3}approval_request\0\u{3}task_completed\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -697,7 +946,7 @@ extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -724,7 +973,7 @@ extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_ServerMessage, rhs: Pecan_ServerMessage) -> Bool {
+  public static func ==(lhs: Pecan_ServerMessage, rhs: Pecan_ServerMessage) -> Bool {
     if lhs.payload != rhs.payload {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -732,10 +981,10 @@ extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
 }
 
 extension Pecan_SessionStarted: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".SessionStarted"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0")
+  public static let protoMessageName: String = _protobuf_package + ".SessionStarted"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -747,14 +996,14 @@ extension Pecan_SessionStarted: SwiftProtobuf.Message, SwiftProtobuf._MessageImp
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.sessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_SessionStarted, rhs: Pecan_SessionStarted) -> Bool {
+  public static func ==(lhs: Pecan_SessionStarted, rhs: Pecan_SessionStarted) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -762,10 +1011,10 @@ extension Pecan_SessionStarted: SwiftProtobuf.Message, SwiftProtobuf._MessageImp
 }
 
 extension Pecan_AgentOutput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AgentOutput"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}text\0")
+  public static let protoMessageName: String = _protobuf_package + ".AgentOutput"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{1}text\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -778,7 +1027,7 @@ extension Pecan_AgentOutput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.sessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
     }
@@ -788,7 +1037,7 @@ extension Pecan_AgentOutput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_AgentOutput, rhs: Pecan_AgentOutput) -> Bool {
+  public static func ==(lhs: Pecan_AgentOutput, rhs: Pecan_AgentOutput) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.text != rhs.text {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -797,10 +1046,10 @@ extension Pecan_AgentOutput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
 }
 
 extension Pecan_ToolApprovalRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ToolApprovalRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}tool_call_id\0\u{3}tool_name\0\u{3}arguments_json\0")
+  public static let protoMessageName: String = _protobuf_package + ".ToolApprovalRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}tool_call_id\0\u{3}tool_name\0\u{3}arguments_json\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -815,7 +1064,7 @@ extension Pecan_ToolApprovalRequest: SwiftProtobuf.Message, SwiftProtobuf._Messa
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.sessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
     }
@@ -831,7 +1080,7 @@ extension Pecan_ToolApprovalRequest: SwiftProtobuf.Message, SwiftProtobuf._Messa
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_ToolApprovalRequest, rhs: Pecan_ToolApprovalRequest) -> Bool {
+  public static func ==(lhs: Pecan_ToolApprovalRequest, rhs: Pecan_ToolApprovalRequest) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.toolCallID != rhs.toolCallID {return false}
     if lhs.toolName != rhs.toolName {return false}
@@ -842,10 +1091,10 @@ extension Pecan_ToolApprovalRequest: SwiftProtobuf.Message, SwiftProtobuf._Messa
 }
 
 extension Pecan_TaskCompleted: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".TaskCompleted"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0")
+  public static let protoMessageName: String = _protobuf_package + ".TaskCompleted"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -857,14 +1106,14 @@ extension Pecan_TaskCompleted: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.sessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_TaskCompleted, rhs: Pecan_TaskCompleted) -> Bool {
+  public static func ==(lhs: Pecan_TaskCompleted, rhs: Pecan_TaskCompleted) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -872,10 +1121,10 @@ extension Pecan_TaskCompleted: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
 }
 
 extension Pecan_AgentEvent: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AgentEvent"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}register\0\u{3}completion_request\0\u{3}tool_request\0\u{1}progress\0")
+  public static let protoMessageName: String = _protobuf_package + ".AgentEvent"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}register\0\u{3}completion_request\0\u{3}tool_request\0\u{1}progress\0\u{3}get_models\0\u{3}context_command\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -933,12 +1182,38 @@ extension Pecan_AgentEvent: SwiftProtobuf.Message, SwiftProtobuf._MessageImpleme
           self.payload = .progress(v)
         }
       }()
+      case 5: try {
+        var v: Pecan_GetModelsRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .getModels(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .getModels(v)
+        }
+      }()
+      case 6: try {
+        var v: Pecan_ContextCommand?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .contextCommand(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .contextCommand(v)
+        }
+      }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -960,12 +1235,20 @@ extension Pecan_AgentEvent: SwiftProtobuf.Message, SwiftProtobuf._MessageImpleme
       guard case .progress(let v)? = self.payload else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     }()
+    case .getModels?: try {
+      guard case .getModels(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    }()
+    case .contextCommand?: try {
+      guard case .contextCommand(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    }()
     case nil: break
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_AgentEvent, rhs: Pecan_AgentEvent) -> Bool {
+  public static func ==(lhs: Pecan_AgentEvent, rhs: Pecan_AgentEvent) -> Bool {
     if lhs.payload != rhs.payload {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -973,10 +1256,10 @@ extension Pecan_AgentEvent: SwiftProtobuf.Message, SwiftProtobuf._MessageImpleme
 }
 
 extension Pecan_AgentRegistration: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AgentRegistration"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}agent_id\0\u{3}session_id\0")
+  public static let protoMessageName: String = _protobuf_package + ".AgentRegistration"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}agent_id\0\u{3}session_id\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -989,7 +1272,7 @@ extension Pecan_AgentRegistration: SwiftProtobuf.Message, SwiftProtobuf._Message
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.agentID.isEmpty {
       try visitor.visitSingularStringField(value: self.agentID, fieldNumber: 1)
     }
@@ -999,7 +1282,7 @@ extension Pecan_AgentRegistration: SwiftProtobuf.Message, SwiftProtobuf._Message
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_AgentRegistration, rhs: Pecan_AgentRegistration) -> Bool {
+  public static func ==(lhs: Pecan_AgentRegistration, rhs: Pecan_AgentRegistration) -> Bool {
     if lhs.agentID != rhs.agentID {return false}
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
@@ -1007,46 +1290,269 @@ extension Pecan_AgentRegistration: SwiftProtobuf.Message, SwiftProtobuf._Message
   }
 }
 
-extension Pecan_LLMCompletionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".LLMCompletionRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}payload_json\0")
+extension Pecan_GetModelsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetModelsRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.payloadJson) }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.requestID.isEmpty {
       try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
-    }
-    if !self.payloadJson.isEmpty {
-      try visitor.visitSingularStringField(value: self.payloadJson, fieldNumber: 2)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_LLMCompletionRequest, rhs: Pecan_LLMCompletionRequest) -> Bool {
+  public static func ==(lhs: Pecan_GetModelsRequest, rhs: Pecan_GetModelsRequest) -> Bool {
     if lhs.requestID != rhs.requestID {return false}
-    if lhs.payloadJson != rhs.payloadJson {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_ContextCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ContextCommand"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}add_message\0\u{3}get_info\0\u{1}compact\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try {
+        var v: Pecan_AddContextMessage?
+        var hadOneofValue = false
+        if let current = self.action {
+          hadOneofValue = true
+          if case .addMessage(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.action = .addMessage(v)
+        }
+      }()
+      case 3: try {
+        var v: Pecan_GetContextInfo?
+        var hadOneofValue = false
+        if let current = self.action {
+          hadOneofValue = true
+          if case .getInfo(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.action = .getInfo(v)
+        }
+      }()
+      case 4: try {
+        var v: Pecan_CompactContext?
+        var hadOneofValue = false
+        if let current = self.action {
+          hadOneofValue = true
+          if case .compact(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.action = .compact(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    switch self.action {
+    case .addMessage?: try {
+      guard case .addMessage(let v)? = self.action else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case .getInfo?: try {
+      guard case .getInfo(let v)? = self.action else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    }()
+    case .compact?: try {
+      guard case .compact(let v)? = self.action else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_ContextCommand, rhs: Pecan_ContextCommand) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.action != rhs.action {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_AddContextMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".AddContextMessage"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}section\0\u{1}role\0\u{1}content\0\u{3}metadata_json\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.section) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.role) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.content) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.metadataJson) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.section != .system {
+      try visitor.visitSingularEnumField(value: self.section, fieldNumber: 1)
+    }
+    if !self.role.isEmpty {
+      try visitor.visitSingularStringField(value: self.role, fieldNumber: 2)
+    }
+    if !self.content.isEmpty {
+      try visitor.visitSingularStringField(value: self.content, fieldNumber: 3)
+    }
+    if !self.metadataJson.isEmpty {
+      try visitor.visitSingularStringField(value: self.metadataJson, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_AddContextMessage, rhs: Pecan_AddContextMessage) -> Bool {
+    if lhs.section != rhs.section {return false}
+    if lhs.role != rhs.role {return false}
+    if lhs.content != rhs.content {return false}
+    if lhs.metadataJson != rhs.metadataJson {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_GetContextInfo: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetContextInfo"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap()
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    // Load everything into unknown fields
+    while try decoder.nextFieldNumber() != nil {}
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_GetContextInfo, rhs: Pecan_GetContextInfo) -> Bool {
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_CompactContext: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".CompactContext"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}section\0\u{3}keep_recent_messages\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularEnumField(value: &self.section) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.keepRecentMessages) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.section != .system {
+      try visitor.visitSingularEnumField(value: self.section, fieldNumber: 1)
+    }
+    if self.keepRecentMessages != 0 {
+      try visitor.visitSingularInt32Field(value: self.keepRecentMessages, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_CompactContext, rhs: Pecan_CompactContext) -> Bool {
+    if lhs.section != rhs.section {return false}
+    if lhs.keepRecentMessages != rhs.keepRecentMessages {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_LLMCompletionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LLMCompletionRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}model_key\0\u{3}params_json\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.modelKey) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.paramsJson) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    if !self.modelKey.isEmpty {
+      try visitor.visitSingularStringField(value: self.modelKey, fieldNumber: 2)
+    }
+    if !self.paramsJson.isEmpty {
+      try visitor.visitSingularStringField(value: self.paramsJson, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_LLMCompletionRequest, rhs: Pecan_LLMCompletionRequest) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.modelKey != rhs.modelKey {return false}
+    if lhs.paramsJson != rhs.paramsJson {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
 extension Pecan_ToolExecutionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ToolExecutionRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}tool_name\0\u{3}arguments_json\0")
+  public static let protoMessageName: String = _protobuf_package + ".ToolExecutionRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}tool_name\0\u{3}arguments_json\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1060,7 +1566,7 @@ extension Pecan_ToolExecutionRequest: SwiftProtobuf.Message, SwiftProtobuf._Mess
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.requestID.isEmpty {
       try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
     }
@@ -1073,7 +1579,7 @@ extension Pecan_ToolExecutionRequest: SwiftProtobuf.Message, SwiftProtobuf._Mess
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_ToolExecutionRequest, rhs: Pecan_ToolExecutionRequest) -> Bool {
+  public static func ==(lhs: Pecan_ToolExecutionRequest, rhs: Pecan_ToolExecutionRequest) -> Bool {
     if lhs.requestID != rhs.requestID {return false}
     if lhs.toolName != rhs.toolName {return false}
     if lhs.argumentsJson != rhs.argumentsJson {return false}
@@ -1083,10 +1589,10 @@ extension Pecan_ToolExecutionRequest: SwiftProtobuf.Message, SwiftProtobuf._Mess
 }
 
 extension Pecan_TaskProgress: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".TaskProgress"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}status_message\0")
+  public static let protoMessageName: String = _protobuf_package + ".TaskProgress"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}status_message\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1098,14 +1604,14 @@ extension Pecan_TaskProgress: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.statusMessage.isEmpty {
       try visitor.visitSingularStringField(value: self.statusMessage, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_TaskProgress, rhs: Pecan_TaskProgress) -> Bool {
+  public static func ==(lhs: Pecan_TaskProgress, rhs: Pecan_TaskProgress) -> Bool {
     if lhs.statusMessage != rhs.statusMessage {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -1113,10 +1619,10 @@ extension Pecan_TaskProgress: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
 }
 
 extension Pecan_HostCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".HostCommand"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}registration_response\0\u{3}completion_response\0\u{3}tool_response\0\u{1}shutdown\0")
+  public static let protoMessageName: String = _protobuf_package + ".HostCommand"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}registration_response\0\u{3}completion_response\0\u{3}tool_response\0\u{1}shutdown\0\u{3}process_input\0\u{3}models_response\0\u{3}context_response\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1174,12 +1680,51 @@ extension Pecan_HostCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
           self.payload = .shutdown(v)
         }
       }()
+      case 5: try {
+        var v: Pecan_ProcessInput?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .processInput(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .processInput(v)
+        }
+      }()
+      case 6: try {
+        var v: Pecan_GetModelsResponse?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .modelsResponse(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .modelsResponse(v)
+        }
+      }()
+      case 7: try {
+        var v: Pecan_ContextResponse?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .contextResponse(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .contextResponse(v)
+        }
+      }()
       default: break
       }
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     // The use of inline closures is to circumvent an issue where the compiler
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
@@ -1201,23 +1746,150 @@ extension Pecan_HostCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
       guard case .shutdown(let v)? = self.payload else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     }()
+    case .processInput?: try {
+      guard case .processInput(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    }()
+    case .modelsResponse?: try {
+      guard case .modelsResponse(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    }()
+    case .contextResponse?: try {
+      guard case .contextResponse(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
+    }()
     case nil: break
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_HostCommand, rhs: Pecan_HostCommand) -> Bool {
+  public static func ==(lhs: Pecan_HostCommand, rhs: Pecan_HostCommand) -> Bool {
     if lhs.payload != rhs.payload {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
 }
 
-extension Pecan_RegistrationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".RegistrationResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0")
+extension Pecan_GetModelsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".GetModelsResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{1}models\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeRepeatedMessageField(value: &self.models) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    if !self.models.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.models, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_GetModelsResponse, rhs: Pecan_GetModelsResponse) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.models != rhs.models {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_GetModelsResponse.ModelInfo: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Pecan_GetModelsResponse.protoMessageName + ".ModelInfo"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}key\0\u{1}name\0\u{1}description\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.key) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.name) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.description_p) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.key.isEmpty {
+      try visitor.visitSingularStringField(value: self.key, fieldNumber: 1)
+    }
+    if !self.name.isEmpty {
+      try visitor.visitSingularStringField(value: self.name, fieldNumber: 2)
+    }
+    if !self.description_p.isEmpty {
+      try visitor.visitSingularStringField(value: self.description_p, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_GetModelsResponse.ModelInfo, rhs: Pecan_GetModelsResponse.ModelInfo) -> Bool {
+    if lhs.key != rhs.key {return false}
+    if lhs.name != rhs.name {return false}
+    if lhs.description_p != rhs.description_p {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_ContextResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ContextResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}info_json\0\u{3}error_message\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.infoJson) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.errorMessage) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    if !self.infoJson.isEmpty {
+      try visitor.visitSingularStringField(value: self.infoJson, fieldNumber: 2)
+    }
+    if !self.errorMessage.isEmpty {
+      try visitor.visitSingularStringField(value: self.errorMessage, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_ContextResponse, rhs: Pecan_ContextResponse) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.infoJson != rhs.infoJson {return false}
+    if lhs.errorMessage != rhs.errorMessage {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_RegistrationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".RegistrationResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1229,14 +1901,14 @@ extension Pecan_RegistrationResponse: SwiftProtobuf.Message, SwiftProtobuf._Mess
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if self.success != false {
       try visitor.visitSingularBoolField(value: self.success, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_RegistrationResponse, rhs: Pecan_RegistrationResponse) -> Bool {
+  public static func ==(lhs: Pecan_RegistrationResponse, rhs: Pecan_RegistrationResponse) -> Bool {
     if lhs.success != rhs.success {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
@@ -1244,10 +1916,10 @@ extension Pecan_RegistrationResponse: SwiftProtobuf.Message, SwiftProtobuf._Mess
 }
 
 extension Pecan_LLMCompletionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".LLMCompletionResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}response_json\0\u{3}error_message\0")
+  public static let protoMessageName: String = _protobuf_package + ".LLMCompletionResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}response_json\0\u{3}error_message\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1261,7 +1933,7 @@ extension Pecan_LLMCompletionResponse: SwiftProtobuf.Message, SwiftProtobuf._Mes
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.requestID.isEmpty {
       try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
     }
@@ -1274,7 +1946,7 @@ extension Pecan_LLMCompletionResponse: SwiftProtobuf.Message, SwiftProtobuf._Mes
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_LLMCompletionResponse, rhs: Pecan_LLMCompletionResponse) -> Bool {
+  public static func ==(lhs: Pecan_LLMCompletionResponse, rhs: Pecan_LLMCompletionResponse) -> Bool {
     if lhs.requestID != rhs.requestID {return false}
     if lhs.responseJson != rhs.responseJson {return false}
     if lhs.errorMessage != rhs.errorMessage {return false}
@@ -1284,10 +1956,10 @@ extension Pecan_LLMCompletionResponse: SwiftProtobuf.Message, SwiftProtobuf._Mes
 }
 
 extension Pecan_ToolExecutionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ToolExecutionResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}result_json\0\u{3}error_message\0")
+  public static let protoMessageName: String = _protobuf_package + ".ToolExecutionResponse"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{3}result_json\0\u{3}error_message\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1301,7 +1973,7 @@ extension Pecan_ToolExecutionResponse: SwiftProtobuf.Message, SwiftProtobuf._Mes
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.requestID.isEmpty {
       try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
     }
@@ -1314,7 +1986,7 @@ extension Pecan_ToolExecutionResponse: SwiftProtobuf.Message, SwiftProtobuf._Mes
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_ToolExecutionResponse, rhs: Pecan_ToolExecutionResponse) -> Bool {
+  public static func ==(lhs: Pecan_ToolExecutionResponse, rhs: Pecan_ToolExecutionResponse) -> Bool {
     if lhs.requestID != rhs.requestID {return false}
     if lhs.resultJson != rhs.resultJson {return false}
     if lhs.errorMessage != rhs.errorMessage {return false}
@@ -1324,10 +1996,10 @@ extension Pecan_ToolExecutionResponse: SwiftProtobuf.Message, SwiftProtobuf._Mes
 }
 
 extension Pecan_ShutdownCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ShutdownCommand"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}reason\0")
+  public static let protoMessageName: String = _protobuf_package + ".ShutdownCommand"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}reason\0")
 
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
       // The use of inline closures is to circumvent an issue where the compiler
       // allocates stack space for every case branch when no optimizations are
@@ -1339,15 +2011,45 @@ extension Pecan_ShutdownCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageIm
     }
   }
 
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
     if !self.reason.isEmpty {
       try visitor.visitSingularStringField(value: self.reason, fieldNumber: 1)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: Pecan_ShutdownCommand, rhs: Pecan_ShutdownCommand) -> Bool {
+  public static func ==(lhs: Pecan_ShutdownCommand, rhs: Pecan_ShutdownCommand) -> Bool {
     if lhs.reason != rhs.reason {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_ProcessInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".ProcessInput"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}text\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.text) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.text.isEmpty {
+      try visitor.visitSingularStringField(value: self.text, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_ProcessInput, rhs: Pecan_ProcessInput) -> Bool {
+    if lhs.text != rhs.text {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

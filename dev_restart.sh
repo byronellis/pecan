@@ -6,6 +6,9 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
+echo "Codesigning pecan-server..."
+codesign --entitlements Entitlements.plist -f -s - .build/debug/pecan-server
+
 if [ -f .run/server.pid ]; then
     kill $(cat .run/server.pid) 2>/dev/null
     rm .run/server.pid

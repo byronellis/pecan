@@ -1,6 +1,6 @@
-# Pecan: Persistent Agent Framework
+# Pecan: Persistent Agent Harness
 
-Pecan is a Swift-based coding agent framework that emphasizes secure, isolated execution via containers. The architecture centers around a powerful server, a clean user interface, and isolated agents that rely entirely on the server for capabilities.
+Pecan is a Swift-based coding agent harness that emphasizes secure, isolated execution via containers. The architecture centers around a powerful server, a clean user interface, and isolated agents that rely entirely on the server for capabilities.
 
 ## Architecture
 

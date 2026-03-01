@@ -16,7 +16,7 @@ import SwiftProtobuf
 /// ==========================================
 ///
 /// Usage: instantiate `Pecan_ClientServiceClient`, then call methods of this protocol to make API calls.
-internal protocol Pecan_ClientServiceClientProtocol: GRPCClient {
+public protocol Pecan_ClientServiceClientProtocol: GRPCClient {
   var serviceName: String { get }
   var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? { get }
 
@@ -27,7 +27,7 @@ internal protocol Pecan_ClientServiceClientProtocol: GRPCClient {
 }
 
 extension Pecan_ClientServiceClientProtocol {
-  internal var serviceName: String {
+  public var serviceName: String {
     return "pecan.ClientService"
   }
 
@@ -40,7 +40,7 @@ extension Pecan_ClientServiceClientProtocol {
   ///   - callOptions: Call options.
   ///   - handler: A closure called when each response is received from the server.
   /// - Returns: A `ClientStreamingCall` with futures for the metadata and status.
-  internal func streamEvents(
+  public func streamEvents(
     callOptions: CallOptions? = nil,
     handler: @escaping (Pecan_ServerMessage) -> Void
   ) -> BidirectionalStreamingCall<Pecan_ClientMessage, Pecan_ServerMessage> {
@@ -57,16 +57,16 @@ extension Pecan_ClientServiceClientProtocol {
 extension Pecan_ClientServiceClient: @unchecked Sendable {}
 
 @available(*, deprecated, renamed: "Pecan_ClientServiceNIOClient")
-internal final class Pecan_ClientServiceClient: Pecan_ClientServiceClientProtocol {
+public final class Pecan_ClientServiceClient: Pecan_ClientServiceClientProtocol {
   private let lock = Lock()
   private var _defaultCallOptions: CallOptions
   private var _interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol?
-  internal let channel: GRPCChannel
-  internal var defaultCallOptions: CallOptions {
+  public let channel: GRPCChannel
+  public var defaultCallOptions: CallOptions {
     get { self.lock.withLock { return self._defaultCallOptions } }
     set { self.lock.withLockVoid { self._defaultCallOptions = newValue } }
   }
-  internal var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? {
+  public var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? {
     get { self.lock.withLock { return self._interceptors } }
     set { self.lock.withLockVoid { self._interceptors = newValue } }
   }
@@ -77,7 +77,7 @@ internal final class Pecan_ClientServiceClient: Pecan_ClientServiceClientProtoco
   ///   - channel: `GRPCChannel` to the service host.
   ///   - defaultCallOptions: Options to use for each service call if the user doesn't provide them.
   ///   - interceptors: A factory providing interceptors for each RPC.
-  internal init(
+  public init(
     channel: GRPCChannel,
     defaultCallOptions: CallOptions = CallOptions(),
     interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? = nil
@@ -88,10 +88,10 @@ internal final class Pecan_ClientServiceClient: Pecan_ClientServiceClientProtoco
   }
 }
 
-internal struct Pecan_ClientServiceNIOClient: Pecan_ClientServiceClientProtocol {
-  internal var channel: GRPCChannel
-  internal var defaultCallOptions: CallOptions
-  internal var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol?
+public struct Pecan_ClientServiceNIOClient: Pecan_ClientServiceClientProtocol {
+  public var channel: GRPCChannel
+  public var defaultCallOptions: CallOptions
+  public var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol?
 
   /// Creates a client for the pecan.ClientService service.
   ///
@@ -99,7 +99,7 @@ internal struct Pecan_ClientServiceNIOClient: Pecan_ClientServiceClientProtocol 
   ///   - channel: `GRPCChannel` to the service host.
   ///   - defaultCallOptions: Options to use for each service call if the user doesn't provide them.
   ///   - interceptors: A factory providing interceptors for each RPC.
-  internal init(
+  public init(
     channel: GRPCChannel,
     defaultCallOptions: CallOptions = CallOptions(),
     interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? = nil
@@ -114,7 +114,7 @@ internal struct Pecan_ClientServiceNIOClient: Pecan_ClientServiceClientProtocol 
 /// UI -> Server Communication
 /// ==========================================
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-internal protocol Pecan_ClientServiceAsyncClientProtocol: GRPCClient {
+public protocol Pecan_ClientServiceAsyncClientProtocol: GRPCClient {
   static var serviceDescriptor: GRPCServiceDescriptor { get }
   var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? { get }
 
@@ -125,15 +125,15 @@ internal protocol Pecan_ClientServiceAsyncClientProtocol: GRPCClient {
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension Pecan_ClientServiceAsyncClientProtocol {
-  internal static var serviceDescriptor: GRPCServiceDescriptor {
+  public static var serviceDescriptor: GRPCServiceDescriptor {
     return Pecan_ClientServiceClientMetadata.serviceDescriptor
   }
 
-  internal var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? {
+  public var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? {
     return nil
   }
 
-  internal func makeStreamEventsCall(
+  public func makeStreamEventsCall(
     callOptions: CallOptions? = nil
   ) -> GRPCAsyncBidirectionalStreamingCall<Pecan_ClientMessage, Pecan_ServerMessage> {
     return self.makeAsyncBidirectionalStreamingCall(
@@ -146,7 +146,7 @@ extension Pecan_ClientServiceAsyncClientProtocol {
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension Pecan_ClientServiceAsyncClientProtocol {
-  internal func streamEvents<RequestStream>(
+  public func streamEvents<RequestStream>(
     _ requests: RequestStream,
     callOptions: CallOptions? = nil
   ) -> GRPCAsyncResponseStream<Pecan_ServerMessage> where RequestStream: Sequence, RequestStream.Element == Pecan_ClientMessage {
@@ -158,7 +158,7 @@ extension Pecan_ClientServiceAsyncClientProtocol {
     )
   }
 
-  internal func streamEvents<RequestStream>(
+  public func streamEvents<RequestStream>(
     _ requests: RequestStream,
     callOptions: CallOptions? = nil
   ) -> GRPCAsyncResponseStream<Pecan_ServerMessage> where RequestStream: AsyncSequence & Sendable, RequestStream.Element == Pecan_ClientMessage {
@@ -172,12 +172,12 @@ extension Pecan_ClientServiceAsyncClientProtocol {
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-internal struct Pecan_ClientServiceAsyncClient: Pecan_ClientServiceAsyncClientProtocol {
-  internal var channel: GRPCChannel
-  internal var defaultCallOptions: CallOptions
-  internal var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol?
+public struct Pecan_ClientServiceAsyncClient: Pecan_ClientServiceAsyncClientProtocol {
+  public var channel: GRPCChannel
+  public var defaultCallOptions: CallOptions
+  public var interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol?
 
-  internal init(
+  public init(
     channel: GRPCChannel,
     defaultCallOptions: CallOptions = CallOptions(),
     interceptors: Pecan_ClientServiceClientInterceptorFactoryProtocol? = nil
@@ -188,14 +188,14 @@ internal struct Pecan_ClientServiceAsyncClient: Pecan_ClientServiceAsyncClientPr
   }
 }
 
-internal protocol Pecan_ClientServiceClientInterceptorFactoryProtocol: Sendable {
+public protocol Pecan_ClientServiceClientInterceptorFactoryProtocol: Sendable {
 
   /// - Returns: Interceptors to use when invoking 'streamEvents'.
   func makeStreamEventsInterceptors() -> [ClientInterceptor<Pecan_ClientMessage, Pecan_ServerMessage>]
 }
 
-internal enum Pecan_ClientServiceClientMetadata {
-  internal static let serviceDescriptor = GRPCServiceDescriptor(
+public enum Pecan_ClientServiceClientMetadata {
+  public static let serviceDescriptor = GRPCServiceDescriptor(
     name: "ClientService",
     fullName: "pecan.ClientService",
     methods: [
@@ -203,8 +203,8 @@ internal enum Pecan_ClientServiceClientMetadata {
     ]
   )
 
-  internal enum Methods {
-    internal static let streamEvents = GRPCMethodDescriptor(
+  public enum Methods {
+    public static let streamEvents = GRPCMethodDescriptor(
       name: "StreamEvents",
       path: "/pecan.ClientService/StreamEvents",
       type: GRPCCallType.bidirectionalStreaming
@@ -217,7 +217,7 @@ internal enum Pecan_ClientServiceClientMetadata {
 /// ==========================================
 ///
 /// Usage: instantiate `Pecan_AgentServiceClient`, then call methods of this protocol to make API calls.
-internal protocol Pecan_AgentServiceClientProtocol: GRPCClient {
+public protocol Pecan_AgentServiceClientProtocol: GRPCClient {
   var serviceName: String { get }
   var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? { get }
 
@@ -228,7 +228,7 @@ internal protocol Pecan_AgentServiceClientProtocol: GRPCClient {
 }
 
 extension Pecan_AgentServiceClientProtocol {
-  internal var serviceName: String {
+  public var serviceName: String {
     return "pecan.AgentService"
   }
 
@@ -241,7 +241,7 @@ extension Pecan_AgentServiceClientProtocol {
   ///   - callOptions: Call options.
   ///   - handler: A closure called when each response is received from the server.
   /// - Returns: A `ClientStreamingCall` with futures for the metadata and status.
-  internal func connect(
+  public func connect(
     callOptions: CallOptions? = nil,
     handler: @escaping (Pecan_HostCommand) -> Void
   ) -> BidirectionalStreamingCall<Pecan_AgentEvent, Pecan_HostCommand> {
@@ -258,16 +258,16 @@ extension Pecan_AgentServiceClientProtocol {
 extension Pecan_AgentServiceClient: @unchecked Sendable {}
 
 @available(*, deprecated, renamed: "Pecan_AgentServiceNIOClient")
-internal final class Pecan_AgentServiceClient: Pecan_AgentServiceClientProtocol {
+public final class Pecan_AgentServiceClient: Pecan_AgentServiceClientProtocol {
   private let lock = Lock()
   private var _defaultCallOptions: CallOptions
   private var _interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol?
-  internal let channel: GRPCChannel
-  internal var defaultCallOptions: CallOptions {
+  public let channel: GRPCChannel
+  public var defaultCallOptions: CallOptions {
     get { self.lock.withLock { return self._defaultCallOptions } }
     set { self.lock.withLockVoid { self._defaultCallOptions = newValue } }
   }
-  internal var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? {
+  public var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? {
     get { self.lock.withLock { return self._interceptors } }
     set { self.lock.withLockVoid { self._interceptors = newValue } }
   }
@@ -278,7 +278,7 @@ internal final class Pecan_AgentServiceClient: Pecan_AgentServiceClientProtocol 
   ///   - channel: `GRPCChannel` to the service host.
   ///   - defaultCallOptions: Options to use for each service call if the user doesn't provide them.
   ///   - interceptors: A factory providing interceptors for each RPC.
-  internal init(
+  public init(
     channel: GRPCChannel,
     defaultCallOptions: CallOptions = CallOptions(),
     interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? = nil
@@ -289,10 +289,10 @@ internal final class Pecan_AgentServiceClient: Pecan_AgentServiceClientProtocol 
   }
 }
 
-internal struct Pecan_AgentServiceNIOClient: Pecan_AgentServiceClientProtocol {
-  internal var channel: GRPCChannel
-  internal var defaultCallOptions: CallOptions
-  internal var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol?
+public struct Pecan_AgentServiceNIOClient: Pecan_AgentServiceClientProtocol {
+  public var channel: GRPCChannel
+  public var defaultCallOptions: CallOptions
+  public var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol?
 
   /// Creates a client for the pecan.AgentService service.
   ///
@@ -300,7 +300,7 @@ internal struct Pecan_AgentServiceNIOClient: Pecan_AgentServiceClientProtocol {
   ///   - channel: `GRPCChannel` to the service host.
   ///   - defaultCallOptions: Options to use for each service call if the user doesn't provide them.
   ///   - interceptors: A factory providing interceptors for each RPC.
-  internal init(
+  public init(
     channel: GRPCChannel,
     defaultCallOptions: CallOptions = CallOptions(),
     interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? = nil
@@ -315,7 +315,7 @@ internal struct Pecan_AgentServiceNIOClient: Pecan_AgentServiceClientProtocol {
 /// Agent -> Server Communication
 /// ==========================================
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-internal protocol Pecan_AgentServiceAsyncClientProtocol: GRPCClient {
+public protocol Pecan_AgentServiceAsyncClientProtocol: GRPCClient {
   static var serviceDescriptor: GRPCServiceDescriptor { get }
   var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? { get }
 
@@ -326,15 +326,15 @@ internal protocol Pecan_AgentServiceAsyncClientProtocol: GRPCClient {
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension Pecan_AgentServiceAsyncClientProtocol {
-  internal static var serviceDescriptor: GRPCServiceDescriptor {
+  public static var serviceDescriptor: GRPCServiceDescriptor {
     return Pecan_AgentServiceClientMetadata.serviceDescriptor
   }
 
-  internal var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? {
+  public var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? {
     return nil
   }
 
-  internal func makeConnectCall(
+  public func makeConnectCall(
     callOptions: CallOptions? = nil
   ) -> GRPCAsyncBidirectionalStreamingCall<Pecan_AgentEvent, Pecan_HostCommand> {
     return self.makeAsyncBidirectionalStreamingCall(
@@ -347,7 +347,7 @@ extension Pecan_AgentServiceAsyncClientProtocol {
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension Pecan_AgentServiceAsyncClientProtocol {
-  internal func connect<RequestStream>(
+  public func connect<RequestStream>(
     _ requests: RequestStream,
     callOptions: CallOptions? = nil
   ) -> GRPCAsyncResponseStream<Pecan_HostCommand> where RequestStream: Sequence, RequestStream.Element == Pecan_AgentEvent {
@@ -359,7 +359,7 @@ extension Pecan_AgentServiceAsyncClientProtocol {
     )
   }
 
-  internal func connect<RequestStream>(
+  public func connect<RequestStream>(
     _ requests: RequestStream,
     callOptions: CallOptions? = nil
   ) -> GRPCAsyncResponseStream<Pecan_HostCommand> where RequestStream: AsyncSequence & Sendable, RequestStream.Element == Pecan_AgentEvent {
@@ -373,12 +373,12 @@ extension Pecan_AgentServiceAsyncClientProtocol {
 }
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-internal struct Pecan_AgentServiceAsyncClient: Pecan_AgentServiceAsyncClientProtocol {
-  internal var channel: GRPCChannel
-  internal var defaultCallOptions: CallOptions
-  internal var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol?
+public struct Pecan_AgentServiceAsyncClient: Pecan_AgentServiceAsyncClientProtocol {
+  public var channel: GRPCChannel
+  public var defaultCallOptions: CallOptions
+  public var interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol?
 
-  internal init(
+  public init(
     channel: GRPCChannel,
     defaultCallOptions: CallOptions = CallOptions(),
     interceptors: Pecan_AgentServiceClientInterceptorFactoryProtocol? = nil
@@ -389,14 +389,14 @@ internal struct Pecan_AgentServiceAsyncClient: Pecan_AgentServiceAsyncClientProt
   }
 }
 
-internal protocol Pecan_AgentServiceClientInterceptorFactoryProtocol: Sendable {
+public protocol Pecan_AgentServiceClientInterceptorFactoryProtocol: Sendable {
 
   /// - Returns: Interceptors to use when invoking 'connect'.
   func makeConnectInterceptors() -> [ClientInterceptor<Pecan_AgentEvent, Pecan_HostCommand>]
 }
 
-internal enum Pecan_AgentServiceClientMetadata {
-  internal static let serviceDescriptor = GRPCServiceDescriptor(
+public enum Pecan_AgentServiceClientMetadata {
+  public static let serviceDescriptor = GRPCServiceDescriptor(
     name: "AgentService",
     fullName: "pecan.AgentService",
     methods: [
@@ -404,8 +404,8 @@ internal enum Pecan_AgentServiceClientMetadata {
     ]
   )
 
-  internal enum Methods {
-    internal static let connect = GRPCMethodDescriptor(
+  public enum Methods {
+    public static let connect = GRPCMethodDescriptor(
       name: "Connect",
       path: "/pecan.AgentService/Connect",
       type: GRPCCallType.bidirectionalStreaming
@@ -418,7 +418,7 @@ internal enum Pecan_AgentServiceClientMetadata {
 /// ==========================================
 ///
 /// To build a server, implement a class that conforms to this protocol.
-internal protocol Pecan_ClientServiceProvider: CallHandlerProvider {
+public protocol Pecan_ClientServiceProvider: CallHandlerProvider {
   var interceptors: Pecan_ClientServiceServerInterceptorFactoryProtocol? { get }
 
   /// Bidirectional stream for the UI client to talk to the Server
@@ -426,13 +426,13 @@ internal protocol Pecan_ClientServiceProvider: CallHandlerProvider {
 }
 
 extension Pecan_ClientServiceProvider {
-  internal var serviceName: Substring {
+  public var serviceName: Substring {
     return Pecan_ClientServiceServerMetadata.serviceDescriptor.fullName[...]
   }
 
   /// Determines, calls and returns the appropriate request handler, depending on the request's method.
   /// Returns nil for methods not handled by this service.
-  internal func handle(
+  public func handle(
     method name: Substring,
     context: CallHandlerContext
   ) -> GRPCServerHandlerProtocol? {
@@ -458,7 +458,7 @@ extension Pecan_ClientServiceProvider {
 ///
 /// To implement a server, implement an object which conforms to this protocol.
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-internal protocol Pecan_ClientServiceAsyncProvider: CallHandlerProvider, Sendable {
+public protocol Pecan_ClientServiceAsyncProvider: CallHandlerProvider, Sendable {
   static var serviceDescriptor: GRPCServiceDescriptor { get }
   var interceptors: Pecan_ClientServiceServerInterceptorFactoryProtocol? { get }
 
@@ -472,19 +472,19 @@ internal protocol Pecan_ClientServiceAsyncProvider: CallHandlerProvider, Sendabl
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension Pecan_ClientServiceAsyncProvider {
-  internal static var serviceDescriptor: GRPCServiceDescriptor {
+  public static var serviceDescriptor: GRPCServiceDescriptor {
     return Pecan_ClientServiceServerMetadata.serviceDescriptor
   }
 
-  internal var serviceName: Substring {
+  public var serviceName: Substring {
     return Pecan_ClientServiceServerMetadata.serviceDescriptor.fullName[...]
   }
 
-  internal var interceptors: Pecan_ClientServiceServerInterceptorFactoryProtocol? {
+  public var interceptors: Pecan_ClientServiceServerInterceptorFactoryProtocol? {
     return nil
   }
 
-  internal func handle(
+  public func handle(
     method name: Substring,
     context: CallHandlerContext
   ) -> GRPCServerHandlerProtocol? {
@@ -504,15 +504,15 @@ extension Pecan_ClientServiceAsyncProvider {
   }
 }
 
-internal protocol Pecan_ClientServiceServerInterceptorFactoryProtocol: Sendable {
+public protocol Pecan_ClientServiceServerInterceptorFactoryProtocol: Sendable {
 
   /// - Returns: Interceptors to use when handling 'streamEvents'.
   ///   Defaults to calling `self.makeInterceptors()`.
   func makeStreamEventsInterceptors() -> [ServerInterceptor<Pecan_ClientMessage, Pecan_ServerMessage>]
 }
 
-internal enum Pecan_ClientServiceServerMetadata {
-  internal static let serviceDescriptor = GRPCServiceDescriptor(
+public enum Pecan_ClientServiceServerMetadata {
+  public static let serviceDescriptor = GRPCServiceDescriptor(
     name: "ClientService",
     fullName: "pecan.ClientService",
     methods: [
@@ -520,8 +520,8 @@ internal enum Pecan_ClientServiceServerMetadata {
     ]
   )
 
-  internal enum Methods {
-    internal static let streamEvents = GRPCMethodDescriptor(
+  public enum Methods {
+    public static let streamEvents = GRPCMethodDescriptor(
       name: "StreamEvents",
       path: "/pecan.ClientService/StreamEvents",
       type: GRPCCallType.bidirectionalStreaming
@@ -533,7 +533,7 @@ internal enum Pecan_ClientServiceServerMetadata {
 /// ==========================================
 ///
 /// To build a server, implement a class that conforms to this protocol.
-internal protocol Pecan_AgentServiceProvider: CallHandlerProvider {
+public protocol Pecan_AgentServiceProvider: CallHandlerProvider {
   var interceptors: Pecan_AgentServiceServerInterceptorFactoryProtocol? { get }
 
   /// Bidirectional stream for the isolated Agent to talk to the Server
@@ -541,13 +541,13 @@ internal protocol Pecan_AgentServiceProvider: CallHandlerProvider {
 }
 
 extension Pecan_AgentServiceProvider {
-  internal var serviceName: Substring {
+  public var serviceName: Substring {
     return Pecan_AgentServiceServerMetadata.serviceDescriptor.fullName[...]
   }
 
   /// Determines, calls and returns the appropriate request handler, depending on the request's method.
   /// Returns nil for methods not handled by this service.
-  internal func handle(
+  public func handle(
     method name: Substring,
     context: CallHandlerContext
   ) -> GRPCServerHandlerProtocol? {
@@ -573,7 +573,7 @@ extension Pecan_AgentServiceProvider {
 ///
 /// To implement a server, implement an object which conforms to this protocol.
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
-internal protocol Pecan_AgentServiceAsyncProvider: CallHandlerProvider, Sendable {
+public protocol Pecan_AgentServiceAsyncProvider: CallHandlerProvider, Sendable {
   static var serviceDescriptor: GRPCServiceDescriptor { get }
   var interceptors: Pecan_AgentServiceServerInterceptorFactoryProtocol? { get }
 
@@ -587,19 +587,19 @@ internal protocol Pecan_AgentServiceAsyncProvider: CallHandlerProvider, Sendable
 
 @available(macOS 10.15, iOS 13, tvOS 13, watchOS 6, *)
 extension Pecan_AgentServiceAsyncProvider {
-  internal static var serviceDescriptor: GRPCServiceDescriptor {
+  public static var serviceDescriptor: GRPCServiceDescriptor {
     return Pecan_AgentServiceServerMetadata.serviceDescriptor
   }
 
-  internal var serviceName: Substring {
+  public var serviceName: Substring {
     return Pecan_AgentServiceServerMetadata.serviceDescriptor.fullName[...]
   }
 
-  internal var interceptors: Pecan_AgentServiceServerInterceptorFactoryProtocol? {
+  public var interceptors: Pecan_AgentServiceServerInterceptorFactoryProtocol? {
     return nil
   }
 
-  internal func handle(
+  public func handle(
     method name: Substring,
     context: CallHandlerContext
   ) -> GRPCServerHandlerProtocol? {
@@ -619,15 +619,15 @@ extension Pecan_AgentServiceAsyncProvider {
   }
 }
 
-internal protocol Pecan_AgentServiceServerInterceptorFactoryProtocol: Sendable {
+public protocol Pecan_AgentServiceServerInterceptorFactoryProtocol: Sendable {
 
   /// - Returns: Interceptors to use when handling 'connect'.
   ///   Defaults to calling `self.makeInterceptors()`.
   func makeConnectInterceptors() -> [ServerInterceptor<Pecan_AgentEvent, Pecan_HostCommand>]
 }
 
-internal enum Pecan_AgentServiceServerMetadata {
-  internal static let serviceDescriptor = GRPCServiceDescriptor(
+public enum Pecan_AgentServiceServerMetadata {
+  public static let serviceDescriptor = GRPCServiceDescriptor(
     name: "AgentService",
     fullName: "pecan.AgentService",
     methods: [
@@ -635,8 +635,8 @@ internal enum Pecan_AgentServiceServerMetadata {
     ]
   )
 
-  internal enum Methods {
-    internal static let connect = GRPCMethodDescriptor(
+  public enum Methods {
+    public static let connect = GRPCMethodDescriptor(
       name: "Connect",
       path: "/pecan.AgentService/Connect",
       type: GRPCCallType.bidirectionalStreaming

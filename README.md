@@ -1,6 +1,6 @@
-# Pecan: Persistent Agent Framework
+# Pecan: Persistent Agent Harness
 
-Pecan is a Swift-based coding agent framework that emphasizes secure, isolated execution via containers. The architecture centers around a powerful server, a clean user interface, and isolated agents that rely entirely on the server for capabilities.
+Pecan is a Swift-based coding agent harness that emphasizes secure, isolated execution via containers. The architecture centers around a powerful server, a clean user interface, and isolated agents that rely entirely on the server for capabilities.
 
 ## Architecture
 
@@ -35,7 +35,7 @@ models:
   qwen3:
     name: qwen3
     provider: openai
-    url: 'http://spark-ad32.local:8000'
+    url: 'http://localhost:8000'
     api_key: none
     model_id: Qwen/Qwen3-Coder-Next-FP8
 ```
