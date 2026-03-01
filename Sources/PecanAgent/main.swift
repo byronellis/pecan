@@ -124,6 +124,8 @@ func main() async throws {
                 logger.info("Received completion_response for request \(resp.requestID)")
                 
                 var finalText = ""
+                var toolCallsToExecute: [[String: Any]] = []
+                var messageToSave: [String: Any]? = nil
                 
                 if !resp.errorMessage.isEmpty {
                     finalText = "Error from LLM Provider: \(resp.errorMessage)"
@@ -133,35 +135,111 @@ func main() async throws {
                        let json = try? JSONSerialization.jsonObject(with: data, options: []) as? [String: Any],
                        let choices = json["choices"] as? [[String: Any]],
                        let firstChoice = choices.first,
-                       let message = firstChoice["message"] as? [String: Any],
-                       let content = message["content"] as? String {
-                        finalText = content
+                       let message = firstChoice["message"] as? [String: Any] {
                         
-                        // Save assistant response to context
-                        var ctxMsg = Pecan_AgentEvent()
-                        var ctxCmd = Pecan_ContextCommand()
-                        ctxCmd.requestID = UUID().uuidString
-                        var addMsg = Pecan_AddContextMessage()
-                        addMsg.section = .conversation
-                        addMsg.role = "assistant"
-                        addMsg.content = content
-                        ctxCmd.addMessage = addMsg
-                        ctxMsg.contextCommand = ctxCmd
-                        try await call.requestStream.send(ctxMsg)
+                        messageToSave = message
                         
+                        if let toolCalls = message["tool_calls"] as? [[String: Any]], !toolCalls.isEmpty {
+                            toolCallsToExecute = toolCalls
+                        } else if let content = message["content"] as? String {
+                            finalText = content
+                        } else {
+                            finalText = "Could not parse response content."
+                        }
                     } else {
                         finalText = "Could not parse response: \(resp.responseJson)"
                     }
                 }
                 
-                var respMsg = Pecan_AgentEvent()
-                var prog = Pecan_TaskProgress()
-                prog.statusMessage = finalText
-                respMsg.progress = prog
-                try await call.requestStream.send(respMsg)
+                // 1. Save the assistant's message to context (whether it's text or tool_calls)
+                if let msg = messageToSave {
+                    var ctxMsg = Pecan_AgentEvent()
+                    var ctxCmd = Pecan_ContextCommand()
+                    ctxCmd.requestID = UUID().uuidString
+                    var addMsg = Pecan_AddContextMessage()
+                    addMsg.section = .conversation
+                    addMsg.role = "assistant"
+                    addMsg.content = msg["content"] as? String ?? ""
+                    
+                    var metadata = msg
+                    metadata.removeValue(forKey: "role")
+                    metadata.removeValue(forKey: "content")
+                    if let metaData = try? JSONSerialization.data(withJSONObject: metadata),
+                       let metaStr = String(data: metaData, encoding: .utf8) {
+                        addMsg.metadataJson = metaStr
+                    }
+                    
+                    ctxCmd.addMessage = addMsg
+                    ctxMsg.contextCommand = ctxCmd
+                    try await call.requestStream.send(ctxMsg)
+                }
+                
+                // 2. Execute tools or send final output to UI
+                if !toolCallsToExecute.isEmpty {
+                    for toolCall in toolCallsToExecute {
+                        if let function = toolCall["function"] as? [String: Any],
+                           let name = function["name"] as? String,
+                           let arguments = function["arguments"] as? String,
+                           let callId = toolCall["id"] as? String {
+                            
+                            logger.info("Executing tool: \(name)")
+                            
+                            var reqMsg = Pecan_AgentEvent()
+                            var toolReq = Pecan_ToolExecutionRequest()
+                            toolReq.requestID = callId
+                            toolReq.toolName = name
+                            toolReq.argumentsJson = arguments
+                            reqMsg.toolRequest = toolReq
+                            
+                            try await call.requestStream.send(reqMsg)
+                        }
+                    }
+                } else {
+                    var respMsg = Pecan_AgentEvent()
+                    var prog = Pecan_TaskProgress()
+                    prog.statusMessage = finalText
+                    respMsg.progress = prog
+                    try await call.requestStream.send(respMsg)
+                }
                 
             case .toolResponse(let resp):
-                logger.info("Received tool_response: \(resp.resultJson)")
+                logger.info("Received tool_response for \(resp.requestID)")
+                
+                // Add tool result to context
+                var ctxMsg = Pecan_AgentEvent()
+                var ctxCmd = Pecan_ContextCommand()
+                ctxCmd.requestID = UUID().uuidString
+                var addMsg = Pecan_AddContextMessage()
+                addMsg.section = .conversation
+                addMsg.role = "tool"
+                
+                if !resp.errorMessage.isEmpty {
+                    addMsg.content = "Error: \(resp.errorMessage)"
+                } else {
+                    addMsg.content = resp.resultJson
+                }
+                
+                // Pass the tool_call_id via metadata
+                let meta: [String: Any] = ["tool_call_id": resp.requestID]
+                if let metaData = try? JSONSerialization.data(withJSONObject: meta),
+                   let metaStr = String(data: metaData, encoding: .utf8) {
+                    addMsg.metadataJson = metaStr
+                }
+                
+                ctxCmd.addMessage = addMsg
+                ctxMsg.contextCommand = ctxCmd
+                try await call.requestStream.send(ctxMsg)
+                
+                // Request next completion from LLM after the tool has run
+                // TODO: if multiple tools are executing concurrently, we should wait for all of them before requesting completion again.
+                // For a naive implementation, we'll just request it right away and hope it's sequential.
+                var reqMsg = Pecan_AgentEvent()
+                var compReq = Pecan_LLMCompletionRequest()
+                compReq.requestID = UUID().uuidString
+                compReq.modelKey = "" 
+                compReq.paramsJson = ""
+                reqMsg.completionRequest = compReq
+                try await call.requestStream.send(reqMsg)
                 
             case .shutdown(let req):
                 logger.warning("Received shutdown command: \(req.reason)")

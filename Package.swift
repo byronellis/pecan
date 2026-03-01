@@ -19,6 +19,7 @@ let package = Package(
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.0.6"),
         .package(url: "https://github.com/pakLebah/ANSITerminal.git", from: "0.0.3"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
+        .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
     ],
     targets: [
         .target(
@@ -37,7 +38,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PecanServer",
-            dependencies: ["PecanShared"]),
+            dependencies: [
+                "PecanShared",
+                .product(name: "Lua", package: "LuaSwift")
+            ]),
         .executableTarget(
             name: "PecanUI",
             dependencies: [

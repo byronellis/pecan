@@ -235,6 +235,12 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                         do {
                             let contextMessages = await SessionManager.shared.getContext(sessionID: sid)
                             var payload: [String: Any] = ["messages": contextMessages]
+                            
+                            let toolDefs = await ToolManager.shared.getToolDefinitions()
+                            if !toolDefs.isEmpty {
+                                payload["tools"] = toolDefs
+                            }
+                            
                             if !req.paramsJson.isEmpty {
                                 if let data = req.paramsJson.data(using: .utf8),
                                    let params = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -274,6 +280,23 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     
                 case .toolRequest(let req):
                     logger.info("Tool Request from agent: \(req.toolName)")
+                    do {
+                        let result = try await ToolManager.shared.executeTool(name: req.toolName, argumentsJSON: req.argumentsJson)
+                        var cmdMsg = Pecan_HostCommand()
+                        var toolResp = Pecan_ToolExecutionResponse()
+                        toolResp.requestID = req.requestID
+                        toolResp.resultJson = result
+                        cmdMsg.toolResponse = toolResp
+                        try await responseStream.send(cmdMsg)
+                    } catch {
+                        logger.error("Tool execution failed: \(error)")
+                        var cmdMsg = Pecan_HostCommand()
+                        var toolResp = Pecan_ToolExecutionResponse()
+                        toolResp.requestID = req.requestID
+                        toolResp.errorMessage = error.localizedDescription
+                        cmdMsg.toolResponse = toolResp
+                        try await responseStream.send(cmdMsg)
+                    }
                     
                 case nil:
                     break
@@ -289,6 +312,10 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
 
 func main() async throws {
     let config = try Config.load()
+    
+    // Load tools from ~/.pecan/tools
+    await ToolManager.shared.loadTools()
+    
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
     
     let server = try await Server.insecure(group: group)
