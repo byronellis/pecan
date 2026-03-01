@@ -17,6 +17,7 @@ The agent process that actually runs *inside* the container:
 - Completely isolated from the internet. No direct access to LLM APIs or external resources.
 - Connects back to the `pecan-server` via gRPC to request LLM completions, run tools, or interact with the user.
 - Operates within a controlled, potentially virtualized filesystem environment (VFS).
+- **Tool Execution:** All tools (Lua scripts, built-in binary tools) execute strictly within the agent's isolated process. The server acts purely as a router and proxy for these tools. If a tool requires host-level capabilities (like fetching a web page or modifying host files), it must do so by requesting that specific capability from the server via the gRPC link, rather than the server executing the tool directly.
 
 ### 3. `pecan` (The User Interface)
 The client application used to interact with the server:
@@ -39,3 +40,12 @@ All agent capabilities (reasoning, fetching web pages, creating files outside th
 
 ### Virtual Filesystem (VFS) & Diffing
 The container may utilize a virtual filesystem that tracks the agent's changes as a "diff" against the original workspace. This allows the user to review all changes the agent made during its session before committing them to the actual host filesystem.
+
+## Development Phases
+
+1.  **Core Communication & Non-Containerized Execution:**
+    Establish bidirectional gRPC streaming between the `pecan` (UI), `pecan-server`, and `pecan-agent`. Get the basic agent reasoning loop, tool execution (via the server), and user interaction working with the agent running directly on the host (outside a container) to stabilize the protocol.
+2.  **Containerization Lifecycle:**
+    Implement the pluggable VM architecture (`Virtualization.framework`, `Firecracker`). The server will spawn these isolated environments, inject the `pecan-agent` binary, and establish the gRPC connection across the VM boundary.
+3.  **Built-in Server Tools:**
+    Implement a robust suite of built-in tools hosted by the `pecan-server`. Because agents will eventually run in locked-down containers without internet or standard host access, the server must provide essential capabilities (e.g., secure web fetching, controlled file system operations, git interactions) over gRPC.
