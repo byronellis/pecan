@@ -8,3 +8,5 @@ DerivedData/
 .idea/
 pecan_memory.db
 /.run/
+swiftly.pkg
+test_lua.swift
