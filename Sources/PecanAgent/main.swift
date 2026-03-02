@@ -16,31 +16,50 @@ func main() async throws {
     let sessionID = args[1]
     let hostAddress = args.count > 2 ? args[2] : "127.0.0.1"
     let agentID = UUID().uuidString
-    logger.info("Pecan Agent \(agentID) Starting for session: \(sessionID) connecting to \(hostAddress):3000")
-    
+
     // Load local tools
     await ToolManager.shared.loadTools()
-    
+
     // Setup gRPC Client
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
-    let channel = try GRPCChannelPool.with(
-        target: .host(hostAddress, port: 3000),
-        transportSecurity: .plaintext,
-        eventLoopGroup: group
-    ) { config in
-        config.keepalive = ClientConnectionKeepalive(
-            interval: .seconds(15),
-            timeout: .seconds(10),
-            permitWithoutCalls: true,
-            maximumPingsWithoutData: 0
-        )
-        config.connectionBackoff = ConnectionBackoff(
-            initialBackoff: 1.0,
-            maximumBackoff: 60.0,
-            multiplier: 1.6,
-            jitter: 0.2
-        )
+    let channel: GRPCChannel
+    if hostAddress.hasPrefix("/") {
+        // Unix domain socket path (used when running inside a container with vsock relay)
+        logger.info("Pecan Agent \(agentID) Starting for session: \(sessionID) connecting via Unix socket \(hostAddress)")
+        channel = try GRPCChannelPool.with(
+            target: .unixDomainSocket(hostAddress),
+            transportSecurity: .plaintext,
+            eventLoopGroup: group
+        ) { config in
+            config.keepalive = ClientConnectionKeepalive(
+                interval: .seconds(15),
+                timeout: .seconds(10),
+                permitWithoutCalls: true,
+                maximumPingsWithoutData: 0
+            )
+        }
+    } else {
+        // TCP connection (used for local development)
+        logger.info("Pecan Agent \(agentID) Starting for session: \(sessionID) connecting to \(hostAddress):3000")
+        channel = try GRPCChannelPool.with(
+            target: .host(hostAddress, port: 3000),
+            transportSecurity: .plaintext,
+            eventLoopGroup: group
+        ) { config in
+            config.keepalive = ClientConnectionKeepalive(
+                interval: .seconds(15),
+                timeout: .seconds(10),
+                permitWithoutCalls: true,
+                maximumPingsWithoutData: 0
+            )
+            config.connectionBackoff = ConnectionBackoff(
+                initialBackoff: 1.0,
+                maximumBackoff: 60.0,
+                multiplier: 1.6,
+                jitter: 0.2
+            )
+        }
     }
 
     let client = Pecan_AgentServiceAsyncClient(channel: channel)

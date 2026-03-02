@@ -312,21 +312,38 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
 }
 
 func main() async throws {
+
     let config = try Config.load()
-    
+
     // Switch to container-based execution
     await SpawnerFactory.shared.useVirtualizationFramework()
-    
+
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-    
-    let server = try await Server.insecure(group: group)
-        .withServiceProviders([ClientServiceProvider(), AgentServiceProvider(config: config)])
+    let providers = [ClientServiceProvider(), AgentServiceProvider(config: config)] as [CallHandlerProvider]
+
+    // TCP server for UI clients
+    let tcpServer = try await Server.insecure(group: group)
+        .withServiceProviders(providers)
         .bind(host: "0.0.0.0", port: 3000)
         .get()
-    
-    logger.info("Pecan Server started on port \(server.channel.localAddress?.port ?? 3000) with default model: \(config.defaultModel ?? "unknown")")
-    
-    try await server.onClose.get()
+
+    // Unix socket server for containerized agents (relayed via vsock)
+    let runDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".run")
+    try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+    let socketPath = runDir.appendingPathComponent("grpc.sock").path
+    // Remove stale socket file if it exists
+    try? FileManager.default.removeItem(atPath: socketPath)
+
+    let udsServer = try await Server.insecure(group: group)
+        .withServiceProviders(providers)
+        .bind(unixDomainSocketPath: socketPath)
+        .get()
+
+    logger.info("Pecan Server started on port \(tcpServer.channel.localAddress?.port ?? 3000) and Unix socket \(socketPath) with default model: \(config.defaultModel ?? "unknown")")
+
+    // Wait for either server to close
+    try await tcpServer.onClose.get()
+    try await udsServer.onClose.get()
     try await group.shutdownGracefully()
 }
 

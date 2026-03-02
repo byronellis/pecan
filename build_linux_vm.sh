@@ -2,7 +2,7 @@
 set -e
 
 echo "Building statically-linked Linux binary for pecan-agent natively..."
-swift build -c release --product pecan-agent --swift-sdk swift-6.2.4-RELEASE_static-linux-0.1.0
+swift build -c release --product pecan-agent --swift-sdk aarch64-swift-linux-musl --static-swift-stdlib
 
 VM_DIR="$HOME/.pecan/vm"
 mkdir -p "$VM_DIR"

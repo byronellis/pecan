@@ -10,6 +10,8 @@ let package = Package(
     ],
     products: [
         .executable(name: "pecan-server", targets: ["PecanServer"]),
+        .executable(name: "pecan-vm-launcher", targets: ["PecanVMLauncher"]),
+        .executable(name: "pecan-test-client", targets: ["PecanTestClient"]),
         .executable(name: "pecan", targets: ["PecanUI"]),
         .executable(name: "pecan-agent", targets: ["PecanAgent"]),
         .executable(name: "pecan-builder", targets: ["PecanBuilder"]),
@@ -39,6 +41,11 @@ let package = Package(
             ]
         ),
         .executableTarget(
+            name: "PecanTestClient",
+            dependencies: [
+                "PecanShared",
+            ]),
+        .executableTarget(
             name: "PecanBuilder",
             dependencies: [
                 .product(name: "Containerization", package: "containerization")
@@ -47,7 +54,12 @@ let package = Package(
             name: "PecanServer",
             dependencies: [
                 "PecanShared",
-                .product(name: "Containerization", package: "containerization")
+            ]),
+        .executableTarget(
+            name: "PecanVMLauncher",
+            dependencies: [
+                .product(name: "Containerization", package: "containerization"),
+                .product(name: "Logging", package: "swift-log"),
             ]),
         .executableTarget(
             name: "PecanUI",
