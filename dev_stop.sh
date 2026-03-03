@@ -8,7 +8,8 @@ if [ -f .run/server.pid ]; then
     rm .run/server.pid
 fi
 
-# Kill any dangling pecan-agent processes
+# Kill any dangling pecan-agent or pecan-vm-launcher processes
 pkill -f pecan-agent 2>/dev/null
+pkill -f pecan-vm-launcher 2>/dev/null
 
-echo "Server and agents stopped."
+echo "Server, launcher, and agents stopped."

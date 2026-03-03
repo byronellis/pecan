@@ -315,8 +315,17 @@ func main() async throws {
 
     let config = try Config.load()
 
+    // Launch the vm-launcher subprocess and wait for it to be ready
+    let launcher = try LauncherProcessManager()
+    try launcher.waitForSocket()
+
     // Switch to container-based execution
-    await SpawnerFactory.shared.useVirtualizationFramework()
+    await SpawnerFactory.shared.useVirtualizationFramework(launcher: launcher)
+
+    // Ensure launcher is terminated on exit
+    defer {
+        Task { await SpawnerFactory.shared.shutdownLauncher() }
+    }
 
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
     let providers = [ClientServiceProvider(), AgentServiceProvider(config: config)] as [CallHandlerProvider]
@@ -340,6 +349,16 @@ func main() async throws {
         .get()
 
     logger.info("Pecan Server started on port \(tcpServer.channel.localAddress?.port ?? 3000) and Unix socket \(socketPath) with default model: \(config.defaultModel ?? "unknown")")
+
+    // Handle SIGINT/SIGTERM for clean shutdown
+    for sig in [SIGINT, SIGTERM] {
+        signal(sig) { _ in
+            Task {
+                await SpawnerFactory.shared.shutdownLauncher()
+            }
+            exit(0)
+        }
+    }
 
     // Wait for either server to close
     try await tcpServer.onClose.get()
