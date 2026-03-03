@@ -50,6 +50,20 @@ public actor ToolManager {
         return try JSONSerialization.data(withJSONObject: definitions)
     }
     
+    public func registerBuiltinTools() {
+        register(tool: ReadFileTool())
+        register(tool: WriteFileTool())
+        register(tool: EditFileTool())
+        register(tool: SearchFilesTool())
+        register(tool: BashTool())
+        register(tool: CreateLuaToolTool())
+    }
+
+    public func allToolDescriptions() -> [(name: String, description: String)] {
+        tools.map { (name: $0.key, description: $0.value.description) }
+            .sorted { $0.name < $1.name }
+    }
+
     public func loadTools() {
         let fm = FileManager.default
         let homeDir = fm.homeDirectoryForCurrentUser

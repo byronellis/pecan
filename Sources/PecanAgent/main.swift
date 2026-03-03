@@ -6,6 +6,28 @@ import Logging
 
 let logger = Logger(label: "com.pecan.agent")
 
+func buildSystemPrompt() async -> String {
+    var prompt = """
+    You are a helpful coding assistant with access to tools for reading, writing, editing, and searching files, as well as running shell commands.
+
+    ## Guidelines
+    - Read files before editing them to understand existing code.
+    - Use search_files to locate relevant code before making changes.
+    - When editing, provide enough context in old_string to uniquely identify the target.
+    - Keep your answers concise unless asked otherwise.
+    - Use the bash tool for running builds, tests, git commands, and other shell operations.
+
+    ## Available Tools
+    """
+
+    let tools = await ToolManager.shared.allToolDescriptions()
+    for tool in tools {
+        prompt += "\n- **\(tool.name)**: \(tool.description)"
+    }
+
+    return prompt
+}
+
 func main() async throws {
     let args = CommandLine.arguments
     guard args.count > 1 else {
@@ -17,7 +39,8 @@ func main() async throws {
     let hostAddress = args.count > 2 ? args[2] : "127.0.0.1"
     let agentID = UUID().uuidString
 
-    // Load local tools
+    // Register built-in tools, then load user Lua tools
+    await ToolManager.shared.registerBuiltinTools()
     await ToolManager.shared.loadTools()
 
     // Setup gRPC Client
@@ -105,7 +128,7 @@ func main() async throws {
                 var addMsg = Pecan_AddContextMessage()
                 addMsg.section = .system
                 addMsg.role = "system"
-                addMsg.content = "You are a helpful coding assistant. Keep your answers concise unless asked otherwise."
+                addMsg.content = await buildSystemPrompt()
                 ctxCmd.addMessage = addMsg
                 ctxMsg.contextCommand = ctxCmd
                 try await call.requestStream.send(ctxMsg)
