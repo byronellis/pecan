@@ -232,8 +232,8 @@ public struct SearchFilesTool: PecanTool, Sendable {
 // MARK: - BashTool
 
 public struct BashTool: PecanTool, Sendable {
-    public let name = "bash"
-    public let description = "Execute a bash command and return its output. Use for running shell commands, build tools, git, etc."
+    public let name = "shell"
+    public let description = "Execute a shell command and return its output. Use for running shell commands, build tools, git, etc."
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -251,7 +251,7 @@ public struct BashTool: PecanTool, Sendable {
         }
 
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/bash")
+        process.executableURL = URL(fileURLWithPath: "/bin/sh")
         process.arguments = ["-c", command]
 
         let stdoutPipe = Pipe()

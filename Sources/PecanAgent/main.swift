@@ -128,7 +128,10 @@ func main() async throws {
                 var addMsg = Pecan_AddContextMessage()
                 addMsg.section = .system
                 addMsg.role = "system"
-                addMsg.content = await buildSystemPrompt()
+                let systemPrompt = await buildSystemPrompt()
+                logger.info("System prompt length: \(systemPrompt.count) chars")
+                logger.debug("System prompt:\n\(systemPrompt)")
+                addMsg.content = systemPrompt
                 ctxCmd.addMessage = addMsg
                 ctxMsg.contextCommand = ctxCmd
                 try await call.requestStream.send(ctxMsg)
@@ -169,10 +172,12 @@ func main() async throws {
                        let str = String(data: data, encoding: .utf8) {
                         compReq.paramsJson = str
                     }
+                    logger.info("Sending \(toolDefs.count) tool definitions to LLM")
                 } else {
                     compReq.paramsJson = ""
+                    logger.warning("No tool definitions available!")
                 }
-                
+
                 reqMsg.completionRequest = compReq
                 try await call.requestStream.send(reqMsg)
                 logger.info("Sent LLM request to server using default model.")
