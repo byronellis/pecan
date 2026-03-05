@@ -11,6 +11,8 @@ private enum LauncherRequest: Codable {
         let type: String
         let sessionID: String
         let grpcSocketPath: String
+        let agentName: String
+        let mounts: [MountSpec]
     }
 
     struct TerminateRequest: Codable {
@@ -57,13 +59,25 @@ public actor RemoteSpawner: AgentSpawner {
         self.socketPath = socketPath
     }
 
-    public func spawnAgent(sessionID: String) async throws {
+    public func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec]) async throws {
         let currentPath = FileManager.default.currentDirectoryPath
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
         let grpcSocketPath = "\(currentPath)/.run/grpc.sock"
+
+        // Build the full mounts list
+        var mounts: [MountSpec] = [
+            MountSpec(source: workspacePath, destination: "/home/\(agentName)", readOnly: false),
+            MountSpec(source: "\(currentPath)/.build/aarch64-swift-linux-musl/release", destination: "/opt/pecan", readOnly: true),
+            MountSpec(source: "\(homeDir)/.pecan/tools", destination: "/home/\(agentName)/.pecan/tools", readOnly: true),
+        ]
+        mounts.append(contentsOf: shares)
+
         let request = LauncherRequest.SpawnRequest(
             type: "spawn",
             sessionID: sessionID,
-            grpcSocketPath: grpcSocketPath
+            grpcSocketPath: grpcSocketPath,
+            agentName: agentName,
+            mounts: mounts
         )
         let response = try await sendRequest(request)
         if response.type == "spawn_error" {

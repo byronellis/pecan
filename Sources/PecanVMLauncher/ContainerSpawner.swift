@@ -51,10 +51,9 @@ actor ContainerSpawner {
         )
     }
 
-    func spawnAgent(sessionID: String, grpcSocketPath: String) async throws {
-        logger.info("Setting up Containerization VM for session \(sessionID)...")
+    func spawnAgent(sessionID: String, grpcSocketPath: String, agentName: String, mounts: [MountSpec]) async throws {
+        logger.info("Setting up Containerization VM for session \(sessionID) (agent: \(agentName))...")
 
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser
         let kernelPath = try resolveKernelPath()
         let initfsReference = "ghcr.io/apple/containerization/vminit:0.26.5"
 
@@ -123,13 +122,14 @@ actor ContainerSpawner {
                 config.sockets.append(socketConfig)
                 logger.info("Configured Unix socket relay: \(hostSocketPath.path) -> \(guestSocketPath.path) (via vsock)")
 
-                let agentMount = Mount.share(source: "\(currentPath)/.build/aarch64-swift-linux-musl/release", destination: "/opt/pecan")
-                let toolsMount = Mount.share(source: "\(homeDir.path)/.pecan/tools", destination: "/root/.pecan/tools")
-                config.mounts.append(agentMount)
-                config.mounts.append(toolsMount)
+                for mount in mounts {
+                    let m = Mount.share(source: mount.source, destination: mount.destination)
+                    config.mounts.append(m)
+                    logger.debug("Mount: \(mount.source) -> \(mount.destination) (\(mount.readOnly ? "ro" : "rw"))")
+                }
 
                 config.process.arguments = ["/opt/pecan/pecan-agent", sessionID, "/tmp/grpc.sock"]
-                config.process.workingDirectory = "/opt/pecan"
+                config.process.workingDirectory = "/home/\(agentName)"
 
                 logger.debug("Container config for \(sessionID): cpus=\(config.cpus), memory=\(config.memoryInBytes), args=\(config.process.arguments)")
             }

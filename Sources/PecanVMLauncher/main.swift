@@ -107,7 +107,7 @@ func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
         case .spawn(let req):
             logger.info("Spawn request for session \(req.sessionID)")
             do {
-                try await spawner.spawnAgent(sessionID: req.sessionID, grpcSocketPath: req.grpcSocketPath)
+                try await spawner.spawnAgent(sessionID: req.sessionID, grpcSocketPath: req.grpcSocketPath, agentName: req.agentName, mounts: req.mounts)
                 response = .spawnOK(sessionID: req.sessionID)
             } catch {
                 logger.error("Spawn failed for \(req.sessionID): \(error)")

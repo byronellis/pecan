@@ -6,21 +6,14 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-echo "Codesigning pecan-vm-launcher and pecan-builder..."
+echo "Codesigning pecan-vm-launcher..."
 codesign --entitlements Entitlements.plist -f -s "Apple Development: Byron Ellis (4BZX85G58E)" .build/debug/pecan-vm-launcher
-codesign --entitlements Entitlements.plist -f -s "Apple Development: Byron Ellis (4BZX85G58E)" .build/debug/pecan-builder
 
-if [ -f .run/launcher.pid ]; then
-    kill $(cat .run/launcher.pid) 2>/dev/null
-    rm .run/launcher.pid
-fi
+# Kill any running pecan-server (which also manages vm-launcher)
+pkill -f '.build/debug/pecan-server' 2>/dev/null
+pkill -f '.build/debug/pecan-vm-launcher' 2>/dev/null
 
-if [ -f .run/server.pid ]; then
-    kill $(cat .run/server.pid) 2>/dev/null
-    rm .run/server.pid
-fi
+# Clean up stale sockets and pid files
+rm -f .run/launcher.sock .run/grpc.sock .run/launcher.pid .run/server.pid
 
-# Kill any dangling pecan-agent processes
-pkill -f pecan-agent 2>/dev/null
-
-echo "Server and launcher killed. The dev_start.sh loop will automatically restart in 1s."
+echo "Killed. Run ./dev_start.sh to start again."

@@ -2,8 +2,21 @@ import Foundation
 import PecanShared
 import Logging
 
+/// Mount specification passed through to the VM launcher.
+public struct MountSpec: Codable, Sendable {
+    public let source: String
+    public let destination: String
+    public let readOnly: Bool
+
+    public init(source: String, destination: String, readOnly: Bool = true) {
+        self.source = source
+        self.destination = destination
+        self.readOnly = readOnly
+    }
+}
+
 public protocol AgentSpawner: Sendable {
-    func spawnAgent(sessionID: String) async throws
+    func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec]) async throws
     func terminateAgent(sessionID: String) async throws
 }
 
@@ -13,7 +26,7 @@ public actor LocalProcessSpawner: AgentSpawner {
 
     public init() {}
 
-    public func spawnAgent(sessionID: String) async throws {
+    public func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec]) async throws {
         logger.info("Spawning local agent process for session \(sessionID)...")
         let task = Process()
         let currentPath = FileManager.default.currentDirectoryPath
@@ -130,8 +143,8 @@ public actor SpawnerFactory {
         launcherManager = nil
     }
 
-    public func spawn(sessionID: String) async throws {
-        try await activeSpawner.spawnAgent(sessionID: sessionID)
+    public func spawn(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec] = []) async throws {
+        try await activeSpawner.spawnAgent(sessionID: sessionID, agentName: agentName, workspacePath: workspacePath, shares: shares)
     }
 
     public func terminate(sessionID: String) async throws {

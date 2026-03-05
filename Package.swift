@@ -24,6 +24,7 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
         .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/containerization.git", branch: "main"),
+        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
     ],
     targets: [
         .target(
@@ -54,6 +55,7 @@ let package = Package(
             name: "PecanServer",
             dependencies: [
                 "PecanShared",
+                .product(name: "GRDB", package: "GRDB.swift"),
             ]),
         .executableTarget(
             name: "PecanVMLauncher",

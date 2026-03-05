@@ -8,28 +8,30 @@ let logger = Logger(label: "com.pecan.server")
 
 actor SessionManager {
     static let shared = SessionManager()
-    
+
     // sessionID -> (uiStream, agentStream)
     private var uiStreams: [String: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>] = [:]
     private var agentStreams: [String: GRPCAsyncResponseStreamWriter<Pecan_HostCommand>] = [:]
-    
-    // Context Storage
-    // sessionID -> ContextSection -> [Message]
-    struct ContextMessage {
-        let role: String
-        let content: String
-        let metadataJson: String
-    }
-    private var context: [String: [Pecan_ContextSection: [ContextMessage]]] = [:]
-    
+
+    // Per-session persistent stores
+    private var sessionStores: [String: SessionStore] = [:]
+
     func registerUI(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>) {
         uiStreams[sessionID] = stream
     }
-    
+
     func registerAgent(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_HostCommand>) {
         agentStreams[sessionID] = stream
     }
-    
+
+    func setStore(sessionID: String, store: SessionStore) {
+        sessionStores[sessionID] = store
+    }
+
+    func getStore(sessionID: String) -> SessionStore? {
+        sessionStores[sessionID]
+    }
+
     func sendToUI(sessionID: String, message: Pecan_ServerMessage) async throws {
         if let stream = uiStreams[sessionID] {
             try await stream.send(message)
@@ -37,7 +39,7 @@ actor SessionManager {
             logger.warning("No UI stream found for session \(sessionID)")
         }
     }
-    
+
     func sendToAgent(sessionID: String, command: Pecan_HostCommand) async throws {
         if let stream = agentStreams[sessionID] {
             try await stream.send(command)
@@ -45,56 +47,106 @@ actor SessionManager {
             logger.warning("No Agent stream found for session \(sessionID)")
         }
     }
-    
+
+    private func sectionToInt(_ section: Pecan_ContextSection) -> Int {
+        switch section {
+        case .system: return 0
+        case .conversation: return 1
+        case .tools: return 2
+        case .UNRECOGNIZED(let v): return v
+        }
+    }
+
     func addContextMessage(sessionID: String, section: Pecan_ContextSection, role: String, content: String, metadata: String) {
-        if context[sessionID] == nil {
-            context[sessionID] = [:]
+        guard let store = sessionStores[sessionID] else {
+            logger.warning("No session store for \(sessionID)")
+            return
         }
-        if context[sessionID]![section] == nil {
-            context[sessionID]![section] = []
+        do {
+            try store.addContextMessage(section: sectionToInt(section), role: role, content: content, metadata: metadata)
+        } catch {
+            logger.error("Failed to persist context message for \(sessionID): \(error)")
         }
-        context[sessionID]![section]!.append(ContextMessage(role: role, content: content, metadataJson: metadata))
     }
 
     func getContext(sessionID: String) throws -> Data {
+        guard let store = sessionStores[sessionID] else {
+            return try JSONSerialization.data(withJSONObject: [] as [[String: Any]])
+        }
+        let records = try store.getContextMessages()
         var messages: [[String: Any]] = []
-        let sections: [Pecan_ContextSection] = [.system, .conversation, .tools]
-        
-        for section in sections {
-            if let sectionMsgs = context[sessionID]?[section] {
-                for msg in sectionMsgs {
-                    var dict: [String: Any] = ["role": msg.role, "content": msg.content]
-                    if !msg.metadataJson.isEmpty,
-                       let data = msg.metadataJson.data(using: .utf8),
-                       let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                        for (k, v) in meta {
-                            dict[k] = v
-                        }
-                    }
-                    messages.append(dict)
+        for msg in records {
+            var dict: [String: Any] = ["role": msg.role, "content": msg.content]
+            if !msg.metadataJson.isEmpty,
+               let data = msg.metadataJson.data(using: .utf8),
+               let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                for (k, v) in meta {
+                    dict[k] = v
                 }
             }
+            messages.append(dict)
         }
         return try JSONSerialization.data(withJSONObject: messages)
     }
-    
+
     func compactContext(sessionID: String, section: Pecan_ContextSection, keepRecent: Int) {
-        if let count = context[sessionID]?[section]?.count, count > keepRecent {
-            let keep = Array(context[sessionID]![section]!.suffix(keepRecent))
-            context[sessionID]![section] = keep
+        guard let store = sessionStores[sessionID] else { return }
+        do {
+            try store.compactContext(section: sectionToInt(section), keepRecent: keepRecent)
+        } catch {
+            logger.error("Failed to compact context for \(sessionID): \(error)")
         }
     }
-    
+
     func removeSession(sessionID: String) async {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
-        context.removeValue(forKey: sessionID)
-        
+        sessionStores.removeValue(forKey: sessionID)
+
         do {
             try await SpawnerFactory.shared.terminate(sessionID: sessionID)
         } catch {
             logger.error("Failed to terminate agent VM for session \(sessionID): \(error)")
         }
+    }
+
+    /// Restart the container for a session with updated mounts, preserving context.
+    func restartContainer(sessionID: String) async throws {
+        guard let store = sessionStores[sessionID] else {
+            throw NSError(domain: "SessionManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "No session store for \(sessionID)"])
+        }
+
+        // Notify UI
+        var statusMsg = Pecan_ServerMessage()
+        var out = Pecan_AgentOutput()
+        out.sessionID = sessionID
+        out.text = "Reconfiguring environment..."
+        statusMsg.agentOutput = out
+        try await sendToUI(sessionID: sessionID, message: statusMsg)
+
+        // Terminate current container
+        try await SpawnerFactory.shared.terminate(sessionID: sessionID)
+
+        // Read current state from SQLite
+        let agentName = try store.name
+        let shares = try store.getShares()
+        let shareMounts = shares.map { MountSpec(source: $0.hostPath, destination: $0.guestPath, readOnly: $0.mode == "ro") }
+
+        // Respawn with updated mounts
+        try await SpawnerFactory.shared.spawn(
+            sessionID: sessionID,
+            agentName: agentName,
+            workspacePath: store.workspacePath.path,
+            shares: shareMounts
+        )
+
+        // Notify UI
+        var readyMsg = Pecan_ServerMessage()
+        var readyOut = Pecan_AgentOutput()
+        readyOut.sessionID = sessionID
+        readyOut.text = "Environment ready."
+        readyMsg.agentOutput = readyOut
+        try await sendToUI(sessionID: sessionID, message: readyMsg)
     }
 }
 
@@ -113,19 +165,40 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                 case .startTask(_):
                     let sessionID = UUID().uuidString
                     activeSessionID = sessionID
-                    
+
+                    let agentName = AgentNames.randomName()
+
+                    // Create persistent session store
+                    let store: SessionStore
+                    do {
+                        store = try SessionStore(sessionID: sessionID, name: agentName)
+                    } catch {
+                        logger.error("Failed to create session store: \(error)")
+                        var errorMsg = Pecan_ServerMessage()
+                        var out = Pecan_AgentOutput()
+                        out.sessionID = sessionID
+                        out.text = "System Error: Failed to create session store. (\(error.localizedDescription))"
+                        errorMsg.agentOutput = out
+                        try await responseStream.send(errorMsg)
+                        continue
+                    }
+                    await SessionManager.shared.setStore(sessionID: sessionID, store: store)
                     await SessionManager.shared.registerUI(sessionID: sessionID, stream: responseStream)
-                    
+
                     // Notify UI that session started
                     var response = Pecan_ServerMessage()
                     var started = Pecan_SessionStarted()
                     started.sessionID = sessionID
                     response.sessionStarted = started
                     try await responseStream.send(response)
-                    
+
                     // Spawn the agent using the Pluggable VM architecture
                     do {
-                        try await SpawnerFactory.shared.spawn(sessionID: sessionID)
+                        try await SpawnerFactory.shared.spawn(
+                            sessionID: sessionID,
+                            agentName: agentName,
+                            workspacePath: store.workspacePath.path
+                        )
                     } catch {
                         logger.error("Failed to spawn agent: \(error)")
                         var errorMsg = Pecan_ServerMessage()
@@ -137,13 +210,29 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     }
 
                 case .userInput(let req):
-                    logger.debug("Routing user input to agent for session \(req.sessionID)")
-                    var cmdMsg = Pecan_HostCommand()
-                    var processInput = Pecan_ProcessInput()
-                    processInput.text = req.text
-                    cmdMsg.processInput = processInput
-                    
-                    try await SessionManager.shared.sendToAgent(sessionID: req.sessionID, command: cmdMsg)
+                    let text = req.text.trimmingCharacters(in: .whitespaces)
+
+                    // Intercept /share and /unshare commands
+                    if text.hasPrefix("/share ") || text.hasPrefix("/unshare ") {
+                        do {
+                            try await Self.handleShareCommand(sessionID: req.sessionID, text: text)
+                        } catch {
+                            logger.error("Share command failed: \(error)")
+                            var errorMsg = Pecan_ServerMessage()
+                            var out = Pecan_AgentOutput()
+                            out.sessionID = req.sessionID
+                            out.text = "Error: \(error.localizedDescription)"
+                            errorMsg.agentOutput = out
+                            try await SessionManager.shared.sendToUI(sessionID: req.sessionID, message: errorMsg)
+                        }
+                    } else {
+                        logger.debug("Routing user input to agent for session \(req.sessionID)")
+                        var cmdMsg = Pecan_HostCommand()
+                        var processInput = Pecan_ProcessInput()
+                        processInput.text = req.text
+                        cmdMsg.processInput = processInput
+                        try await SessionManager.shared.sendToAgent(sessionID: req.sessionID, command: cmdMsg)
+                    }
 
                 case .toolApproval(let req):
                     logger.info("Received tool approval: \(req.approved) for \(req.toolCallID)")
@@ -159,6 +248,43 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
             await SessionManager.shared.removeSession(sessionID: sid)
         }
         logger.info("UI Client disconnected.")
+    }
+}
+
+extension ClientServiceProvider {
+    /// Parse and execute /share or /unshare commands.
+    static func handleShareCommand(sessionID: String, text: String) async throws {
+        guard let store = await SessionManager.shared.getStore(sessionID: sessionID) else {
+            throw NSError(domain: "ShareCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active session"])
+        }
+
+        if text.hasPrefix("/unshare ") {
+            let hostPath = String(text.dropFirst("/unshare ".count)).trimmingCharacters(in: .whitespaces)
+            guard !hostPath.isEmpty else {
+                throw NSError(domain: "ShareCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Usage: /unshare <host_path>"])
+            }
+            try store.removeShare(hostPath: hostPath)
+            logger.info("Removed share \(hostPath) for session \(sessionID)")
+        } else {
+            // /share [-rw] <host_path>[:<guest_path>]
+            var args = String(text.dropFirst("/share ".count)).trimmingCharacters(in: .whitespaces)
+            var mode = "ro"
+            if args.hasPrefix("-rw ") {
+                mode = "rw"
+                args = String(args.dropFirst("-rw ".count)).trimmingCharacters(in: .whitespaces)
+            }
+            guard !args.isEmpty else {
+                throw NSError(domain: "ShareCommand", code: 3, userInfo: [NSLocalizedDescriptionKey: "Usage: /share [-rw] <host_path>[:<guest_path>]"])
+            }
+            let parts = args.split(separator: ":", maxSplits: 1)
+            let hostPath = String(parts[0])
+            let guestPath = parts.count > 1 ? String(parts[1]) : hostPath
+            try store.addShare(hostPath: hostPath, guestPath: guestPath, mode: mode)
+            logger.info("Added share \(hostPath) -> \(guestPath) (\(mode)) for session \(sessionID)")
+        }
+
+        // Restart container with updated mounts
+        try await SessionManager.shared.restartContainer(sessionID: sessionID)
     }
 }
 

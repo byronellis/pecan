@@ -1,5 +1,11 @@
 import Foundation
 
+struct MountSpec: Codable {
+    let source: String
+    let destination: String
+    let readOnly: Bool
+}
+
 enum LauncherRequest: Codable {
     case spawn(SpawnRequest)
     case terminate(TerminateRequest)
@@ -8,6 +14,8 @@ enum LauncherRequest: Codable {
         let type: String // "spawn"
         let sessionID: String
         let grpcSocketPath: String
+        let agentName: String
+        let mounts: [MountSpec]
     }
 
     struct TerminateRequest: Codable {
