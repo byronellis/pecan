@@ -65,11 +65,22 @@ public actor RemoteSpawner: AgentSpawner {
         let grpcSocketPath = "\(currentPath)/.run/grpc.sock"
 
         // Build the full mounts list
+        let fm = FileManager.default
         var mounts: [MountSpec] = [
             MountSpec(source: workspacePath, destination: "/home/\(agentName)", readOnly: false),
             MountSpec(source: "\(currentPath)/.build/aarch64-swift-linux-musl/release", destination: "/opt/pecan", readOnly: true),
             MountSpec(source: "\(homeDir)/.pecan/tools", destination: "/home/\(agentName)/.pecan/tools", readOnly: true),
         ]
+
+        // Mount skills directories if they exist on the host
+        let skillsPath = "\(homeDir)/.pecan/skills"
+        if fm.fileExists(atPath: skillsPath) {
+            mounts.append(MountSpec(source: skillsPath, destination: "/home/\(agentName)/.pecan/skills", readOnly: true))
+        }
+        let agentsSkillsPath = "\(homeDir)/.agents/skills"
+        if fm.fileExists(atPath: agentsSkillsPath) {
+            mounts.append(MountSpec(source: agentsSkillsPath, destination: "/home/\(agentName)/.agents/skills", readOnly: true))
+        }
         mounts.append(contentsOf: shares)
 
         let request = LauncherRequest.SpawnRequest(

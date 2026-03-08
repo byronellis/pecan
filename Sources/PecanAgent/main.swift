@@ -23,28 +23,6 @@ actor StreamWriter {
     }
 }
 
-func buildSystemPrompt() async -> String {
-    var prompt = """
-    You are a helpful coding assistant with access to tools for reading, writing, editing, and searching files, as well as running shell commands.
-
-    ## Guidelines
-    - Read files before editing them to understand existing code.
-    - Use search_files to locate relevant code before making changes.
-    - When editing, provide enough context in old_string to uniquely identify the target.
-    - Keep your answers concise unless asked otherwise.
-    - Use the bash tool for running builds, tests, git commands, and other shell operations.
-
-    ## Available Tools
-    """
-
-    let tools = await ToolManager.shared.allToolDescriptions()
-    for tool in tools {
-        prompt += "\n- **\(tool.name)**: \(tool.description)"
-    }
-
-    return prompt
-}
-
 /// Fetch core memories and inject them into context as a separate system message.
 /// Must be called from a detached Task so it doesn't block the response loop.
 func injectCoreMemories(_ writer: StreamWriter) async {
@@ -104,10 +82,14 @@ func main() async throws {
     let hostAddress = args.count > 2 ? args[2] : "127.0.0.1"
     let agentID = UUID().uuidString
 
-    // Register built-in tools, then load user Lua tools, then hooks
+    // Register built-in tools, then load user Lua tools, then hooks, then prompt fragments
     await ToolManager.shared.registerBuiltinTools()
     await ToolManager.shared.loadTools()
     await HookManager.shared.loadHooks()
+    await SkillManager.shared.discoverSkills()
+    await SkillManager.shared.registerLuaTools()
+    await PromptComposer.shared.registerBuiltinFragments()
+    await PromptComposer.shared.loadUserFragments()
 
     // Setup gRPC Client
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -208,7 +190,7 @@ func main() async throws {
                 var addMsg = Pecan_AddContextMessage()
                 addMsg.section = .system
                 addMsg.role = "system"
-                let systemPrompt = await buildSystemPrompt()
+                let systemPrompt = await PromptComposer.shared.compose(agentID: agentID, sessionID: sessionID)
                 logger.info("System prompt length: \(systemPrompt.count) chars")
                 logger.debug("System prompt:\n\(systemPrompt)")
                 addMsg.content = systemPrompt
@@ -250,7 +232,8 @@ func main() async throws {
                 compReq.requestID = UUID().uuidString
                 compReq.modelKey = ""
 
-                if let toolData = try? await ToolManager.shared.getToolDefinitions(),
+                let activeTags = await PromptComposer.shared.getActiveToolTags()
+                if let toolData = try? await ToolManager.shared.getToolDefinitions(tags: activeTags),
                    let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
                    !toolDefs.isEmpty {
                     let params = ["tools": toolDefs]
@@ -339,6 +322,9 @@ func main() async throws {
                               let callId = toolCall["id"] as? String else { return nil }
                         return ToolCallInfo(name: name, arguments: arguments, callId: callId)
                     }
+                    // Capture hook enrichment data before crossing Task boundary
+                    let hookTags = await PromptComposer.shared.getActiveToolTags()
+                    let hookFocusedTask = await PromptComposer.shared.getFocusedTask()
                     Task {
                         for tc in parsedCalls {
                             let name = tc.name
@@ -355,7 +341,10 @@ func main() async throws {
 
                             await HookManager.shared.fire(event: "tool.before", data: [
                                 "name": name,
-                                "arguments": arguments
+                                "arguments": arguments,
+                                "active_tags": Array(hookTags).joined(separator: ","),
+                                "focused_task_id": hookFocusedTask.map { String($0.id) } ?? "",
+                                "focused_task_title": hookFocusedTask?.title ?? ""
                             ])
 
                             var resultStr = ""
@@ -366,10 +355,29 @@ func main() async throws {
                                 resultStr = "Error: \(error.localizedDescription)"
                             }
 
+                            // Update focused task in composer when task_focus executes
+                            if name == "task_focus" {
+                                if let data = resultStr.data(using: .utf8),
+                                   let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                                   let taskID = json["id"] as? Int, taskID > 0 {
+                                    let title = json["title"] as? String ?? ""
+                                    let desc = json["description"] as? String ?? ""
+                                    let status = json["status"] as? String ?? ""
+                                    await PromptComposer.shared.setFocusedTask(
+                                        PromptContext.TaskInfo(id: taskID, title: title, description: desc, status: status)
+                                    )
+                                } else {
+                                    await PromptComposer.shared.setFocusedTask(nil)
+                                }
+                            }
+
                             await HookManager.shared.fire(event: "tool.after", data: [
                                 "name": name,
                                 "arguments": arguments,
-                                "result": resultStr
+                                "result": resultStr,
+                                "active_tags": Array(hookTags).joined(separator: ","),
+                                "focused_task_id": hookFocusedTask.map { String($0.id) } ?? "",
+                                "focused_task_title": hookFocusedTask?.title ?? ""
                             ])
 
                             // Signal tool_result to UI
@@ -410,7 +418,8 @@ func main() async throws {
                         compReq.requestID = UUID().uuidString
                         compReq.modelKey = ""
 
-                        if let toolData = try? await ToolManager.shared.getToolDefinitions(),
+                        let activeTags = await PromptComposer.shared.getActiveToolTags()
+                if let toolData = try? await ToolManager.shared.getToolDefinitions(tags: activeTags),
                            let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
                            !toolDefs.isEmpty {
                             let params = ["tools": toolDefs]

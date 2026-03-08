@@ -298,6 +298,7 @@ public struct BashTool: PecanTool, Sendable {
 public struct TaskCreateTool: PecanTool, Sendable {
     public let name = "task_create"
     public let description = "Create a new task to track work. Returns the created task as JSON."
+    public let tags: Set<String> = ["tasks"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -341,6 +342,7 @@ public struct TaskCreateTool: PecanTool, Sendable {
 public struct TaskListTool: PecanTool, Sendable {
     public let name = "task_list"
     public let description = "List tasks. Optionally filter by status, label, or search text."
+    public let tags: Set<String> = ["tasks"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -400,6 +402,7 @@ public struct TaskListTool: PecanTool, Sendable {
 public struct TaskGetTool: PecanTool, Sendable {
     public let name = "task_get"
     public let description = "Get details of a specific task by ID."
+    public let tags: Set<String> = ["tasks"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -436,6 +439,7 @@ public struct TaskGetTool: PecanTool, Sendable {
 public struct TaskUpdateTool: PecanTool, Sendable {
     public let name = "task_update"
     public let description = "Update fields on an existing task. Only provided fields are changed."
+    public let tags: Set<String> = ["tasks"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -473,6 +477,7 @@ public struct TaskUpdateTool: PecanTool, Sendable {
 public struct TaskFocusTool: PecanTool, Sendable {
     public let name = "task_focus"
     public let description = "Set a task as the focused task shown in the UI chrome. Pass task_id 0 to unfocus all."
+    public let tags: Set<String> = ["tasks"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -497,6 +502,7 @@ public struct TaskFocusTool: PecanTool, Sendable {
 public struct WebFetchTool: PecanTool, Sendable {
     public let name = "web_fetch"
     public let description = "Fetch a web page via HTTP GET. Returns the status code and response body."
+    public let tags: Set<String> = ["web"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -570,6 +576,7 @@ public struct WebFetchTool: PecanTool, Sendable {
 public struct WebSearchTool: PecanTool, Sendable {
     public let name = "web_search"
     public let description = "Search the web using DuckDuckGo. Returns a list of result titles, URLs, and snippets."
+    public let tags: Set<String> = ["web"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -689,6 +696,7 @@ public struct WebSearchTool: PecanTool, Sendable {
 public struct HttpRequestTool: PecanTool, Sendable {
     public let name = "http_request"
     public let description = "Make an HTTP request (POST, PUT, PATCH, DELETE). Requires user approval before execution."
+    public let tags: Set<String> = ["web"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -779,6 +787,7 @@ public struct HttpRequestTool: PecanTool, Sendable {
 public struct MemoryAddTool: PecanTool, Sendable {
     public let name = "memory_add"
     public let description = "Store a persistent memory. Memories survive across sessions. Optionally tag for organization; tag as 'core' to inject into system prompt."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -809,6 +818,7 @@ public struct MemoryAddTool: PecanTool, Sendable {
 public struct MemoryGetTool: PecanTool, Sendable {
     public let name = "memory_get"
     public let description = "Get a specific memory by ID."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -829,6 +839,7 @@ public struct MemoryGetTool: PecanTool, Sendable {
 public struct MemoryListTool: PecanTool, Sendable {
     public let name = "memory_list"
     public let description = "List all memories, optionally filtered by tag."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -864,6 +875,7 @@ public struct MemoryListTool: PecanTool, Sendable {
 public struct MemorySearchTool: PecanTool, Sendable {
     public let name = "memory_search"
     public let description = "Search memories by content."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -891,6 +903,7 @@ public struct MemorySearchTool: PecanTool, Sendable {
 public struct MemoryUpdateTool: PecanTool, Sendable {
     public let name = "memory_update"
     public let description = "Update the content of an existing memory."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -915,6 +928,7 @@ public struct MemoryUpdateTool: PecanTool, Sendable {
 public struct MemoryDeleteTool: PecanTool, Sendable {
     public let name = "memory_delete"
     public let description = "Delete a memory by ID."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -939,6 +953,7 @@ public struct MemoryDeleteTool: PecanTool, Sendable {
 public struct MemoryTagTool: PecanTool, Sendable {
     public let name = "memory_tag"
     public let description = "Add a tag to a memory. Use 'core' tag to include in system prompt."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -965,6 +980,7 @@ public struct MemoryTagTool: PecanTool, Sendable {
 public struct MemoryUntagTool: PecanTool, Sendable {
     public let name = "memory_untag"
     public let description = "Remove a tag from a memory."
+    public let tags: Set<String> = ["memory"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -993,6 +1009,7 @@ public struct MemoryUntagTool: PecanTool, Sendable {
 public struct TriggerCreateTool: PecanTool, Sendable {
     public let name = "trigger_create"
     public let description = "Schedule a future instruction to yourself. One-shot by default; set interval_seconds for repeating."
+    public let tags: Set<String> = ["triggers"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -1029,6 +1046,7 @@ public struct TriggerCreateTool: PecanTool, Sendable {
 public struct TriggerListTool: PecanTool, Sendable {
     public let name = "trigger_list"
     public let description = "List scheduled triggers. Defaults to active triggers."
+    public let tags: Set<String> = ["triggers"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -1067,6 +1085,7 @@ public struct TriggerListTool: PecanTool, Sendable {
 public struct TriggerCancelTool: PecanTool, Sendable {
     public let name = "trigger_cancel"
     public let description = "Cancel an active trigger."
+    public let tags: Set<String> = ["triggers"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -1097,10 +1116,51 @@ private func parseHeaderArray(_ value: Any?) -> [(name: String, value: String)] 
     }
 }
 
+// MARK: - ActivateSkillTool
+
+public struct ActivateSkillTool: PecanTool, Sendable {
+    public let name = "activate_skill"
+    public let tags: Set<String> = ["skills"]
+    public let description = "Load a skill's full instructions into context. Use when a task matches a skill's description from the catalog."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "name": { "type": "string", "description": "The name of the skill to activate, as shown in the skill catalog." }
+        },
+        "required": ["name"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        guard let skillName = args["name"] as? String else {
+            throw ToolError.invalidArguments("Missing required parameter: name")
+        }
+
+        guard let result = await SkillManager.shared.activate(name: skillName) else {
+            throw ToolError.invalidArguments("Skill '\(skillName)' not found. Use the skill catalog to see available skills.")
+        }
+
+        return result
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        // Extract skill name from the XML tag
+        if let range = result.range(of: "name=\""),
+           let endRange = result[range.upperBound...].range(of: "\"") {
+            let name = result[range.upperBound..<endRange.lowerBound]
+            return "Activated skill: \(name)"
+        }
+        return "Skill activated"
+    }
+}
+
 // MARK: - CreateLuaToolTool
 
 public struct CreateLuaToolTool: PecanTool, Sendable {
     public let name = "create_lua_tool"
+    public let tags: Set<String> = ["meta"]
     public let description = """
         Dynamically create and register a new tool by providing a Lua script and JSON schema. \
         The new tool becomes available immediately for subsequent tool calls. \

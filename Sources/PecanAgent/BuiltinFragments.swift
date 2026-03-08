@@ -1,0 +1,110 @@
+import Foundation
+import PecanShared
+
+// MARK: - BaseIdentityFragment (priority 0)
+
+struct BaseIdentityFragment: PromptFragment, Sendable {
+    let id = "builtin.identity"
+    let name = "Identity"
+    let priority = 0
+
+    func render(context: PromptContext) async -> String? {
+        "You are a helpful coding assistant with access to tools for reading, writing, editing, and searching files, as well as running shell commands."
+    }
+}
+
+// MARK: - GuidelinesFragment (priority 100)
+
+struct GuidelinesFragment: PromptFragment, Sendable {
+    let id = "builtin.guidelines"
+    let name = "Guidelines"
+    let priority = 100
+
+    func render(context: PromptContext) async -> String? {
+        """
+        ## Guidelines
+        - Read files before editing them to understand existing code.
+        - Use search_files to locate relevant code before making changes.
+        - When editing, provide enough context in old_string to uniquely identify the target.
+        - Keep your answers concise unless asked otherwise.
+        - Use the bash tool for running builds, tests, git commands, and other shell operations.
+        """
+    }
+}
+
+// MARK: - CoreMemoriesFragment (priority 200)
+// Note: Core memories are injected as a separate system message via injectCoreMemories()
+// because they require TaskClient which needs the response loop running. This fragment
+// acts as a placeholder that renders nil — the actual injection happens asynchronously.
+
+struct CoreMemoriesFragment: PromptFragment, Sendable {
+    let id = "builtin.core_memories"
+    let name = "Core Memories"
+    let priority = 200
+
+    func render(context: PromptContext) async -> String? {
+        // Actual core memories are injected via injectCoreMemories() in a detached Task
+        // after registration, since TaskClient requires the response loop to be running.
+        nil
+    }
+}
+
+// MARK: - FocusedTaskFragment (priority 250)
+
+struct FocusedTaskFragment: PromptFragment, Sendable {
+    let id = "builtin.focused_task"
+    let name = "Focused Task"
+    let priority = 250
+
+    func render(context: PromptContext) async -> String? {
+        guard let task = context.focusedTask else { return nil }
+        return """
+        ## Focused Task
+        **[\(task.status)] #\(task.id): \(task.title)**
+        \(task.description)
+
+        Prioritize work related to this task. Update its status when progress is made.
+        """
+    }
+}
+
+// MARK: - ToolSummaryFragment (priority 300)
+
+struct ToolSummaryFragment: PromptFragment, Sendable {
+    let id = "builtin.tool_summary"
+    let name = "Tool Summary"
+    let priority = 300
+
+    func render(context: PromptContext) async -> String? {
+        let tools = await ToolManager.shared.allToolDescriptions(tags: context.activeToolTags)
+        guard !tools.isEmpty else { return nil }
+
+        var section = "## Available Tools"
+        for tool in tools {
+            section += "\n- **\(tool.name)**: \(tool.description)"
+        }
+        return section
+    }
+}
+
+// MARK: - SkillCatalogFragment (priority 350)
+
+struct SkillCatalogFragment: PromptFragment, Sendable {
+    let id = "builtin.skill_catalog"
+    let name = "Skill Catalog"
+    let priority = 350
+
+    func render(context: PromptContext) async -> String? {
+        let skills = await SkillManager.shared.catalog()
+        guard !skills.isEmpty else { return nil }
+
+        var section = "<available_skills>\n"
+        for skill in skills {
+            section += "  <skill><name>\(skill.name)</name><description>\(skill.description)</description></skill>\n"
+        }
+        section += "</available_skills>\n\n"
+        section += "When a user's request matches a skill's description, use the activate_skill tool to load its full instructions before proceeding."
+
+        return section
+    }
+}

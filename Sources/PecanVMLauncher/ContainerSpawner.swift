@@ -130,6 +130,8 @@ actor ContainerSpawner {
 
                 config.process.arguments = ["/opt/pecan/pecan-agent", sessionID, "/tmp/grpc.sock"]
                 config.process.workingDirectory = "/home/\(agentName)"
+                config.process.environmentVariables.append("HOME=/home/\(agentName)")
+                config.process.environmentVariables.append("USER=\(agentName)")
 
                 logger.debug("Container config for \(sessionID): cpus=\(config.cpus), memory=\(config.memoryInBytes), args=\(config.process.arguments)")
             }
