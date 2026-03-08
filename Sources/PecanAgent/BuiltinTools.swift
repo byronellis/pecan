@@ -293,6 +293,810 @@ public struct BashTool: PecanTool, Sendable {
     }
 }
 
+// MARK: - Task Tools
+
+public struct TaskCreateTool: PecanTool, Sendable {
+    public let name = "task_create"
+    public let description = "Create a new task to track work. Returns the created task as JSON."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "title": { "type": "string", "description": "Short task title/instruction." },
+            "description": { "type": "string", "description": "Optional longer description." },
+            "priority": { "type": "integer", "description": "1 (critical) to 5 (low). Default 3." },
+            "severity": { "type": "string", "description": "low, normal, high, or critical. Default normal." },
+            "labels": { "type": "string", "description": "Comma-separated labels." },
+            "due_date": { "type": "string", "description": "ISO 8601 due date or empty." }
+        },
+        "required": ["title"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        var payload: [String: Any] = ["title": args["title"] as? String ?? ""]
+        if let v = args["description"] as? String { payload["description"] = v }
+        if let v = args["priority"] as? Int { payload["priority"] = v }
+        if let v = args["severity"] as? String { payload["severity"] = v }
+        if let v = args["labels"] as? String { payload["labels"] = v }
+        if let v = args["due_date"] as? String { payload["due_date"] = v }
+        let result = try await TaskClient.shared.sendCommand(action: "create", payload: payload)
+        if let data = result.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            await HookManager.shared.fire(event: "task.created", data: obj)
+        }
+        return result
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let id = obj["id"] ?? "?"
+        let title = obj["title"] as? String ?? ""
+        return "Created task #\(id): \(title)"
+    }
+}
+
+public struct TaskListTool: PecanTool, Sendable {
+    public let name = "task_list"
+    public let description = "List tasks. Optionally filter by status, label, or search text."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "status": { "type": "string", "description": "Filter by status (todo, implementing, testing, preparing, done, blocked)." },
+            "label": { "type": "string", "description": "Filter by label." },
+            "search": { "type": "string", "description": "Search in title and description." }
+        }
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = (try? parseArguments(argumentsJSON)) ?? [:]
+        var payload: [String: Any] = [:]
+        if let v = args["status"] as? String { payload["status"] = v }
+        if let v = args["label"] as? String { payload["label"] = v }
+        if let v = args["search"] as? String { payload["search"] = v }
+        return try await TaskClient.shared.sendCommand(action: "list", payload: payload)
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        if arr.isEmpty { return "(no tasks)" }
+
+        // Build table rows
+        var rows: [(id: String, status: String, priority: String, title: String, labels: String)] = []
+        for task in arr {
+            let id = "#\(task["id"] ?? "?")"
+            let status = task["status"] as? String ?? ""
+            let priority = "P\(task["priority"] ?? 3)"
+            let title = task["title"] as? String ?? ""
+            let labels = task["labels"] as? String ?? ""
+            rows.append((id: id, status: status, priority: priority, title: title, labels: labels))
+        }
+
+        // Calculate column widths
+        let idW = max(2, rows.map(\.id.count).max() ?? 2)
+        let statusW = max(6, rows.map(\.status.count).max() ?? 6)
+        let prioW = max(4, rows.map(\.priority.count).max() ?? 4)
+        let titleW = max(5, rows.map(\.title.count).max() ?? 5)
+
+        func pad(_ s: String, _ w: Int) -> String {
+            s.padding(toLength: w, withPad: " ", startingAt: 0)
+        }
+
+        var lines: [String] = []
+        lines.append("\(pad("ID", idW)) | \(pad("Status", statusW)) | \(pad("Pri", prioW)) | \(pad("Title", titleW)) | Labels")
+        lines.append(String(repeating: "-", count: idW) + "-+-" + String(repeating: "-", count: statusW) + "-+-" + String(repeating: "-", count: prioW) + "-+-" + String(repeating: "-", count: titleW) + "-+-------")
+        for r in rows {
+            lines.append("\(pad(r.id, idW)) | \(pad(r.status, statusW)) | \(pad(r.priority, prioW)) | \(pad(r.title, titleW)) | \(r.labels)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+public struct TaskGetTool: PecanTool, Sendable {
+    public let name = "task_get"
+    public let description = "Get details of a specific task by ID."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "task_id": { "type": "integer", "description": "The task ID." }
+        },
+        "required": ["task_id"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let taskID = args["task_id"] as? Int ?? 0
+        return try await TaskClient.shared.sendCommand(action: "get", payload: ["task_id": taskID])
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        var lines: [String] = []
+        let id = obj["id"] ?? "?"
+        let title = obj["title"] as? String ?? ""
+        lines.append("Task #\(id): \(title)")
+        if let status = obj["status"] as? String { lines.append("  Status:   \(status)") }
+        if let priority = obj["priority"] { lines.append("  Priority: P\(priority)") }
+        if let severity = obj["severity"] as? String, !severity.isEmpty { lines.append("  Severity: \(severity)") }
+        if let labels = obj["labels"] as? String, !labels.isEmpty { lines.append("  Labels:   \(labels)") }
+        if let dueDate = obj["due_date"] as? String, !dueDate.isEmpty { lines.append("  Due:      \(dueDate)") }
+        if let desc = obj["description"] as? String, !desc.isEmpty { lines.append("  ---\n  \(desc)") }
+        return lines.joined(separator: "\n")
+    }
+}
+
+public struct TaskUpdateTool: PecanTool, Sendable {
+    public let name = "task_update"
+    public let description = "Update fields on an existing task. Only provided fields are changed."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "task_id": { "type": "integer", "description": "The task ID to update." },
+            "title": { "type": "string", "description": "New title." },
+            "description": { "type": "string", "description": "New description." },
+            "status": { "type": "string", "description": "New status: todo, implementing, testing, preparing, done, blocked." },
+            "priority": { "type": "integer", "description": "New priority 1-5." },
+            "severity": { "type": "string", "description": "New severity: low, normal, high, critical." },
+            "labels": { "type": "string", "description": "New labels (comma-separated)." },
+            "due_date": { "type": "string", "description": "New due date (ISO 8601)." },
+            "depends_on": { "type": "string", "description": "Dependencies (comma-separated sessionID:taskID)." }
+        },
+        "required": ["task_id"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        var payload: [String: Any] = ["task_id": args["task_id"] as? Int ?? 0]
+        for key in ["title", "description", "status", "severity", "labels", "due_date", "depends_on"] {
+            if let v = args[key] as? String { payload[key] = v }
+        }
+        if let v = args["priority"] as? Int { payload["priority"] = v }
+        let result = try await TaskClient.shared.sendCommand(action: "update", payload: payload)
+        if let data = result.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+            await HookManager.shared.fire(event: "task.updated", data: obj)
+        }
+        return result
+    }
+}
+
+public struct TaskFocusTool: PecanTool, Sendable {
+    public let name = "task_focus"
+    public let description = "Set a task as the focused task shown in the UI chrome. Pass task_id 0 to unfocus all."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "task_id": { "type": "integer", "description": "The task ID to focus, or 0 to unfocus." }
+        },
+        "required": ["task_id"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let taskID = args["task_id"] as? Int ?? 0
+        let result = try await TaskClient.shared.sendCommand(action: "focus", payload: ["task_id": taskID])
+        await HookManager.shared.fire(event: "task.focused", data: ["task_id": taskID])
+        return result
+    }
+}
+
+// MARK: - WebFetchTool
+
+public struct WebFetchTool: PecanTool, Sendable {
+    public let name = "web_fetch"
+    public let description = "Fetch a web page via HTTP GET. Returns the status code and response body."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "url": { "type": "string", "description": "The URL to fetch." },
+            "headers": {
+                "type": "array",
+                "description": "Optional HTTP headers.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["name", "value"]
+                }
+            },
+            "query_params": {
+                "type": "array",
+                "description": "Optional query parameters appended to the URL.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["name", "value"]
+                }
+            }
+        },
+        "required": ["url"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        guard let url = args["url"] as? String else {
+            throw ToolError.invalidArguments("Missing required parameter: url")
+        }
+
+        let headers = parseHeaderArray(args["headers"])
+        let queryParams = parseHeaderArray(args["query_params"])
+
+        let resp = try await HttpClient.shared.sendRequest(
+            method: "GET",
+            url: url,
+            headers: headers,
+            queryParams: queryParams,
+            requiresApproval: false
+        )
+
+        var body = resp.body
+        // Truncate to 50KB
+        if body.utf8.count > 50_000 {
+            body = String(body.prefix(50_000)) + "\n... (truncated)"
+        }
+
+        return "HTTP \(resp.statusCode)\n\(body)"
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        let lines = result.components(separatedBy: "\n")
+        if lines.count <= 21 { return nil }
+        let truncated = lines.prefix(21).joined(separator: "\n")
+        return truncated + "\n... (\(lines.count) lines total, truncated)"
+    }
+}
+
+// MARK: - WebSearchTool
+
+public struct WebSearchTool: PecanTool, Sendable {
+    public let name = "web_search"
+    public let description = "Search the web using DuckDuckGo. Returns a list of result titles, URLs, and snippets."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "query": { "type": "string", "description": "The search query." },
+            "num_results": { "type": "integer", "description": "Maximum number of results to return. Default 5." }
+        },
+        "required": ["query"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        guard let query = args["query"] as? String else {
+            throw ToolError.invalidArguments("Missing required parameter: query")
+        }
+
+        let numResults = args["num_results"] as? Int ?? 5
+
+        guard let encoded = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else {
+            throw ToolError.invalidArguments("Could not encode query.")
+        }
+
+        let searchURL = "https://html.duckduckgo.com/html/?q=\(encoded)"
+
+        let resp = try await HttpClient.shared.sendRequest(
+            method: "GET",
+            url: searchURL,
+            requiresApproval: false
+        )
+
+        let results = parseSearchResults(html: resp.body, maxResults: numResults)
+
+        let data = try JSONSerialization.data(withJSONObject: results)
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else { return nil }
+        if arr.isEmpty { return "(no results)" }
+        var lines: [String] = []
+        for (i, item) in arr.enumerated() {
+            let title = item["title"] ?? ""
+            let url = item["url"] ?? ""
+            let snippet = item["snippet"] ?? ""
+            lines.append("\(i + 1). [\(title)](\(url))\n   \(snippet)")
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func parseSearchResults(html: String, maxResults: Int) -> [[String: String]] {
+        var results: [[String: String]] = []
+
+        // Parse DuckDuckGo HTML results
+        // Results are in <a class="result__a" href="...">title</a>
+        // Snippets in <a class="result__snippet" ...>text</a>
+        let resultPattern = #"<a[^>]*class="result__a"[^>]*href="([^"]*)"[^>]*>(.*?)</a>"#
+        let snippetPattern = #"<a[^>]*class="result__snippet"[^>]*>(.*?)</a>"#
+
+        guard let resultRegex = try? NSRegularExpression(pattern: resultPattern, options: .dotMatchesLineSeparators),
+              let snippetRegex = try? NSRegularExpression(pattern: snippetPattern, options: .dotMatchesLineSeparators) else {
+            return results
+        }
+
+        let range = NSRange(html.startIndex..., in: html)
+        let resultMatches = resultRegex.matches(in: html, range: range)
+        let snippetMatches = snippetRegex.matches(in: html, range: range)
+
+        for (i, match) in resultMatches.prefix(maxResults).enumerated() {
+            guard let urlRange = Range(match.range(at: 1), in: html),
+                  let titleRange = Range(match.range(at: 2), in: html) else { continue }
+
+            var url = String(html[urlRange])
+            let title = stripHTML(String(html[titleRange]))
+
+            // DuckDuckGo wraps URLs in a redirect; extract the actual URL
+            if url.contains("uddg="), let extracted = extractDDGURL(url) {
+                url = extracted
+            }
+
+            var snippet = ""
+            if i < snippetMatches.count {
+                let sm = snippetMatches[i]
+                if let snippetRange = Range(sm.range(at: 1), in: html) {
+                    snippet = stripHTML(String(html[snippetRange]))
+                }
+            }
+
+            results.append(["title": title, "url": url, "snippet": snippet])
+        }
+
+        return results
+    }
+
+    private func stripHTML(_ text: String) -> String {
+        text.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func extractDDGURL(_ redirect: String) -> String? {
+        guard let components = URLComponents(string: redirect),
+              let uddg = components.queryItems?.first(where: { $0.name == "uddg" })?.value else {
+            return nil
+        }
+        return uddg.removingPercentEncoding ?? uddg
+    }
+}
+
+// MARK: - HttpRequestTool
+
+public struct HttpRequestTool: PecanTool, Sendable {
+    public let name = "http_request"
+    public let description = "Make an HTTP request (POST, PUT, PATCH, DELETE). Requires user approval before execution."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "method": { "type": "string", "description": "HTTP method: POST, PUT, PATCH, or DELETE." },
+            "url": { "type": "string", "description": "The URL to send the request to." },
+            "headers": {
+                "type": "array",
+                "description": "Optional HTTP headers.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["name", "value"]
+                }
+            },
+            "query_params": {
+                "type": "array",
+                "description": "Optional query parameters.",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": { "type": "string" },
+                        "value": { "type": "string" }
+                    },
+                    "required": ["name", "value"]
+                }
+            },
+            "body": { "type": "string", "description": "Request body content." }
+        },
+        "required": ["method", "url"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        guard let method = args["method"] as? String else {
+            throw ToolError.invalidArguments("Missing required parameter: method")
+        }
+        guard let url = args["url"] as? String else {
+            throw ToolError.invalidArguments("Missing required parameter: url")
+        }
+
+        let allowed = ["POST", "PUT", "PATCH", "DELETE"]
+        let upperMethod = method.uppercased()
+        guard allowed.contains(upperMethod) else {
+            throw ToolError.invalidArguments("Method must be one of: \(allowed.joined(separator: ", ")). Use web_fetch for GET requests.")
+        }
+
+        let headers = parseHeaderArray(args["headers"])
+        let queryParams = parseHeaderArray(args["query_params"])
+        let body = args["body"] as? String ?? ""
+
+        let resp = try await HttpClient.shared.sendRequest(
+            method: upperMethod,
+            url: url,
+            headers: headers,
+            queryParams: queryParams,
+            body: body,
+            requiresApproval: true
+        )
+
+        var responseHeaders = ""
+        for h in resp.responseHeaders {
+            responseHeaders += "\(h.name): \(h.value)\n"
+        }
+
+        var respBody = resp.body
+        if respBody.utf8.count > 50_000 {
+            respBody = String(respBody.prefix(50_000)) + "\n... (truncated)"
+        }
+
+        return "HTTP \(resp.statusCode)\n\(responseHeaders)\n\(respBody)"
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        let lines = result.components(separatedBy: "\n")
+        guard let firstLine = lines.first else { return nil }
+        let bodyLength = result.utf8.count
+        return "\(firstLine) — \(bodyLength) bytes"
+    }
+}
+
+// MARK: - Memory Tools
+
+public struct MemoryAddTool: PecanTool, Sendable {
+    public let name = "memory_add"
+    public let description = "Store a persistent memory. Memories survive across sessions. Optionally tag for organization; tag as 'core' to inject into system prompt."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "content": { "type": "string", "description": "The memory content to store." },
+            "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for organization. Use 'core' for system prompt injection." }
+        },
+        "required": ["content"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        var payload: [String: Any] = ["content": args["content"] as? String ?? ""]
+        if let tags = args["tags"] as? [String] { payload["tags"] = tags }
+        return try await TaskClient.shared.sendCommand(action: "memory_create", payload: payload)
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let id = obj["id"] ?? "?"
+        let tags = (obj["tags"] as? [String])?.joined(separator: ", ") ?? ""
+        return "Stored memory #\(id)\(tags.isEmpty ? "" : " [\(tags)]")"
+    }
+}
+
+public struct MemoryGetTool: PecanTool, Sendable {
+    public let name = "memory_get"
+    public let description = "Get a specific memory by ID."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "memory_id": { "type": "integer", "description": "The memory ID." }
+        },
+        "required": ["memory_id"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let memID = args["memory_id"] as? Int ?? 0
+        return try await TaskClient.shared.sendCommand(action: "memory_get", payload: ["memory_id": memID])
+    }
+}
+
+public struct MemoryListTool: PecanTool, Sendable {
+    public let name = "memory_list"
+    public let description = "List all memories, optionally filtered by tag."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "tag": { "type": "string", "description": "Optional tag to filter by." }
+        }
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = (try? parseArguments(argumentsJSON)) ?? [:]
+        var payload: [String: Any] = [:]
+        if let tag = args["tag"] as? String { payload["tag"] = tag }
+        return try await TaskClient.shared.sendCommand(action: "memory_list", payload: payload)
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        if arr.isEmpty { return "(no memories)" }
+        var lines: [String] = []
+        for mem in arr {
+            let id = mem["id"] ?? "?"
+            let content = mem["content"] as? String ?? ""
+            let tags = (mem["tags"] as? [String])?.joined(separator: ", ") ?? ""
+            let preview = content.count > 80 ? String(content.prefix(80)) + "..." : content
+            lines.append("#\(id) \(preview)\(tags.isEmpty ? "" : " [\(tags)]")")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+public struct MemorySearchTool: PecanTool, Sendable {
+    public let name = "memory_search"
+    public let description = "Search memories by content."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "query": { "type": "string", "description": "Search text to match against memory content." }
+        },
+        "required": ["query"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let query = args["query"] as? String ?? ""
+        return try await TaskClient.shared.sendCommand(action: "memory_search", payload: ["query": query])
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        if arr.isEmpty { return "(no matches)" }
+        return "\(arr.count) matching memor\(arr.count == 1 ? "y" : "ies")"
+    }
+}
+
+public struct MemoryUpdateTool: PecanTool, Sendable {
+    public let name = "memory_update"
+    public let description = "Update the content of an existing memory."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "memory_id": { "type": "integer", "description": "The memory ID to update." },
+            "content": { "type": "string", "description": "New content for the memory." }
+        },
+        "required": ["memory_id", "content"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let payload: [String: Any] = [
+            "memory_id": args["memory_id"] as? Int ?? 0,
+            "content": args["content"] as? String ?? ""
+        ]
+        return try await TaskClient.shared.sendCommand(action: "memory_update", payload: payload)
+    }
+}
+
+public struct MemoryDeleteTool: PecanTool, Sendable {
+    public let name = "memory_delete"
+    public let description = "Delete a memory by ID."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "memory_id": { "type": "integer", "description": "The memory ID to delete." }
+        },
+        "required": ["memory_id"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let memID = args["memory_id"] as? Int ?? 0
+        return try await TaskClient.shared.sendCommand(action: "memory_delete", payload: ["memory_id": memID])
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        return "Memory deleted."
+    }
+}
+
+public struct MemoryTagTool: PecanTool, Sendable {
+    public let name = "memory_tag"
+    public let description = "Add a tag to a memory. Use 'core' tag to include in system prompt."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "memory_id": { "type": "integer", "description": "The memory ID." },
+            "tag": { "type": "string", "description": "Tag to add." }
+        },
+        "required": ["memory_id", "tag"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let payload: [String: Any] = [
+            "memory_id": args["memory_id"] as? Int ?? 0,
+            "tag": args["tag"] as? String ?? ""
+        ]
+        return try await TaskClient.shared.sendCommand(action: "memory_tag", payload: payload)
+    }
+
+    public func formatResult(_ result: String) -> String? { "Tag added." }
+}
+
+public struct MemoryUntagTool: PecanTool, Sendable {
+    public let name = "memory_untag"
+    public let description = "Remove a tag from a memory."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "memory_id": { "type": "integer", "description": "The memory ID." },
+            "tag": { "type": "string", "description": "Tag to remove." }
+        },
+        "required": ["memory_id", "tag"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let payload: [String: Any] = [
+            "memory_id": args["memory_id"] as? Int ?? 0,
+            "tag": args["tag"] as? String ?? ""
+        ]
+        return try await TaskClient.shared.sendCommand(action: "memory_untag", payload: payload)
+    }
+
+    public func formatResult(_ result: String) -> String? { "Tag removed." }
+}
+
+// MARK: - Trigger Tools
+
+public struct TriggerCreateTool: PecanTool, Sendable {
+    public let name = "trigger_create"
+    public let description = "Schedule a future instruction to yourself. One-shot by default; set interval_seconds for repeating."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "instruction": { "type": "string", "description": "The instruction to deliver when the trigger fires." },
+            "fire_at": { "type": "string", "description": "ISO 8601 datetime for when to fire the trigger." },
+            "interval_seconds": { "type": "integer", "description": "If set, trigger repeats at this interval after firing. 0 means one-shot." }
+        },
+        "required": ["instruction", "fire_at"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        var payload: [String: Any] = [
+            "instruction": args["instruction"] as? String ?? "",
+            "fire_at": args["fire_at"] as? String ?? ""
+        ]
+        if let interval = args["interval_seconds"] as? Int { payload["interval_seconds"] = interval }
+        return try await TaskClient.shared.sendCommand(action: "trigger_create", payload: payload)
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+        let id = obj["id"] ?? "?"
+        let fireAt = obj["fire_at"] as? String ?? ""
+        let interval = obj["interval_seconds"] as? Int ?? 0
+        let repeatStr = interval > 0 ? " (repeats every \(interval)s)" : " (one-shot)"
+        return "Trigger #\(id) scheduled for \(fireAt)\(repeatStr)"
+    }
+}
+
+public struct TriggerListTool: PecanTool, Sendable {
+    public let name = "trigger_list"
+    public let description = "List scheduled triggers. Defaults to active triggers."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "status": { "type": "string", "description": "Filter by status: active, fired, cancelled. Default: active." }
+        }
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = (try? parseArguments(argumentsJSON)) ?? [:]
+        var payload: [String: Any] = [:]
+        if let status = args["status"] as? String { payload["status"] = status }
+        else { payload["status"] = "active" }
+        return try await TaskClient.shared.sendCommand(action: "trigger_list", payload: payload)
+    }
+
+    public func formatResult(_ result: String) -> String? {
+        guard let data = result.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return nil }
+        if arr.isEmpty { return "(no triggers)" }
+        var lines: [String] = []
+        for t in arr {
+            let id = t["id"] ?? "?"
+            let instruction = t["instruction"] as? String ?? ""
+            let fireAt = t["fire_at"] as? String ?? ""
+            let interval = t["interval_seconds"] as? Int ?? 0
+            let preview = instruction.count > 60 ? String(instruction.prefix(60)) + "..." : instruction
+            let repeatStr = interval > 0 ? " (every \(interval)s)" : ""
+            lines.append("#\(id) \(fireAt)\(repeatStr): \(preview)")
+        }
+        return lines.joined(separator: "\n")
+    }
+}
+
+public struct TriggerCancelTool: PecanTool, Sendable {
+    public let name = "trigger_cancel"
+    public let description = "Cancel an active trigger."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "trigger_id": { "type": "integer", "description": "The trigger ID to cancel." }
+        },
+        "required": ["trigger_id"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        let triggerID = args["trigger_id"] as? Int ?? 0
+        return try await TaskClient.shared.sendCommand(action: "trigger_cancel", payload: ["trigger_id": triggerID])
+    }
+
+    public func formatResult(_ result: String) -> String? { "Trigger cancelled." }
+}
+
+// MARK: - HTTP Tool Helpers
+
+private func parseHeaderArray(_ value: Any?) -> [(name: String, value: String)] {
+    guard let arr = value as? [[String: Any]] else { return [] }
+    return arr.compactMap { dict in
+        guard let name = dict["name"] as? String,
+              let value = dict["value"] as? String else { return nil }
+        return (name: name, value: value)
+    }
+}
+
 // MARK: - CreateLuaToolTool
 
 public struct CreateLuaToolTool: PecanTool, Sendable {

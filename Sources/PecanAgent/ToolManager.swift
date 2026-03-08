@@ -6,8 +6,13 @@ public protocol PecanTool: Sendable {
     var name: String { get }
     var description: String { get }
     var parametersJSONSchema: String { get }
-    
+
     func execute(argumentsJSON: String) async throws -> String
+    func formatResult(_ result: String) -> String?
+}
+
+extension PecanTool {
+    public func formatResult(_ result: String) -> String? { return nil }
 }
 
 public actor ToolManager {
@@ -56,7 +61,32 @@ public actor ToolManager {
         register(tool: EditFileTool())
         register(tool: SearchFilesTool())
         register(tool: BashTool())
+        register(tool: WebFetchTool())
+        register(tool: WebSearchTool())
+        register(tool: HttpRequestTool())
         register(tool: CreateLuaToolTool())
+        register(tool: TaskCreateTool())
+        register(tool: TaskListTool())
+        register(tool: TaskGetTool())
+        register(tool: TaskUpdateTool())
+        register(tool: TaskFocusTool())
+        // Memory tools
+        register(tool: MemoryAddTool())
+        register(tool: MemoryGetTool())
+        register(tool: MemoryListTool())
+        register(tool: MemorySearchTool())
+        register(tool: MemoryUpdateTool())
+        register(tool: MemoryDeleteTool())
+        register(tool: MemoryTagTool())
+        register(tool: MemoryUntagTool())
+        // Trigger tools
+        register(tool: TriggerCreateTool())
+        register(tool: TriggerListTool())
+        register(tool: TriggerCancelTool())
+    }
+
+    public func formatToolResult(name: String, result: String) -> String? {
+        tools[name]?.formatResult(result)
     }
 
     public func allToolDescriptions() -> [(name: String, description: String)] {
@@ -68,32 +98,92 @@ public actor ToolManager {
         let fm = FileManager.default
         let homeDir = fm.homeDirectoryForCurrentUser
         let toolsPath = homeDir.appendingPathComponent(".pecan/tools")
-        
+
         if !fm.fileExists(atPath: toolsPath.path) {
             try? fm.createDirectory(at: toolsPath, withIntermediateDirectories: true)
         }
-        
+
         guard let files = try? fm.contentsOfDirectory(atPath: toolsPath.path) else { return }
-        
+
         for file in files where file.hasSuffix(".lua") {
-            let name = (file as NSString).deletingPathExtension
+            let fileBaseName = (file as NSString).deletingPathExtension
             let luaURL = toolsPath.appendingPathComponent(file)
-            let jsonURL = toolsPath.appendingPathComponent("\(name).json")
-            
-            if let script = try? String(contentsOf: luaURL, encoding: .utf8),
-               let schemaJSON = try? String(contentsOf: jsonURL, encoding: .utf8) {
-                
-                // Extract description from JSON schema (or default it)
+            let jsonURL = toolsPath.appendingPathComponent("\(fileBaseName).json")
+
+            guard let script = try? String(contentsOf: luaURL, encoding: .utf8) else { continue }
+
+            // Try to detect module pattern by running the script and checking the return type
+            if let moduleInfo = detectLuaModule(script: script, fallbackName: fileBaseName) {
+                // Module-style tool: metadata from the module table itself
+                let toolName = moduleInfo.name ?? fileBaseName
+                let toolDesc = moduleInfo.description ?? "A Lua tool."
+                let toolSchema = moduleInfo.schema ?? "{\"type\":\"object\",\"properties\":{}}"
+
+                let tool = LuaTool(name: toolName, description: toolDesc, parametersJSONSchema: toolSchema, mode: .module(script: script))
+                register(tool: tool)
+            } else if let schemaJSON = try? String(contentsOf: jsonURL, encoding: .utf8) {
+                // Legacy function-style with JSON sidecar
                 var description = "A Lua tool."
                 if let data = schemaJSON.data(using: .utf8),
                    let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let desc = obj["description"] as? String {
                     description = desc
                 }
-                
-                let tool = LuaTool(name: name, description: description, parametersJSONSchema: schemaJSON, script: script)
+
+                let tool = LuaTool(name: fileBaseName, description: description, parametersJSONSchema: schemaJSON, script: script)
                 register(tool: tool)
             }
+            // If neither module nor sidecar JSON, skip the file
         }
+    }
+
+    /// Detect whether a Lua script returns a module table with an `execute` function.
+    /// Returns metadata extracted from the table, or nil if it's not a module.
+    private struct LuaModuleInfo {
+        var name: String?
+        var description: String?
+        var schema: String?
+    }
+
+    private func detectLuaModule(script: String, fallbackName: String) -> LuaModuleInfo? {
+        let L = LuaState(libraries: .all)
+        defer { L.close() }
+
+        do {
+            try L.load(string: script, name: fallbackName)
+            try L.pcall(nargs: 0, nret: 1)
+        } catch {
+            return nil
+        }
+
+        // Check if result is a table
+        guard L.type(-1) == .table else { return nil }
+
+        // Must have "execute" function
+        L.push("execute")
+        L.rawget(-2)
+        let hasExecute = L.type(-1) == .function
+        L.pop(1)
+        guard hasExecute else { return nil }
+
+        var info = LuaModuleInfo()
+
+        // Extract optional metadata fields
+        L.push("name")
+        L.rawget(-2)
+        if let n = L.tostring(-1) { info.name = n }
+        L.pop(1)
+
+        L.push("description")
+        L.rawget(-2)
+        if let d = L.tostring(-1) { info.description = d }
+        L.pop(1)
+
+        L.push("schema")
+        L.rawget(-2)
+        if let s = L.tostring(-1) { info.schema = s }
+        L.pop(1)
+
+        return info
     }
 }

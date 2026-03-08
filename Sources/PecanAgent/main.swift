@@ -6,6 +6,23 @@ import Logging
 
 let logger = Logger(label: "com.pecan.agent")
 
+/// Serializes all writes to the gRPC request stream to prevent concurrent send crashes.
+actor StreamWriter {
+    private let stream: GRPCAsyncRequestStreamWriter<Pecan_AgentEvent>
+
+    init(_ stream: GRPCAsyncRequestStreamWriter<Pecan_AgentEvent>) {
+        self.stream = stream
+    }
+
+    func send(_ msg: Pecan_AgentEvent) async throws {
+        try await stream.send(msg)
+    }
+
+    func finish() {
+        stream.finish()
+    }
+}
+
 func buildSystemPrompt() async -> String {
     var prompt = """
     You are a helpful coding assistant with access to tools for reading, writing, editing, and searching files, as well as running shell commands.
@@ -25,7 +42,41 @@ func buildSystemPrompt() async -> String {
         prompt += "\n- **\(tool.name)**: \(tool.description)"
     }
 
+    // Fetch core memories and append to system prompt
+    do {
+        let coreResult = try await TaskClient.shared.sendCommand(action: "memory_list", payload: ["tag": "core"])
+        if let data = coreResult.data(using: .utf8),
+           let memories = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+           !memories.isEmpty {
+            prompt += "\n\n## Core Memories\n"
+            for mem in memories {
+                let content = mem["content"] as? String ?? ""
+                prompt += "\n- \(content)"
+            }
+        }
+    } catch {
+        // Core memories are best-effort; don't fail boot if unavailable
+        logger.debug("Could not fetch core memories: \(error)")
+    }
+
     return prompt
+}
+
+/// Send a JSON-structured progress message to the server for the UI to parse.
+func sendTypedProgress(
+    _ writer: StreamWriter,
+    type: String,
+    fields: [String: String] = [:]
+) async throws {
+    var dict = fields
+    dict["type"] = type
+    let data = try JSONSerialization.data(withJSONObject: dict)
+    let json = String(data: data, encoding: .utf8)!
+    var msg = Pecan_AgentEvent()
+    var prog = Pecan_TaskProgress()
+    prog.statusMessage = json
+    msg.progress = prog
+    try await writer.send(msg)
 }
 
 func main() async throws {
@@ -39,9 +90,10 @@ func main() async throws {
     let hostAddress = args.count > 2 ? args[2] : "127.0.0.1"
     let agentID = UUID().uuidString
 
-    // Register built-in tools, then load user Lua tools
+    // Register built-in tools, then load user Lua tools, then hooks
     await ToolManager.shared.registerBuiltinTools()
     await ToolManager.shared.loadTools()
+    await HookManager.shared.loadHooks()
 
     // Setup gRPC Client
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
@@ -89,14 +141,23 @@ func main() async throws {
     
     // Open Bidirectional Stream
     let call = client.makeConnectCall()
-    
+    let writer = StreamWriter(call.requestStream)
+
+    // Configure TaskClient and HttpClient with the send callback
+    await TaskClient.shared.configure { msg in
+        try await writer.send(msg)
+    }
+    await HttpClient.shared.configure { msg in
+        try await writer.send(msg)
+    }
+
     // Register
     var regMsg = Pecan_AgentEvent()
     var reg = Pecan_AgentRegistration()
     reg.agentID = agentID
     reg.sessionID = sessionID
     regMsg.register = reg
-    try await call.requestStream.send(regMsg)
+    try await writer.send(regMsg)
     
     var availableModels: [String] = []
     
@@ -106,20 +167,25 @@ func main() async throws {
             switch command.payload {
             case .registrationResponse(let resp):
                 logger.info("Registration successful: \(resp.success)")
-                
+
+                await HookManager.shared.fire(event: "agent.registered", data: [
+                    "agent_id": agentID,
+                    "session_id": sessionID
+                ])
+
                 // Immediately send a progress update that we are alive
                 var progMsg = Pecan_AgentEvent()
                 var prog = Pecan_TaskProgress()
                 prog.statusMessage = "Agent booted and registered!"
                 progMsg.progress = prog
-                try await call.requestStream.send(progMsg)
+                try await writer.send(progMsg)
                 
                 // Ask for models
                 var modelsReqMsg = Pecan_AgentEvent()
                 var modelsReq = Pecan_GetModelsRequest()
                 modelsReq.requestID = UUID().uuidString
                 modelsReqMsg.getModels = modelsReq
-                try await call.requestStream.send(modelsReqMsg)
+                try await writer.send(modelsReqMsg)
                 
                 // Add a system prompt to context
                 var ctxMsg = Pecan_AgentEvent()
@@ -134,7 +200,7 @@ func main() async throws {
                 addMsg.content = systemPrompt
                 ctxCmd.addMessage = addMsg
                 ctxMsg.contextCommand = ctxCmd
-                try await call.requestStream.send(ctxMsg)
+                try await writer.send(ctxMsg)
                 
             case .modelsResponse(let resp):
                 availableModels = resp.models.map { $0.key }
@@ -156,14 +222,17 @@ func main() async throws {
                 addMsg.content = input.text
                 ctxCmd.addMessage = addMsg
                 ctxMsg.contextCommand = ctxCmd
-                try await call.requestStream.send(ctxMsg)
+                try await writer.send(ctxMsg)
                 
+                // Signal thinking to UI
+                try await sendTypedProgress(writer, type: "thinking")
+
                 // Request completion
                 var reqMsg = Pecan_AgentEvent()
                 var compReq = Pecan_LLMCompletionRequest()
                 compReq.requestID = UUID().uuidString
                 compReq.modelKey = ""
-                
+
                 if let toolData = try? await ToolManager.shared.getToolDefinitions(),
                    let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
                    !toolDefs.isEmpty {
@@ -179,7 +248,7 @@ func main() async throws {
                 }
 
                 reqMsg.completionRequest = compReq
-                try await call.requestStream.send(reqMsg)
+                try await writer.send(reqMsg)
                 logger.info("Sent LLM request to server using default model.")
                 
             case .completionResponse(let resp):
@@ -233,19 +302,45 @@ func main() async throws {
                     
                     ctxCmd.addMessage = addMsg
                     ctxMsg.contextCommand = ctxCmd
-                    try await call.requestStream.send(ctxMsg)
+                    try await writer.send(ctxMsg)
                 }
                 
                 // 2. Execute tools or send final output to UI
+                // Tool execution runs in a separate Task so the response loop
+                // stays free to deliver TaskResponse messages (needed by task_* tools).
                 if !toolCallsToExecute.isEmpty {
-                    for toolCall in toolCallsToExecute {
-                        if let function = toolCall["function"] as? [String: Any],
-                           let name = function["name"] as? String,
-                           let arguments = function["arguments"] as? String,
-                           let callId = toolCall["id"] as? String {
-                            
+                    // Extract into Sendable struct before crossing Task boundary
+                    struct ToolCallInfo: Sendable {
+                        let name: String
+                        let arguments: String
+                        let callId: String
+                    }
+                    let parsedCalls: [ToolCallInfo] = toolCallsToExecute.compactMap { toolCall in
+                        guard let function = toolCall["function"] as? [String: Any],
+                              let name = function["name"] as? String,
+                              let arguments = function["arguments"] as? String,
+                              let callId = toolCall["id"] as? String else { return nil }
+                        return ToolCallInfo(name: name, arguments: arguments, callId: callId)
+                    }
+                    Task {
+                        for tc in parsedCalls {
+                            let name = tc.name
+                            let arguments = tc.arguments
+                            let callId = tc.callId
+
                             logger.info("Executing tool: \(name) locally")
-                            
+
+                            // Signal tool_call to UI
+                            try await sendTypedProgress(writer, type: "tool_call", fields: [
+                                "name": name,
+                                "arguments": arguments
+                            ])
+
+                            await HookManager.shared.fire(event: "tool.before", data: [
+                                "name": name,
+                                "arguments": arguments
+                            ])
+
                             var resultStr = ""
                             do {
                                 resultStr = try await ToolManager.shared.executeTool(name: name, argumentsJSON: arguments)
@@ -253,7 +348,21 @@ func main() async throws {
                                 logger.error("Local tool execution failed: \(error)")
                                 resultStr = "Error: \(error.localizedDescription)"
                             }
-                            
+
+                            await HookManager.shared.fire(event: "tool.after", data: [
+                                "name": name,
+                                "arguments": arguments,
+                                "result": resultStr
+                            ])
+
+                            // Signal tool_result to UI
+                            let formatted = await ToolManager.shared.formatToolResult(name: name, result: resultStr)
+                            try await sendTypedProgress(writer, type: "tool_result", fields: [
+                                "name": name,
+                                "result": resultStr,
+                                "formatted": formatted ?? ""
+                            ])
+
                             // Add tool result to context
                             var ctxMsg = Pecan_AgentEvent()
                             var ctxCmd = Pecan_ContextCommand()
@@ -262,54 +371,67 @@ func main() async throws {
                             addMsg.section = .conversation
                             addMsg.role = "tool"
                             addMsg.content = resultStr
-                            
+
                             // Pass the tool_call_id via metadata
                             let meta: [String: Any] = ["tool_call_id": callId]
                             if let metaData = try? JSONSerialization.data(withJSONObject: meta),
                                let metaStr = String(data: metaData, encoding: .utf8) {
                                 addMsg.metadataJson = metaStr
                             }
-                            
+
                             ctxCmd.addMessage = addMsg
                             ctxMsg.contextCommand = ctxCmd
-                            try await call.requestStream.send(ctxMsg)
+                            try await writer.send(ctxMsg)
                         }
-                    }
-                    
-                    // Request next completion from LLM after the tool has run
-                    var reqMsg = Pecan_AgentEvent()
-                    var compReq = Pecan_LLMCompletionRequest()
-                    compReq.requestID = UUID().uuidString
-                    compReq.modelKey = "" 
-                    
-                    if let toolData = try? await ToolManager.shared.getToolDefinitions(),
-                       let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
-                       !toolDefs.isEmpty {
-                        let params = ["tools": toolDefs]
-                        if let data = try? JSONSerialization.data(withJSONObject: params),
-                           let str = String(data: data, encoding: .utf8) {
-                            compReq.paramsJson = str
+
+                        // Signal thinking again before next LLM call
+                        try await sendTypedProgress(writer, type: "thinking")
+
+                        // Request next completion from LLM after the tools have run
+                        var reqMsg = Pecan_AgentEvent()
+                        var compReq = Pecan_LLMCompletionRequest()
+                        compReq.requestID = UUID().uuidString
+                        compReq.modelKey = ""
+
+                        if let toolData = try? await ToolManager.shared.getToolDefinitions(),
+                           let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
+                           !toolDefs.isEmpty {
+                            let params = ["tools": toolDefs]
+                            if let data = try? JSONSerialization.data(withJSONObject: params),
+                               let str = String(data: data, encoding: .utf8) {
+                                compReq.paramsJson = str
+                            }
+                        } else {
+                            compReq.paramsJson = ""
                         }
-                    } else {
-                        compReq.paramsJson = ""
+
+                        reqMsg.completionRequest = compReq
+                        try await writer.send(reqMsg)
                     }
-                    
-                    reqMsg.completionRequest = compReq
-                    try await call.requestStream.send(reqMsg)
-                    
+
                 } else {
-                    var respMsg = Pecan_AgentEvent()
-                    var prog = Pecan_TaskProgress()
-                    prog.statusMessage = finalText
-                    respMsg.progress = prog
-                    try await call.requestStream.send(respMsg)
+                    // Send structured response for UI
+                    try await sendTypedProgress(writer, type: "response", fields: [
+                        "text": finalText
+                    ])
                 }
                 
+            case .taskResponse(let resp):
+                logger.debug("Received task_response for \(resp.requestID)")
+                await TaskClient.shared.handleResponse(resp)
+
+            case .httpResponse(let resp):
+                logger.debug("Received http_response for \(resp.requestID)")
+                await HttpClient.shared.handleResponse(resp)
+
             case .toolResponse(let resp):
                 logger.info("Received tool_response from server for \(resp.requestID) - currently unused by local tool execution flow")
                 
             case .shutdown(let req):
                 logger.warning("Received shutdown command: \(req.reason)")
+                await HookManager.shared.fire(event: "agent.shutdown", data: [
+                    "reason": req.reason
+                ])
                 break
                 
             case nil:
@@ -320,7 +442,7 @@ func main() async throws {
         logger.error("Disconnected from server: \(error)")
     }
     
-    call.requestStream.finish()
+    await writer.finish()
     logger.info("Pecan Agent Shutting Down.")
     
     try await channel.close().get()

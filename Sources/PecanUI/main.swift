@@ -1,93 +1,688 @@
 import Foundation
+#if canImport(Darwin)
+import Darwin
+#elseif canImport(Glibc)
+import Glibc
+#endif
 import ANSITerminal
 import GRPC
 import NIO
 import PecanShared
 
+// ANSI helpers
+let ansiReset = "\u{001B}[0m"
+let ansiBold = "\u{001B}[1m"
+let ansiDim = "\u{001B}[2m"
+let ansiItalic = "\u{001B}[3m"
+let ansiCyan = "\u{001B}[36m"
+let ansiGreen = "\u{001B}[32m"
+let ansiBoldOff = "\u{001B}[22m"
+let ansiItalicOff = "\u{001B}[23m"
+let ansiDimOff = "\u{001B}[22m"
+
+/// Check if a line looks like a markdown table row (starts and ends with |, or starts with |)
+func isTableRow(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    return trimmed.hasPrefix("|") && trimmed.contains("|")
+}
+
+/// Check if a line is a table separator row like |---|---|
+func isTableSeparator(_ line: String) -> Bool {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    guard trimmed.hasPrefix("|") else { return false }
+    let inner = trimmed.trimmingCharacters(in: CharacterSet(charactersIn: "|"))
+    return inner.allSatisfy { $0 == "-" || $0 == ":" || $0 == "|" || $0 == " " }
+}
+
+/// Parse a table row into cells
+func parseTableCells(_ line: String) -> [String] {
+    let trimmed = line.trimmingCharacters(in: .whitespaces)
+    // Split by |, dropping the first/last empty elements from leading/trailing |
+    var parts = trimmed.split(separator: "|", omittingEmptySubsequences: false).map {
+        String($0).trimmingCharacters(in: .whitespaces)
+    }
+    // Remove empty first/last from leading/trailing |
+    if let first = parts.first, first.isEmpty { parts.removeFirst() }
+    if let last = parts.last, last.isEmpty { parts.removeLast() }
+    return parts
+}
+
+/// Render collected markdown table lines into box-drawn table
+func renderTable(_ tableLines: [String]) -> [String] {
+    // Separate header, separator, and body rows
+    var headerCells: [String]? = nil
+    var bodyRows: [[String]] = []
+    var foundSeparator = false
+
+    for line in tableLines {
+        if isTableSeparator(line) {
+            foundSeparator = true
+            continue
+        }
+        let cells = parseTableCells(line)
+        if !foundSeparator && headerCells == nil {
+            headerCells = cells
+        } else {
+            bodyRows.append(cells)
+        }
+    }
+
+    // If no separator was found, treat all rows as body (no header distinction)
+    if !foundSeparator, let h = headerCells {
+        bodyRows.insert(h, at: 0)
+        headerCells = nil
+    }
+
+    let allRows: [[String]] = (headerCells.map { [$0] } ?? []) + bodyRows
+    guard !allRows.isEmpty else { return [] }
+
+    // Compute column count and widths
+    let colCount = allRows.map(\.count).max() ?? 0
+    guard colCount > 0 else { return [] }
+
+    // Pad rows to uniform column count
+    let paddedRows = allRows.map { row -> [String] in
+        var r = row
+        while r.count < colCount { r.append("") }
+        return r
+    }
+
+    var colWidths = [Int](repeating: 0, count: colCount)
+    for row in paddedRows {
+        for (i, cell) in row.enumerated() {
+            colWidths[i] = max(colWidths[i], cell.count)
+        }
+    }
+    // Minimum width of 3 for aesthetics
+    colWidths = colWidths.map { max($0, 3) }
+
+    func horizontalLine(left: String, mid: String, right: String, fill: String) -> String {
+        let segments = colWidths.map { fill + String(repeating: "─", count: $0) + fill }
+        return "\(ansiDim)\(left)\(segments.joined(separator: mid))\(right)\(ansiReset)"
+    }
+
+    func dataRow(_ cells: [String], bold: Bool = false) -> String {
+        let formatted = cells.enumerated().map { (i, cell) -> String in
+            let padded = cell.padding(toLength: colWidths[i], withPad: " ", startingAt: 0)
+            return bold ? "\(ansiBold)\(padded)\(ansiReset)" : padded
+        }
+        let inner = formatted.map { " \($0) " }.joined(separator: "\(ansiDim)│\(ansiReset)")
+        return "\(ansiDim)│\(ansiReset)\(inner)\(ansiDim)│\(ansiReset)"
+    }
+
+    var output: [String] = []
+    output.append(horizontalLine(left: "┌", mid: "┬", right: "┐", fill: "─"))
+
+    if let header = headerCells {
+        var padded = header
+        while padded.count < colCount { padded.append("") }
+        output.append(dataRow(padded, bold: true))
+        output.append(horizontalLine(left: "├", mid: "┼", right: "┤", fill: "─"))
+    }
+
+    for row in (headerCells != nil ? bodyRows : paddedRows) {
+        var padded = row
+        while padded.count < colCount { padded.append("") }
+        output.append(dataRow(padded))
+    }
+
+    output.append(horizontalLine(left: "└", mid: "┴", right: "┘", fill: "─"))
+    return output
+}
+
+/// Apply inline markdown formatting (code, bold, italic) to a line
+func applyInlineFormatting(_ line: String) -> String {
+    var processed = line
+
+    // Inline code: `code`
+    let codeRegex = try! NSRegularExpression(pattern: "`([^`]+)`")
+    let codeRange = NSRange(location: 0, length: processed.utf16.count)
+    processed = codeRegex.stringByReplacingMatches(in: processed, options: [], range: codeRange, withTemplate: "\(ansiDim)$1\(ansiReset)")
+
+    // Bold: **text**
+    let boldRegex = try! NSRegularExpression(pattern: "\\*\\*(.*?)\\*\\*")
+    let boldRange = NSRange(location: 0, length: processed.utf16.count)
+    processed = boldRegex.stringByReplacingMatches(in: processed, options: [], range: boldRange, withTemplate: "\(ansiBold)$1\(ansiBoldOff)")
+
+    // Italics: *text*
+    let italicRegex = try! NSRegularExpression(pattern: "(?<!\\\\)\\*(.+?)\\*")
+    let italicRange = NSRange(location: 0, length: processed.utf16.count)
+    processed = italicRegex.stringByReplacingMatches(in: processed, options: [], range: italicRange, withTemplate: "\(ansiItalic)$1\(ansiItalicOff)")
+
+    return processed
+}
+
 // Helper to format basic Markdown to ANSI
 func formatMarkdown(_ text: String) -> String {
-    // A very naive markdown formatter just for bold and italics
-    // Real implementation would use a proper Markdown parser
-    var formatted = text
-    
-    // Bold: **text** -> \u{001B}[1mtext\u{001B}[22m
-    let boldRegex = try! NSRegularExpression(pattern: "\\*\\*(.*?)\\*\\*")
-    let boldRange = NSRange(location: 0, length: formatted.utf16.count)
-    formatted = boldRegex.stringByReplacingMatches(in: formatted, options: [], range: boldRange, withTemplate: "\u{001B}[1m$1\u{001B}[22m")
-    
-    // Italics: *text* -> \u{001B}[3mtext\u{001B}[23m
-    let italicRegex = try! NSRegularExpression(pattern: "\\*(.*?)\\*")
-    let italicRange = NSRange(location: 0, length: formatted.utf16.count)
-    formatted = italicRegex.stringByReplacingMatches(in: formatted, options: [], range: italicRange, withTemplate: "\u{001B}[3m$1\u{001B}[23m")
-    
-    return formatted
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    var result: [String] = []
+    var inCodeBlock = false
+    var tableBuffer: [String] = []
+
+    for line in lines {
+        // Flush table buffer if current line is not a table row
+        if !tableBuffer.isEmpty && !isTableRow(line) {
+            result.append(contentsOf: renderTable(tableBuffer))
+            tableBuffer.removeAll()
+        }
+
+        if line.hasPrefix("```") {
+            if inCodeBlock {
+                result.append("\(ansiDim)└──────────────────────────────\(ansiReset)")
+                inCodeBlock = false
+            } else {
+                let lang = String(line.dropFirst(3)).trimmingCharacters(in: .whitespaces)
+                let header = lang.isEmpty ? "" : " \(lang)"
+                result.append("\(ansiDim)┌──\(header)──────────────────────────\(ansiReset)")
+                inCodeBlock = true
+            }
+            continue
+        }
+
+        if inCodeBlock {
+            result.append("\(ansiDim)│\(ansiReset) \(line)")
+            continue
+        }
+
+        // Collect table rows
+        if isTableRow(line) {
+            tableBuffer.append(line)
+            continue
+        }
+
+        // Headers
+        if line.hasPrefix("### ") {
+            result.append("\(ansiBold)\(ansiDim)\(String(line.dropFirst(4)))\(ansiReset)")
+            continue
+        }
+        if line.hasPrefix("## ") {
+            result.append("\(ansiBold)\(String(line.dropFirst(3)))\(ansiReset)")
+            continue
+        }
+        if line.hasPrefix("# ") {
+            result.append("\(ansiBold)\(ansiCyan)\(String(line.dropFirst(2)))\(ansiReset)")
+            continue
+        }
+
+        // Horizontal rule
+        if line == "---" || line == "***" || line == "___" {
+            result.append("\(ansiDim)────────────────────────────────\(ansiReset)")
+            continue
+        }
+
+        // Bullet lists
+        var processed = line
+        if let range = processed.range(of: #"^(\s*)[*\-] "#, options: .regularExpression) {
+            let indent = String(processed[processed.startIndex..<range.lowerBound])
+            let rest = String(processed[range.upperBound...])
+            processed = "\(indent)  • \(rest)"
+        }
+
+        result.append(applyInlineFormatting(processed))
+    }
+
+    // Flush any remaining table at end of input
+    if !tableBuffer.isEmpty {
+        result.append(contentsOf: renderTable(tableBuffer))
+    }
+
+    // Close unclosed code block
+    if inCodeBlock {
+        result.append("\(ansiDim)└──────────────────────────────\(ansiReset)")
+    }
+
+    return result.joined(separator: "\r\n")
 }
+
+/// Format a tool call arguments JSON string into readable key: value lines
+func formatToolArguments(_ argsJSON: String) -> String {
+    guard let data = argsJSON.data(using: .utf8),
+          let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+        return argsJSON
+    }
+    return dict.map { key, value in
+        let valStr: String
+        if let s = value as? String {
+            valStr = s
+        } else if (value is [Any] || value is [String: Any]),
+                  let data = try? JSONSerialization.data(withJSONObject: value),
+                  let s = String(data: data, encoding: .utf8) {
+            valStr = s
+        } else {
+            valStr = "\(value)"
+        }
+        return "\(ansiDim)│\(ansiReset) \(key): \(ansiDim)\(valStr)\(ansiReset)"
+    }.joined(separator: "\r\n")
+}
+
+/// Truncate multi-line text to a max number of lines
+func truncateResult(_ text: String, maxLines: Int = 10) -> String {
+    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+    if lines.count <= maxLines {
+        return lines.map { "\(ansiDim)│\(ansiReset) \(ansiDim)\($0)\(ansiReset)" }.joined(separator: "\r\n")
+    }
+    let shown = lines.prefix(maxLines).map { "\(ansiDim)│\(ansiReset) \(ansiDim)\($0)\(ansiReset)" }
+    return (shown + ["\(ansiDim)│ ... (\(lines.count - maxLines) more lines)\(ansiReset)"]).joined(separator: "\r\n")
+}
+
+/// ANSI 256-color background for user input lines (dark gray)
+let ansiUserInputBg = "\u{001B}[48;5;236m"
+/// Prompt character
+let promptChar = "❯"
+
+/// Get the current terminal width via ioctl
+func terminalWidth() -> Int {
+    var ws = winsize()
+    if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &ws) == 0, ws.ws_col > 0 {
+        return Int(ws.ws_col)
+    }
+    return 80
+}
+
+/// Team icon (unicode house, not emoji)
+let teamIcon = "\u{2302}"
+/// Powerline separator
+let plSep = "\u{E0B0}"
 
 actor TerminalManager {
     static let shared = TerminalManager()
-    
+
+    static let throbberFrames = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+
     var currentInputBuffer = ""
     var cursorPosition = 0
-    var prompt = "> "
-    
-    func printMessage(_ message: String) {
-        // Clear current line
-        print("\r\u{1B}[K", terminator: "")
-        // Print message
-        print(message + "\r", terminator: "\n")
-        // Redraw input line
-        redrawInput()
+    var throbberTask: Task<Void, Never>?
+    var inputActive = false
+
+    // Chrome state
+    var agents: [(name: String, isActive: Bool)] = []
+    var chromeVisible = false
+    /// Which chrome line the cursor is on: 2 = prompt, 3 = status bar
+    var cursorChromeLine = 2
+    /// Currently focused task title for the active agent
+    var focusedTaskTitle: String?
+
+    // Agent picker state
+    var pickerVisible = false
+    var pickerSelection = 0
+
+    // MARK: - Throbber
+
+    func startThrobber(message: String) {
+        stopThrobberSync()
+        // Draw separator + throbber line + status bar if not already visible
+        if !chromeVisible && !agents.isEmpty {
+            let width = terminalWidth()
+            let separator = "\(ansiDim)\(String(repeating: "─", count: width))\(ansiReset)"
+            print(separator + "\r", terminator: "\n")
+            // Throbber line (placeholder)
+            print("\r", terminator: "\n")
+            // Status bar
+            print(buildStatusBar(), terminator: "")
+            chromeVisible = true
+            cursorChromeLine = 3
+        }
+
+        let frames = Self.throbberFrames
+        throbberTask = Task {
+            var i = 0
+            while !Task.isCancelled {
+                let frame = frames[i % frames.count]
+                // Move up 1 line (to prompt/throbber line), clear it, print throbber, move back down
+                print("\u{1B}[1A\r\u{1B}[K\(ansiDim)\(frame) \(message)\(ansiReset)\u{1B}[1B\r", terminator: "")
+                fflush(stdout)
+                i += 1
+                try? await Task.sleep(nanoseconds: 80_000_000)
+            }
+        }
     }
-    
-    func redrawInput() {
-        print("\r\u{1B}[K\(prompt)\(currentInputBuffer)", terminator: "")
-        if cursorPosition < currentInputBuffer.count {
-            print("\u{1B}[\(currentInputBuffer.count - cursorPosition)D", terminator: "")
+
+    func stopThrobber() {
+        stopThrobberSync()
+    }
+
+    private func stopThrobberSync() {
+        if let task = throbberTask {
+            task.cancel()
+            throbberTask = nil
+            print("\r\u{1B}[K", terminator: "")
+            fflush(stdout)
+        }
+    }
+
+    // MARK: - Chrome
+
+    func updateAgents(_ newAgents: [(name: String, isActive: Bool)]) {
+        agents = newAgents
+    }
+
+    func updateFocusedTask(_ title: String?) {
+        focusedTaskTitle = title
+        if inputActive {
+            redrawPrompt()
+        }
+    }
+
+    /// Build the powerline status bar:  ⌂  agent_name │ task_title  [N]
+    private func buildStatusBar() -> String {
+        let width = terminalWidth()
+        let activeAgent = agents.first(where: { $0.isActive })
+        let activeName = activeAgent?.name ?? "no agent"
+        let count = agents.count
+
+        // White bg + dark text for house flag
+        let homeFlag = "\u{1B}[47m\u{1B}[30m \(teamIcon) \(ansiReset)"
+        // Powerline arrow: white fg on cyan bg
+        let homeToCyan = "\u{1B}[37m\u{1B}[46m\(plSep)\(ansiReset)"
+
+        // Build the cyan segment content: agent name + optional focused task
+        var cyanContent = " \(activeName) "
+        var cyanVisibleLen = activeName.count + 2
+        if let task = focusedTaskTitle, !task.isEmpty {
+            // Calculate max space for task title
+            let rightVisible = count > 1 ? "\(count)".count + 2 : 0
+            let baseUsed = 3 + 1 + cyanVisibleLen + 1 + rightVisible  // home + sep + name + sep + right
+            let availableForTask = width - baseUsed - 5  // " │ " (3) + some margin
+            if availableForTask > 5 {
+                let truncated = task.count > availableForTask ? String(task.prefix(availableForTask - 1)) + "…" : task
+                cyanContent = " \(activeName) │ \(truncated) "
+                cyanVisibleLen = activeName.count + 2 + 3 + truncated.count + 1
+            }
+        }
+
+        // Cyan bg + bold white text
+        let agentSeg = "\u{1B}[46m\u{1B}[1m\(cyanContent)\(ansiReset)"
+        // Powerline arrow: cyan fg on default bg
+        let cyanToDefault = "\u{1B}[36m\(plSep)\(ansiReset)"
+
+        let left = homeFlag + homeToCyan + agentSeg + cyanToDefault
+        let right = count > 1 ? "\(ansiDim)[\(count)]\(ansiReset)" : ""
+
+        // Visible char widths: " ⌂ " (3) + sep (1) + cyanContent + sep (1)
+        let leftVisible = 3 + 1 + cyanVisibleLen + 1
+        let rightVisible = count > 1 ? "\(count)".count + 2 : 0
+        let padding = max(0, width - leftVisible - rightVisible)
+
+        return left + String(repeating: " ", count: padding) + right
+    }
+
+    /// Render the 3-line chrome: separator + prompt + status bar
+    func drawChrome() {
+        let width = terminalWidth()
+
+        // Line 1: dim separator
+        let separator = "\(ansiDim)\(String(repeating: "─", count: width))\(ansiReset)"
+        print(separator + "\r", terminator: "\n")
+
+        // Line 2: prompt with input buffer
+        print("\(ansiCyan)\(promptChar)\(ansiReset) \(currentInputBuffer)\r", terminator: "\n")
+
+        // Line 3: status bar
+        print(buildStatusBar(), terminator: "")
+
+        // Move cursor back up to prompt line and position it
+        let cursorCol = 2 + cursorPosition // "❯ " is 2 chars, then cursorPosition into buffer
+        print("\u{1B}[1A\r\u{1B}[\(cursorCol)C", terminator: "")
+        fflush(stdout)
+
+        chromeVisible = true
+        cursorChromeLine = 2
+    }
+
+    /// Clear the chrome from the terminal
+    func clearChrome() {
+        guard chromeVisible else { return }
+        // Move up to separator line, then clear from cursor to end of screen
+        let linesUp = cursorChromeLine - 1
+        if linesUp > 0 {
+            print("\r\u{1B}[\(linesUp)A\u{1B}[J", terminator: "")
+        } else {
+            print("\r\u{1B}[J", terminator: "")
         }
         fflush(stdout)
+        chromeVisible = false
     }
-    
+
+    // MARK: - Agent Picker
+
+    private var pickerLineCount: Int { min(agents.count, 36) + 3 }
+
+    /// Show a picker overlay listing all agents with hotkeys
+    func showAgentPicker() {
+        guard !agents.isEmpty else { return }
+        clearChrome()
+        pickerVisible = true
+        // Default selection to the currently active agent
+        if let activeIdx = agents.firstIndex(where: { $0.isActive }) {
+            pickerSelection = activeIdx
+        } else {
+            pickerSelection = 0
+        }
+        drawPicker()
+    }
+
+    /// Draw the picker list (assumes cursor is at the right starting position)
+    private func drawPicker() {
+        let hotkeys = "0123456789abcdefghijklmnopqrstuvwxyz"
+        print("\r\n\(ansiDim)── Select Agent ──\(ansiReset)\r", terminator: "\n")
+        for (i, agent) in agents.enumerated() {
+            guard i < hotkeys.count else { break }
+            let key = hotkeys[hotkeys.index(hotkeys.startIndex, offsetBy: i)]
+            let isSelected = (i == pickerSelection)
+            if isSelected {
+                // Highlighted row: cyan bg
+                print("  \u{1B}[46m\u{1B}[1m \(key)  \(agent.name) \(ansiReset)\r", terminator: "\n")
+            } else {
+                let marker = agent.isActive ? "\(ansiCyan) ← \(ansiReset)" : "   "
+                print("  \(ansiDim)\(key)\(ansiReset)  \(agent.name)\(marker)\r", terminator: "\n")
+            }
+        }
+        print("\(ansiDim)↑↓/key to select, Enter to confirm, Esc to cancel\(ansiReset)", terminator: "")
+        fflush(stdout)
+    }
+
+    /// Redraw the picker in place
+    func redrawPicker() {
+        // Move up to start of picker and clear
+        let lines = pickerLineCount
+        print("\r\u{1B}[\(lines)A\u{1B}[J", terminator: "")
+        fflush(stdout)
+        // drawPicker prints a leading blank line, so we need to be 1 line above where it starts
+        drawPicker()
+    }
+
+    func pickerMoveUp() {
+        if pickerSelection > 0 {
+            pickerSelection -= 1
+            redrawPicker()
+        }
+    }
+
+    func pickerMoveDown() {
+        let maxIdx = min(agents.count, 36) - 1
+        if pickerSelection < maxIdx {
+            pickerSelection += 1
+            redrawPicker()
+        }
+    }
+
+    /// Dismiss the picker overlay
+    func dismissPicker() {
+        guard pickerVisible else { return }
+        pickerVisible = false
+        let lines = pickerLineCount
+        // Move up to start and clear
+        print("\r\u{1B}[\(lines)A\u{1B}[J", terminator: "")
+        fflush(stdout)
+    }
+
+    // MARK: - Output
+
+    /// Print agent/system output. This is the primary content — no prefix.
+    func printOutput(_ text: String) {
+        stopThrobberSync()
+        clearChrome()
+        print("\r\u{1B}[K", terminator: "")
+        print(text + "\r", terminator: "\n")
+        if inputActive {
+            drawChrome()
+        }
+    }
+
+    /// Echo user input with a distinctive background color
+    func printUserInput(_ text: String) {
+        stopThrobberSync()
+        clearChrome()
+        let width = terminalWidth()
+        let content = " \(promptChar) \(text) "
+        let padding = max(0, width - content.count)
+        print("\r\u{1B}[K", terminator: "")
+        print("\(ansiUserInputBg)\(content)\(String(repeating: " ", count: padding))\(ansiReset)\r", terminator: "\n")
+        fflush(stdout)
+    }
+
+    /// Print a dim system/status message
+    func printSystem(_ text: String) {
+        stopThrobberSync()
+        clearChrome()
+        print("\r\u{1B}[K", terminator: "")
+        print("\(ansiDim)\(text)\(ansiReset)\r", terminator: "\n")
+        if inputActive {
+            drawChrome()
+        }
+    }
+
+    // MARK: - Input
+
+    func setInputActive(_ active: Bool) {
+        inputActive = active
+        if active {
+            drawChrome()
+        } else {
+            clearChrome()
+        }
+    }
+
+    func redrawPrompt() {
+        clearChrome()
+        drawChrome()
+    }
+
     func insertChar(_ char: Character) {
         let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition)
         currentInputBuffer.insert(char, at: idx)
         cursorPosition += 1
-        redrawInput()
+        redrawPrompt()
     }
-    
+
     func backspace() {
         if cursorPosition > 0 {
             let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition - 1)
             currentInputBuffer.remove(at: idx)
             cursorPosition -= 1
-            redrawInput()
+            redrawPrompt()
         }
     }
-    
+
     func moveCursorLeft() {
         if cursorPosition > 0 {
             cursorPosition -= 1
-            redrawInput()
+            redrawPrompt()
         }
     }
-    
+
     func moveCursorRight() {
         if cursorPosition < currentInputBuffer.count {
             cursorPosition += 1
-            redrawInput()
+            redrawPrompt()
         }
     }
-    
+
+    // MARK: - Readline Editing
+
+    /// Kill buffer for ^K/^U/^W + ^Y
+    var killBuffer = ""
+
+    func moveCursorToStart() {
+        if cursorPosition > 0 {
+            cursorPosition = 0
+            redrawPrompt()
+        }
+    }
+
+    func moveCursorToEnd() {
+        if cursorPosition < currentInputBuffer.count {
+            cursorPosition = currentInputBuffer.count
+            redrawPrompt()
+        }
+    }
+
+    func killToEnd() {
+        guard cursorPosition < currentInputBuffer.count else { return }
+        let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition)
+        killBuffer = String(currentInputBuffer[idx...])
+        currentInputBuffer = String(currentInputBuffer[..<idx])
+        redrawPrompt()
+    }
+
+    func killToStart() {
+        guard cursorPosition > 0 else { return }
+        let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition)
+        killBuffer = String(currentInputBuffer[..<idx])
+        currentInputBuffer = String(currentInputBuffer[idx...])
+        cursorPosition = 0
+        redrawPrompt()
+    }
+
+    func killWordBackward() {
+        guard cursorPosition > 0 else { return }
+        var newPos = cursorPosition
+        // Skip whitespace backward
+        while newPos > 0 {
+            let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: newPos - 1)
+            if currentInputBuffer[idx] != " " { break }
+            newPos -= 1
+        }
+        // Skip word chars backward
+        while newPos > 0 {
+            let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: newPos - 1)
+            if currentInputBuffer[idx] == " " { break }
+            newPos -= 1
+        }
+        let startIdx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: newPos)
+        let endIdx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition)
+        killBuffer = String(currentInputBuffer[startIdx..<endIdx])
+        currentInputBuffer.removeSubrange(startIdx..<endIdx)
+        cursorPosition = newPos
+        redrawPrompt()
+    }
+
+    func yank() {
+        guard !killBuffer.isEmpty else { return }
+        let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition)
+        currentInputBuffer.insert(contentsOf: killBuffer, at: idx)
+        cursorPosition += killBuffer.count
+        redrawPrompt()
+    }
+
+    func deleteForward() {
+        if cursorPosition < currentInputBuffer.count {
+            let idx = currentInputBuffer.index(currentInputBuffer.startIndex, offsetBy: cursorPosition)
+            currentInputBuffer.remove(at: idx)
+            redrawPrompt()
+        }
+    }
+
     func clearInput() {
         currentInputBuffer = ""
         cursorPosition = 0
-        redrawInput()
+        redrawPrompt()
     }
-    
+
     func getAndClearInput() -> String {
         let text = currentInputBuffer
         currentInputBuffer = ""
         cursorPosition = 0
-        // Don't redraw yet, let the caller print the newline
         return text
     }
 }
@@ -95,11 +690,23 @@ actor TerminalManager {
 enum InputKey {
     case ctrlC
     case ctrlD
+    case ctrlA  // beginning of line
+    case ctrlE  // end of line
+    case ctrlK  // kill to end of line
+    case ctrlU  // kill to beginning of line
+    case ctrlW  // kill word backward
+    case ctrlY  // yank (paste kill buffer)
+    case ctrlB  // back one char
+    case ctrlF  // forward one char
+    case tab
     case enter
     case backspace
+    case delete // forward delete
     case escape
     case arrowLeft
     case arrowRight
+    case arrowUp
+    case arrowDown
     case character(Character)
     case unknown(UInt8)
 }
@@ -108,19 +715,38 @@ func nextKey() -> InputKey? {
     guard keyPressed() else { return nil }
     let char = readChar()
     let ascii = char.asciiValue ?? 0
-    
+
     switch ascii {
+    case 1: return .ctrlA
+    case 2: return .ctrlB
     case 3: return .ctrlC
     case 4: return .ctrlD
+    case 5: return .ctrlE
+    case 6: return .ctrlF
+    case 9: return .tab
     case 10, 13: return .enter
+    case 11: return .ctrlK
+    case 21: return .ctrlU
+    case 23: return .ctrlW
+    case 25: return .ctrlY
     case 127: return .backspace
     case 27:
         // ESC sequence
         let next1 = readChar()
         if next1 == "[" {
             let next2 = readChar()
-            if next2 == "D" { return .arrowLeft }
-            if next2 == "C" { return .arrowRight }
+            switch next2 {
+            case "A": return .arrowUp
+            case "B": return .arrowDown
+            case "C": return .arrowRight
+            case "D": return .arrowLeft
+            case "3":
+                // Delete key: ESC [ 3 ~
+                let next3 = readChar()
+                if next3 == "~" { return .delete }
+                return .unknown(ascii)
+            default: return .unknown(ascii)
+            }
         }
         return .escape
     case 32...126:
@@ -134,47 +760,196 @@ func nextKey() -> InputKey? {
     }
 }
 
-func readInputLine() async -> String? {
-    await TerminalManager.shared.redrawInput()
-    
+/// Handle the agent picker interaction. Returns the index of selected agent, or nil if cancelled.
+func handleAgentPicker() async -> Int? {
+    await TerminalManager.shared.showAgentPicker()
+
+    let hotkeys = "0123456789abcdefghijklmnopqrstuvwxyz"
+    let agentCount = await TerminalManager.shared.agents.count
+
+    while true {
+        if let key = nextKey() {
+            switch key {
+            case .escape, .tab:
+                await TerminalManager.shared.dismissPicker()
+                return nil
+            case .enter:
+                let selection = await TerminalManager.shared.pickerSelection
+                await TerminalManager.shared.dismissPicker()
+                return selection
+            case .arrowUp, .ctrlB:
+                await TerminalManager.shared.pickerMoveUp()
+            case .arrowDown, .ctrlF:
+                await TerminalManager.shared.pickerMoveDown()
+            case .character(let c):
+                if let idx = hotkeys.firstIndex(of: c) {
+                    let i = hotkeys.distance(from: hotkeys.startIndex, to: idx)
+                    if i < agentCount {
+                        await TerminalManager.shared.dismissPicker()
+                        return i
+                    }
+                }
+            case .ctrlC:
+                await TerminalManager.shared.dismissPicker()
+                return nil
+            default:
+                break
+            }
+        } else {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+}
+
+func readInputLine(sessionState: SessionState) async -> String? {
+    await TerminalManager.shared.setInputActive(true)
+
     while true {
         if let key = nextKey() {
             switch key {
             case .ctrlC:
+                await TerminalManager.shared.setInputActive(false)
                 return nil
             case .ctrlD:
                 let buf = await TerminalManager.shared.currentInputBuffer
-                if buf.isEmpty { return nil }
+                if buf.isEmpty {
+                    await TerminalManager.shared.setInputActive(false)
+                    return nil
+                } else {
+                    await TerminalManager.shared.deleteForward()
+                }
+            case .tab:
+                // Show agent picker
+                if let selectedIdx = await handleAgentPicker() {
+                    let agents = await sessionState.allSessions()
+                    if selectedIdx < agents.count {
+                        let selected = agents[selectedIdx]
+                        await sessionState.setActive(selected.id)
+                        let agentList = await sessionState.agentList()
+                        await TerminalManager.shared.updateAgents(agentList)
+                        let focusedTitle = await sessionState.getActiveFocusedTask()
+                        await TerminalManager.shared.updateFocusedTask(focusedTitle)
+                    }
+                }
+                await TerminalManager.shared.redrawPrompt()
             case .enter:
-                print("\r\n", terminator: "")
-                return await TerminalManager.shared.getAndClearInput()
+                let text = await TerminalManager.shared.getAndClearInput()
+                await TerminalManager.shared.setInputActive(false)
+                // Clear the prompt line — caller will echo the input
+                print("\r\u{1B}[K", terminator: "")
+                fflush(stdout)
+                return text
             case .backspace:
                 await TerminalManager.shared.backspace()
-            case .arrowLeft:
+            case .delete:
+                await TerminalManager.shared.deleteForward()
+            case .arrowLeft, .ctrlB:
                 await TerminalManager.shared.moveCursorLeft()
-            case .arrowRight:
+            case .arrowRight, .ctrlF:
                 await TerminalManager.shared.moveCursorRight()
+            case .ctrlA:
+                await TerminalManager.shared.moveCursorToStart()
+            case .ctrlE:
+                await TerminalManager.shared.moveCursorToEnd()
+            case .ctrlK:
+                await TerminalManager.shared.killToEnd()
+            case .ctrlU:
+                await TerminalManager.shared.killToStart()
+            case .ctrlW:
+                await TerminalManager.shared.killWordBackward()
+            case .ctrlY:
+                await TerminalManager.shared.yank()
             case .character(let c):
                 await TerminalManager.shared.insertChar(c)
-            case .escape, .unknown:
+            case .arrowUp, .arrowDown, .escape, .unknown:
                 break
             }
         } else {
-            // Tiny sleep to prevent 100% CPU while polling
             try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
         }
     }
 }
 
 actor SessionState {
-    private var sessionID: String?
-    
-    func setID(_ id: String) {
-        self.sessionID = id
+    struct Session {
+        let id: String
+        let name: String
     }
-    
+
+    /// Ordered list of sessions (insertion order)
+    private var sessionOrder: [String] = []
+    private var sessions: [String: Session] = [:]
+    private var activeSessionID: String?
+    /// sessionID -> focused task title
+    private var focusedTasks: [String: String] = [:]
+
+    func addSession(id: String, name: String) {
+        sessions[id] = Session(id: id, name: name)
+        if !sessionOrder.contains(id) {
+            sessionOrder.append(id)
+        }
+        activeSessionID = id
+    }
+
+    func setActive(_ id: String) {
+        if sessions[id] != nil {
+            activeSessionID = id
+        }
+    }
+
+    func setActiveByName(_ name: String) -> Bool {
+        if let session = sessions.values.first(where: { $0.name == name }) {
+            activeSessionID = session.id
+            return true
+        }
+        return false
+    }
+
+    func getActiveID() -> String? {
+        return activeSessionID
+    }
+
+    func getActiveName() -> String? {
+        guard let id = activeSessionID else { return nil }
+        return sessions[id]?.name
+    }
+
+    func allSessions() -> [Session] {
+        return sessionOrder.compactMap { sessions[$0] }
+    }
+
+    func agentList() -> [(name: String, isActive: Bool)] {
+        return sessionOrder.compactMap { id in
+            guard let s = sessions[id] else { return nil }
+            return (s.name, s.id == activeSessionID)
+        }
+    }
+
+    func setFocusedTask(sessionID: String, title: String) {
+        if title.isEmpty {
+            focusedTasks.removeValue(forKey: sessionID)
+        } else {
+            focusedTasks[sessionID] = title
+        }
+    }
+
+    func getActiveFocusedTask() -> String? {
+        guard let id = activeSessionID else { return nil }
+        return focusedTasks[id]
+    }
+
+    // Legacy compatibility
+    func setSession(id: String, name: String) {
+        addSession(id: id, name: name)
+    }
+
     func getID() -> String? {
-        return sessionID
+        return activeSessionID
+    }
+
+    func getAgentName() -> String? {
+        guard let id = activeSessionID else { return nil }
+        return sessions[id]?.name
     }
 }
 
@@ -234,25 +1009,68 @@ func main() async throws {
             for try await message in call.responseStream {
                 switch message.payload {
                 case .sessionStarted(let started):
-                    await sessionState.setID(started.sessionID)
-                    await TerminalManager.shared.printMessage("[System]".yellow + " Session started: \(started.sessionID)")
-                    
+                    let name = started.agentName.isEmpty ? "agent" : started.agentName
+                    await sessionState.addSession(id: started.sessionID, name: name)
+                    let agents = await sessionState.agentList()
+                    await TerminalManager.shared.updateAgents(agents)
+                    await TerminalManager.shared.printSystem("Session started: \(name) (\(started.sessionID))")
+
                 case .agentOutput(let output):
-                    // Use standard print to leverage terminal's native scrollback
-                    await TerminalManager.shared.printMessage("[Agent]".green + " \(formatMarkdown(output.text))")
-                    
+                    if let data = output.text.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                       let msgType = json["type"] {
+                        switch msgType {
+                        case "thinking":
+                            await TerminalManager.shared.startThrobber(message: "Thinking...")
+
+                        case "tool_call":
+                            let toolName = json["name"] ?? "unknown"
+                            let args = json["arguments"] ?? "{}"
+                            let header = "\(ansiDim)┌─\(ansiReset) \(ansiBold)\(ansiCyan)🔧 \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
+                            let body = formatToolArguments(args)
+                            let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
+                            await TerminalManager.shared.printOutput("\(header)\r\n\(body)\r\n\(footer)")
+                            await TerminalManager.shared.startThrobber(message: "Running \(toolName)...")
+
+                        case "tool_result":
+                            let toolName = json["name"] ?? "unknown"
+                            let result = json["result"] ?? ""
+                            let formatted = json["formatted"] ?? ""
+                            let displayResult = formatted.isEmpty ? result : formatted
+                            let header = "\(ansiDim)├─\(ansiReset) \(ansiGreen)✓ \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
+                            let body = truncateResult(displayResult)
+                            let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
+                            await TerminalManager.shared.printOutput("\(header)\r\n\(body)\r\n\(footer)")
+
+                        case "response":
+                            let text = json["text"] ?? ""
+                            await TerminalManager.shared.printOutput(formatMarkdown(text))
+
+                        default:
+                            await TerminalManager.shared.printOutput(formatMarkdown(output.text))
+                        }
+                    } else {
+                        // Plain text / unparseable — backward compat
+                        await TerminalManager.shared.printOutput(formatMarkdown(output.text))
+                    }
+
                 case .approvalRequest(let req):
-                    await TerminalManager.shared.printMessage("[System]".yellow + " Tool Approval Required: \(req.toolName)\r\nArguments: \(req.argumentsJson)\r\nApprove? (y/n)")
-                    
+                    await TerminalManager.shared.printSystem("Tool Approval Required: \(req.toolName)\r\nArguments: \(req.argumentsJson)\r\nApprove? (y/n)")
+
                 case .taskCompleted(let comp):
-                    await TerminalManager.shared.printMessage("[System]".yellow + " Task completed: \(comp.sessionID)")
-                    
+                    await TerminalManager.shared.printSystem("Task completed: \(comp.sessionID)")
+
+                case .taskUpdate(let update):
+                    await sessionState.setFocusedTask(sessionID: update.sessionID, title: update.focusedTaskTitle)
+                    let focusedTitle = await sessionState.getActiveFocusedTask()
+                    await TerminalManager.shared.updateFocusedTask(focusedTitle)
+
                 case nil:
                     break
                 }
             }
         } catch {
-            await TerminalManager.shared.printMessage("[System] Disconnected from server: \(error)")
+            await TerminalManager.shared.printSystem("Disconnected from server: \(error)")
         }
     }
     
@@ -265,28 +1083,114 @@ func main() async throws {
     
     // Input Loop
     while true {
-        guard let line = await readInputLine() else { break }
+        guard let line = await readInputLine(sessionState: sessionState) else { break }
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
         
         if trimmed == "/quit" || trimmed == "exit" {
             break
         }
-        
+
         if !trimmed.isEmpty {
-            // Echo locally for clarity (Terminal handles the scrollback inherently)
-            await TerminalManager.shared.printMessage("[You]".blue + " \(trimmed)")
-            
-            guard let sid = await sessionState.getID() else {
-                await TerminalManager.shared.printMessage("[System]".yellow + " Waiting for session ID...")
+            await TerminalManager.shared.printUserInput(trimmed)
+
+            // /help — show available commands
+            if trimmed == "/help" {
+                let help = """
+                \(ansiBold)Commands\(ansiReset)
+                  \(ansiCyan)/new\(ansiReset)              Spawn a new agent
+                  \(ansiCyan)/fork\(ansiReset)             Fork current agent (copies context & shares)
+                  \(ansiCyan)/agents\(ansiReset)            List all agents
+                  \(ansiCyan)/switch\(ansiReset) \(ansiDim)<name>\(ansiReset)    Switch to agent by name
+                  \(ansiCyan)/share\(ansiReset) \(ansiDim)[-rw] <path>[:<guest>]\(ansiReset)
+                                    Share a host directory with the agent
+                  \(ansiCyan)/unshare\(ansiReset) \(ansiDim)<path>\(ansiReset)  Remove a shared directory
+                  \(ansiCyan)/quit\(ansiReset)             Exit Pecan
+
+                \(ansiBold)Tasks\(ansiReset)
+                  \(ansiCyan)/task\(ansiReset) \(ansiDim)<text>\(ansiReset)      Create a new task
+                  \(ansiCyan)/tasks\(ansiReset)             List all tasks
+                  \(ansiCyan)/tasks\(ansiReset) \(ansiDim)<status>\(ansiReset)   List tasks by status
+                  \(ansiCyan)/task #\(ansiReset)\(ansiDim)<id>\(ansiReset)       Show task details
+                  \(ansiCyan)/task #\(ansiReset)\(ansiDim)<id>\(ansiReset) \(ansiDim)<field> <value>\(ansiReset)
+                                    Update task field (priority, severity, status, label, due, focus, depends, description)
+
+                \(ansiBold)Keys\(ansiReset)
+                  \(ansiCyan)Tab\(ansiReset)               Agent picker (↑↓ or hotkey to select)
+                  \(ansiCyan)^A\(ansiReset) / \(ansiCyan)^E\(ansiReset)          Beginning / end of line
+                  \(ansiCyan)^K\(ansiReset) / \(ansiCyan)^U\(ansiReset)          Kill to end / start of line
+                  \(ansiCyan)^W\(ansiReset)                Kill word backward
+                  \(ansiCyan)^Y\(ansiReset)                Yank (paste killed text)
+                """
+                await TerminalManager.shared.printOutput(help)
                 continue
             }
-            
+
+            // /agents — list all agents
+            if trimmed == "/agents" {
+                let agents = await sessionState.agentList()
+                if agents.isEmpty {
+                    await TerminalManager.shared.printSystem("No agents.")
+                } else {
+                    var lines = "\(ansiBold)Agents\(ansiReset)\r\n"
+                    for agent in agents {
+                        let marker = agent.isActive ? "\(ansiCyan) ← active\(ansiReset)" : ""
+                        lines += "  \(agent.isActive ? "\(ansiBold)\(agent.name)\(ansiReset)" : "\(ansiDim)\(agent.name)\(ansiReset)")\(marker)\r\n"
+                    }
+                    await TerminalManager.shared.printOutput(lines)
+                }
+                continue
+            }
+
+            // /new — spawn a fresh agent
+            if trimmed == "/new" {
+                var msg = Pecan_ClientMessage()
+                var startTask = Pecan_StartTaskRequest()
+                startTask.initialPrompt = "Initialize new session"
+                msg.startTask = startTask
+                try await call.requestStream.send(msg)
+                continue
+            }
+
+            // /fork — clone context+shares from current agent into new one
+            if trimmed == "/fork" {
+                guard let currentSid = await sessionState.getActiveID() else {
+                    await TerminalManager.shared.printSystem("No active session to fork.")
+                    continue
+                }
+                var msg = Pecan_ClientMessage()
+                var startTask = Pecan_StartTaskRequest()
+                startTask.initialPrompt = "Initialize forked session"
+                startTask.forkSessionID = currentSid
+                msg.startTask = startTask
+                try await call.requestStream.send(msg)
+                continue
+            }
+
+            // /switch <name> — switch active tab by agent name
+            if trimmed.hasPrefix("/switch ") {
+                let name = String(trimmed.dropFirst("/switch ".count)).trimmingCharacters(in: .whitespaces)
+                if await sessionState.setActiveByName(name) {
+                    let agents = await sessionState.agentList()
+                    await TerminalManager.shared.updateAgents(agents)
+                    await TerminalManager.shared.printSystem("Switched to \(name)")
+                } else {
+                    let all = await sessionState.allSessions().map(\.name).joined(separator: ", ")
+                    await TerminalManager.shared.printSystem("No agent named '\(name)'. Available: \(all)")
+                }
+                continue
+            }
+
+            guard let sid = await sessionState.getID() else {
+                await TerminalManager.shared.printSystem("Waiting for session ID...")
+                continue
+            }
+
             var msg = Pecan_ClientMessage()
             var input = Pecan_TaskInput()
             input.sessionID = sid
             input.text = trimmed
             msg.userInput = input
-            
+
             try await call.requestStream.send(msg)
         }
     }

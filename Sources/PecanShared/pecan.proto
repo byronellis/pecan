@@ -20,6 +20,7 @@ message ClientMessage {
 
 message StartTaskRequest {
     string initial_prompt = 1;
+    string fork_session_id = 2;  // if set, copy context+shares from this session
 }
 
 message TaskInput {
@@ -40,11 +41,13 @@ message ServerMessage {
         AgentOutput agent_output = 2;
         ToolApprovalRequest approval_request = 3;
         TaskCompleted task_completed = 4;
+        TaskUpdate task_update = 5;
     }
 }
 
 message SessionStarted {
     string session_id = 1;
+    string agent_name = 2;
 }
 
 message AgentOutput {
@@ -79,6 +82,8 @@ message AgentEvent {
         TaskProgress progress = 4;
         GetModelsRequest get_models = 5;
         ContextCommand context_command = 6;
+        TaskCommand task_command = 7;
+        HttpProxyRequest http_request = 8;
     }
 }
 
@@ -147,6 +152,8 @@ message HostCommand {
         ProcessInput process_input = 5;
         GetModelsResponse models_response = 6;
         ContextResponse context_response = 7;
+        TaskResponse task_response = 8;
+        HttpProxyResponse http_response = 9;
     }
 }
 
@@ -188,4 +195,53 @@ message ShutdownCommand {
 
 message ProcessInput {
     string text = 1;
+}
+
+message TaskCommand {
+    string request_id = 1;
+    string action = 2;        // "create", "list", "get", "update", "focus"
+    string payload_json = 3;
+}
+
+message TaskResponse {
+    string request_id = 1;
+    string result_json = 2;
+    string error_message = 3;
+}
+
+message TaskUpdate {
+    string session_id = 1;
+    string focused_task_title = 2;
+}
+
+// ==========================================
+// HTTP Proxy (Agent <-> Server)
+// ==========================================
+
+message HttpProxyRequest {
+    string request_id = 1;
+    string method = 2;              // GET, POST, PUT, PATCH, DELETE
+    string url = 3;
+    repeated HttpHeader headers = 4;
+    repeated HttpQueryParam query_params = 5;
+    string body = 6;
+    bool requires_approval = 7;
+}
+
+message HttpHeader {
+    string name = 1;
+    string value = 2;
+}
+
+message HttpQueryParam {
+    string name = 1;
+    string value = 2;
+}
+
+message HttpProxyResponse {
+    string request_id = 1;
+    int32 status_code = 2;
+    repeated HttpHeader response_headers = 3;
+    string body = 4;
+    string error_message = 5;
 }
