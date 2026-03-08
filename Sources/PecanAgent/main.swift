@@ -42,24 +42,38 @@ func buildSystemPrompt() async -> String {
         prompt += "\n- **\(tool.name)**: \(tool.description)"
     }
 
-    // Fetch core memories and append to system prompt
+    return prompt
+}
+
+/// Fetch core memories and inject them into context as a separate system message.
+/// Must be called from a detached Task so it doesn't block the response loop.
+func injectCoreMemories(_ writer: StreamWriter) async {
     do {
         let coreResult = try await TaskClient.shared.sendCommand(action: "memory_list", payload: ["tag": "core"])
-        if let data = coreResult.data(using: .utf8),
-           let memories = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-           !memories.isEmpty {
-            prompt += "\n\n## Core Memories\n"
-            for mem in memories {
-                let content = mem["content"] as? String ?? ""
-                prompt += "\n- \(content)"
-            }
+        guard let data = coreResult.data(using: .utf8),
+              let memories = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              !memories.isEmpty else { return }
+
+        var section = "## Core Memories\n"
+        for mem in memories {
+            let content = mem["content"] as? String ?? ""
+            section += "\n- \(content)"
         }
+
+        var ctxMsg = Pecan_AgentEvent()
+        var ctxCmd = Pecan_ContextCommand()
+        ctxCmd.requestID = UUID().uuidString
+        var addMsg = Pecan_AddContextMessage()
+        addMsg.section = .system
+        addMsg.role = "system"
+        addMsg.content = section
+        ctxCmd.addMessage = addMsg
+        ctxMsg.contextCommand = ctxCmd
+        try await writer.send(ctxMsg)
+        logger.info("Injected \(memories.count) core memories into context")
     } catch {
-        // Core memories are best-effort; don't fail boot if unavailable
         logger.debug("Could not fetch core memories: \(error)")
     }
-
-    return prompt
 }
 
 /// Send a JSON-structured progress message to the server for the UI to parse.
@@ -201,7 +215,10 @@ func main() async throws {
                 ctxCmd.addMessage = addMsg
                 ctxMsg.contextCommand = ctxCmd
                 try await writer.send(ctxMsg)
-                
+
+                // Inject core memories in a separate Task so we don't block the response loop
+                Task { await injectCoreMemories(writer) }
+
             case .modelsResponse(let resp):
                 availableModels = resp.models.map { $0.key }
                 logger.info("Agent received available models: \(availableModels)")
