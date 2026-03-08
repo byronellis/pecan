@@ -8,6 +8,12 @@ Or it could just be what a friend of mine said the other day when I was showing 
 
 ## Questions You Might Have
 
+### You do know about sandboxes, right?
+
+Yes, I do and this approach is similar in spirit in that you want the agent locked away. The primary difference though is more of a mindset thing.. In the sandbox model you have to spend some time configuring
+things to make the sandbox work because the cli doesn't want to be super opionated about that. Pecan is more of a kubernetes-style approach with the pecan-server taking on the role of the k8s control plane in
+a lot of ways and doing things like, say, controlling networking and so on. So same goals, different philosophy of implementation. Mainly Pecan is a "Sandbox First" model (really its Sandbox Only). 
+
 ### Swift?
 
 Yeah, Swift. Look, I started the project in Rust and I decided driving home one night that I just... don't like Rust. I don't like writing it, I don't like reading it. It's just not a language I want to use. So I picked a language that
