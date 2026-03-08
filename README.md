@@ -51,21 +51,107 @@ particularly interested in selling that training data to a large org... that fee
 Pecan is divided into three main components:
 
 1. **`pecan-server` (The Host Daemon)**
-   A persistent gRPC background process that acts as the control plane. It manages agent sessions, owns the connection to LLM providers (e.g., OpenAI, Anthropic, local MLX/llama.cpp models), and securely handles tool execution requests from isolated agents.
+   A persistent gRPC background process that acts as the control plane. It manages agent sessions, owns the connection to LLM providers (e.g., OpenAI, Anthropic, local MLX/llama.cpp models), spawns isolated containers, and proxies all external access (web, HTTP, LLM APIs) on behalf of agents.
 
 2. **`pecan-agent` (The Isolated Worker)**
-   The agent process that actually runs *inside* an isolated environment (like a macOS Virtualization.framework VM or Firecracker). It has no direct internet access and connects back to the server via gRPC to request LLM completions and tool executions.
+   The agent process that runs *inside* an Alpine Linux container via Apple's Containerization framework. It has no direct internet access and connects back to the server via a gRPC Unix socket relayed over vsock. All tool execution happens locally inside the container; only LLM completions and external network requests are proxied through the server.
 
 3. **`pecan` (The User Interface)**
-   A Terminal User Interface (TUI) application used to interact with the server. It connects to the server via gRPC to start new tasks, monitor progress, and provide Human-in-the-Loop (HITL) approvals.
+   A Terminal User Interface (TUI) with markdown rendering, syntax highlighting, box-drawn tables, and a status chrome bar showing agent names and activity. Connects to the server via gRPC to start sessions, monitor progress, and provide Human-in-the-Loop (HITL) approvals.
 
 ## Key Features
 
-- **Containerized Execution:** Designed for agents to execute code safely inside dedicated VMs/Containers.
-- **gRPC Control Plane:** All capabilities are routed through the server, which acts as a strict policy engine.
-- **Centralized Context:** The server holds and manages conversation context to minimize data serialized across the VM boundary.
-- **Pluggable LLMs:** Easily configurable to talk to standard OpenAI API endpoints, local MLX, or remote vLLM clusters.
-- **Tailscale Ready:** Designed with networking in mind for secure remote management over Tailnets.
+- **Containerized Execution:** Agents run inside ephemeral Alpine 3.19 VMs via Apple's Containerization framework (macOS 15+). Each session gets its own isolated container with 2 CPUs and 512MB RAM.
+- **gRPC Control Plane:** Bidirectional streaming between UI, server, and agent. The server acts as a strict policy engine for all external access.
+- **Centralized Context:** The server holds and manages conversation context in per-session SQLite databases, minimizing data serialized across the VM boundary.
+- **Pluggable LLMs:** Configurable to talk to any OpenAI-compatible API endpoint -- local vLLM/MLX servers, commercial providers, or anything else that speaks the OpenAI protocol.
+- **Persistent Sessions:** Sessions persist across restarts at `~/.pecan/sessions/`, with workspace directories mounted into containers.
+
+## Built-in Tools
+
+The agent ships with a comprehensive tool suite, organized by tag:
+
+| Tag | Tools | Description |
+|-----|-------|-------------|
+| **core** | `read_file`, `write_file`, `edit_file`, `search_files`, `shell` | File operations and command execution |
+| **web** | `web_fetch`, `web_search`, `http_request` | Web access (proxied through server) |
+| **tasks** | `task_create`, `task_list`, `task_get`, `task_update`, `task_focus` | Task management with priorities, labels, dependencies |
+| **memory** | `memory_add`, `memory_get`, `memory_list`, `memory_search`, `memory_update`, `memory_delete`, `memory_tag`, `memory_untag` | Persistent memories across sessions; tag as `core` for system prompt injection |
+| **triggers** | `trigger_create`, `trigger_list`, `trigger_cancel` | Schedule one-shot or repeating instructions |
+| **skills** | `activate_skill` | Load Agent Skills instructions into context |
+| **meta** | `create_lua_tool` | Dynamically create and register new Lua tools |
+
+## Extensibility
+
+### Lua Tools
+
+User-defined tools live in `~/.pecan/tools/` and are automatically loaded at agent startup. Tools use a **module pattern** -- the Lua script returns a table with metadata and an `execute` function:
+
+```lua
+return {
+    name = "my_tool",
+    description = "Does something useful.",
+    schema = '{"type":"object","properties":{"input":{"type":"string"}},"required":["input"]}',
+
+    execute = function(args)
+        return "Result: " .. args.input
+    end,
+
+    -- Optional: format the result for compact UI display
+    format_result = function(result)
+        return "OK"
+    end
+}
+```
+
+Tools can also be created dynamically at runtime via the `create_lua_tool` built-in tool.
+
+### Prompt Fragments
+
+Custom system prompt sections can be added via Lua scripts in `~/.pecan/prompts/`. Each script returns a module with a `render(context)` function:
+
+```lua
+return {
+    name = "My Custom Instructions",
+    priority = 450,  -- lower = earlier in prompt
+
+    render = function(context)
+        return "Always prefer tabs over spaces."
+    end
+}
+```
+
+### Hooks
+
+Event-driven Lua scripts in `~/.pecan/hooks/` that fire on agent lifecycle events:
+
+```lua
+return {
+    on = { "agent.registered", "tool.before", "tool.after", "agent.shutdown" },
+
+    handler = function(event, data)
+        -- React to events
+    end
+}
+```
+
+### Agent Skills
+
+Pecan supports the [Agent Skills](https://agentskills.io) open standard. Skills are folders containing a `SKILL.md` file with YAML frontmatter and optional `scripts/`, `references/`, and `assets/` directories:
+
+```
+~/.pecan/skills/
+  my-skill/
+    SKILL.md          # name + description in YAML frontmatter, instructions in body
+    scripts/
+      helper.lua      # Lua tools auto-registered from skills
+    references/
+      api-docs.md
+    assets/
+      template.json
+```
+
+Skills follow **progressive disclosure**: only names and descriptions are loaded at startup. Full instructions are loaded on demand via the `activate_skill` tool. The cross-client convention path `~/.agents/skills/` is also supported.
 
 ## Getting Started
 
@@ -84,6 +170,17 @@ models:
     model_id: Qwen/Qwen3-Coder-Next-FP8
 ```
 
+### Building
+
+Build the server and cross-compile the agent for the container:
+
+```bash
+swift build --product pecan-server
+swift build -c release --product pecan-agent --swift-sdk aarch64-swift-linux-musl
+```
+
+The container mounts `.build/aarch64-swift-linux-musl/release/` at `/opt/pecan`, so no image rebuild is needed after recompiling the agent.
+
 ### Running the Server
 
 During development, you can use the background helper scripts to run the server:
@@ -101,6 +198,12 @@ Start the interactive terminal UI:
 swift run pecan
 ```
 
+### Container Requirements
+
+- macOS 15.0+ (for Apple Containerization framework)
+- An uncompressed Linux kernel at `~/.pecan/vm/vmlinux` or installed via `container system kernel set --recommended`
+- Swift cross-compilation SDK: `aarch64-swift-linux-musl`
+
 ## Documentation
 
-See [DESIGN.md](DESIGN.md) for deeper architectural details and the roadmap.
+See [DESIGN.md](DESIGN.md) for deeper architectural details.
