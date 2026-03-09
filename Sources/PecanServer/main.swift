@@ -872,9 +872,7 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             errorMsg.agentOutput = out
                             try await SessionManager.shared.sendToUI(sessionID: req.sessionID, message: errorMsg)
                         }
-                    } else if text.hasPrefix("/task") || text.hasPrefix("/t:") || text.hasPrefix("/t ") || text == "/t"
-                                || text.hasPrefix("/ts") || text.hasPrefix("/project") || text.hasPrefix("/p:") || text == "/p"
-                                || text.hasPrefix("/team") {
+                    } else if Self.isSlashCommand(text) {
                         do {
                             try await Self.handleSlashCommand(sessionID: req.sessionID, text: text)
                         } catch {
@@ -965,6 +963,17 @@ extension ClientServiceProvider {
         let args: String      // remaining arguments after command word
     }
 
+    /// Check if a text string is a slash command we handle (vs something to send to the agent).
+    private static func isSlashCommand(_ text: String) -> Bool {
+        // Extract the first word, then the base command (before any colon)
+        let firstWord = text.split(separator: " ", maxSplits: 1).first.map(String.init) ?? text
+        guard firstWord.hasPrefix("/") else { return false }
+        let commandPart = String(firstWord.dropFirst())
+        let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams"]
+        return knownBases.contains(base)
+    }
+
     /// Parse a slash command with colon-separated segments and shorthand expansion.
     /// Format: /<base>[:subcmd[:target]] [args...]
     private static func parseCommand(_ text: String) -> ParsedCommand {
@@ -1045,6 +1054,13 @@ extension ClientServiceProvider {
             try await sendOutput(lines)
 
         case nil:
+            // Check if user used old space-separated syntax: /project create, /project switch
+            let firstWord = cmd.args.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+            if ["create", "switch", "list"].contains(firstWord) {
+                try await sendOutput("Did you mean /project:\(firstWord)? Use colon syntax: /p:\(firstWord) \(cmd.args.dropFirst(firstWord.count).trimmingCharacters(in: .whitespaces))")
+                return
+            }
+
             // /project with no subcommand — show current project info
             guard let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID),
                   let store = await SessionManager.shared.getProjectStore(sessionID: sessionID) else {
@@ -1141,6 +1157,13 @@ extension ClientServiceProvider {
             try await sendOutput(lines)
 
         case nil:
+            // Check if user used old space-separated syntax
+            let firstWord = cmd.args.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
+            if ["create", "join", "leave", "list"].contains(firstWord) {
+                try await sendOutput("Did you mean /team:\(firstWord)? Use colon syntax: /team:\(firstWord) \(cmd.args.dropFirst(firstWord.count).trimmingCharacters(in: .whitespaces))")
+                return
+            }
+
             // /team with no subcommand — show current team info
             guard let projectName = projectName,
                   let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID),
@@ -1177,8 +1200,8 @@ extension ClientServiceProvider {
                 scope = "project"
                 scopeTarget = cmd.target
             default:
-                scope = ""
-                scopeTarget = nil
+                try await sendOutput("Unknown task scope ':\(sub)'. Use :t (team) or :p (project).")
+                return
             }
         } else {
             scope = ""
