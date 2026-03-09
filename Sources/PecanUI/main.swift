@@ -1195,23 +1195,28 @@ func main() async throws {
                   \(ansiCyan)/unshare\(ansiReset) \(ansiDim)<path>\(ansiReset)  Remove a shared directory
                   \(ansiCyan)/quit\(ansiReset)             Exit Pecan
 
-                \(ansiBold)Tasks\(ansiReset) \(ansiDim)(append :team or :project for scoped commands)\(ansiReset)
-                  \(ansiCyan)/task\(ansiReset) \(ansiDim)<text>\(ansiReset)      Create a new task
-                  \(ansiCyan)/tasks\(ansiReset)             List all tasks
-                  \(ansiCyan)/tasks\(ansiReset) \(ansiDim)<status>\(ansiReset)   List tasks by status
-                  \(ansiCyan)/task #\(ansiReset)\(ansiDim)<id>\(ansiReset)       Show task details
-                  \(ansiCyan)/task #\(ansiReset)\(ansiDim)<id>\(ansiReset) \(ansiDim)<field> <value>\(ansiReset)
-                                    Update task field (priority, severity, status, label, due, focus, depends, description)
+                \(ansiBold)Tasks\(ansiReset) \(ansiDim)(/t = /task, /ts = /tasks)\(ansiReset)
+                  \(ansiCyan)/t\(ansiReset) \(ansiDim)<text>\(ansiReset)          Create a new task
+                  \(ansiCyan)/ts\(ansiReset)                List all tasks
+                  \(ansiCyan)/ts\(ansiReset) \(ansiDim)<status>\(ansiReset)       List tasks by status
+                  \(ansiCyan)/t #\(ansiReset)\(ansiDim)<id>\(ansiReset)           Show task details
+                  \(ansiCyan)/t #\(ansiReset)\(ansiDim)<id>\(ansiReset) \(ansiDim)<field> <value>\(ansiReset)
+                                    Update task field
+                  \(ansiDim)Scope: /t:t = team, /t:p = project, /t:t:name = specific team\(ansiReset)
 
-                \(ansiBold)Projects & Teams\(ansiReset)
-                  \(ansiCyan)/projects\(ansiReset)          List all projects
-                  \(ansiCyan)/project\(ansiReset)           Show current project info
-                  \(ansiCyan)/project create\(ansiReset) \(ansiDim)<name> [directory]\(ansiReset)
+                \(ansiBold)Projects\(ansiReset) \(ansiDim)(/p = /project)\(ansiReset)
+                  \(ansiCyan)/p\(ansiReset)                Show current project
+                  \(ansiCyan)/p:list\(ansiReset)            List all projects
+                  \(ansiCyan)/p:create\(ansiReset) \(ansiDim)<name> [dir]\(ansiReset)
                                     Create a new project
-                  \(ansiCyan)/teams\(ansiReset)             List teams in current project
-                  \(ansiCyan)/team\(ansiReset)              Show current team info
-                  \(ansiCyan)/team create\(ansiReset) \(ansiDim)<name>\(ansiReset)
-                                    Create a new team in current project
+                  \(ansiCyan)/p:switch\(ansiReset) \(ansiDim)<name>\(ansiReset)   Switch to a project
+
+                \(ansiBold)Teams\(ansiReset)
+                  \(ansiCyan)/team\(ansiReset)              Show current team
+                  \(ansiCyan)/team:list\(ansiReset)         List teams in project
+                  \(ansiCyan)/team:create\(ansiReset) \(ansiDim)<name>\(ansiReset) Create a new team
+                  \(ansiCyan)/team:join\(ansiReset) \(ansiDim)<name>\(ansiReset)   Join a team
+                  \(ansiCyan)/team:leave\(ansiReset)        Leave current team
 
                 \(ansiBold)Keys\(ansiReset)
                   \(ansiCyan)Tab\(ansiReset)               Agent picker (↑↓ or hotkey to select)

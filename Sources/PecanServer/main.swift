@@ -73,6 +73,37 @@ actor SessionManager {
         return teamStores["\(projectName)/\(teamName)"]
     }
 
+    func clearProjectForSession(sessionID: String) {
+        sessionProjects.removeValue(forKey: sessionID)
+        sessionTeams.removeValue(forKey: sessionID)
+    }
+
+    func clearTeamForSession(sessionID: String) {
+        sessionTeams.removeValue(forKey: sessionID)
+    }
+
+    /// Resolve a store for a given scope, with optional explicit target name.
+    /// scope "t" or "team" -> team store (optionally for a specific team name)
+    /// scope "p" or "project" -> project store (optionally for a specific project name)
+    /// empty or "agent" -> session store
+    func resolveStore(sessionID: String, scope: String, target: String? = nil) -> ScopedStore? {
+        switch scope {
+        case "p", "project":
+            if let target = target, !target.isEmpty {
+                return projectStores[target]
+            }
+            return getProjectStore(sessionID: sessionID)
+        case "t", "team":
+            if let target = target, !target.isEmpty {
+                guard let projectName = sessionProjects[sessionID] else { return nil }
+                return teamStores["\(projectName)/\(target)"]
+            }
+            return getTeamStore(sessionID: sessionID)
+        default:
+            return sessionStores[sessionID]
+        }
+    }
+
     /// Returns the appropriate store for the given scope relative to a session.
     func storeForScope(sessionID: String, scope: String) -> ScopedStore? {
         switch scope {
@@ -841,11 +872,13 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             errorMsg.agentOutput = out
                             try await SessionManager.shared.sendToUI(sessionID: req.sessionID, message: errorMsg)
                         }
-                    } else if text.hasPrefix("/task") || text.hasPrefix("/project") || text.hasPrefix("/team") {
+                    } else if text.hasPrefix("/task") || text.hasPrefix("/t:") || text.hasPrefix("/t ") || text == "/t"
+                                || text.hasPrefix("/ts") || text.hasPrefix("/project") || text.hasPrefix("/p:") || text == "/p"
+                                || text.hasPrefix("/team") {
                         do {
-                            try await Self.handleTaskUICommand(sessionID: req.sessionID, text: text)
+                            try await Self.handleSlashCommand(sessionID: req.sessionID, text: text)
                         } catch {
-                            logger.error("Task/project/team command failed: \(error)")
+                            logger.error("Slash command failed: \(error)")
                             var errorMsg = Pecan_ServerMessage()
                             var out = Pecan_AgentOutput()
                             out.sessionID = req.sessionID
@@ -921,52 +954,101 @@ extension ClientServiceProvider {
 extension ClientServiceProvider {
     /// Parse scope suffix from commands like /task:team or /tasks:project.
     /// Returns (baseCommand, scope) where scope is "" for no suffix.
-    private static func parseCommandScope(_ text: String) -> (String, String) {
-        // Match /command:scope patterns
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
-
-        // Extract the first word (command)
-        let parts = trimmed.split(separator: " ", maxSplits: 1)
-        let command = String(parts.first ?? "")
-
-        // Check for :scope suffix on command
-        if let colonIdx = command.firstIndex(of: ":") {
-            let baseCmd = String(command[command.startIndex..<colonIdx])
-            let scope = String(command[command.index(after: colonIdx)...])
-            if ["agent", "team", "project"].contains(scope) {
-                // Reconstruct with base command
-                let rest = parts.count > 1 ? " \(parts[1])" : ""
-                return ("\(baseCmd)\(rest)", scope)
-            }
-        }
-        return (trimmed, "")
+    /// Parsed representation of a colon-structured command.
+    /// E.g., "/t:p:myproject foo" -> base="t", subcmd="p", target="myproject", args="foo"
+    /// E.g., "/project:create foo" -> base="project", subcmd="create", target=nil, args="foo"
+    /// E.g., "/ts" -> base="ts", subcmd=nil, target=nil, args=nil
+    struct ParsedCommand {
+        let base: String      // e.g. "t", "task", "ts", "tasks", "p", "project", "team"
+        let subcmd: String?   // e.g. "create", "switch", "t", "p"
+        let target: String?   // e.g. team name, project name
+        let args: String      // remaining arguments after command word
     }
 
-    /// Handle /project and /projects commands from the UI.
-    static func handleProjectUICommand(sessionID: String, text: String, sendOutput: (String) async throws -> Void) async throws {
+    /// Parse a slash command with colon-separated segments and shorthand expansion.
+    /// Format: /<base>[:subcmd[:target]] [args...]
+    private static func parseCommand(_ text: String) -> ParsedCommand {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let wordParts = trimmed.split(separator: " ", maxSplits: 1)
+        let commandWord = String(wordParts.first ?? "").dropFirst() // strip leading /
+        let args = wordParts.count > 1 ? String(wordParts[1]).trimmingCharacters(in: .whitespaces) : ""
 
-        if trimmed == "/projects" {
+        let segments = commandWord.split(separator: ":", maxSplits: 2).map(String.init)
+
+        // Expand shorthands
+        var base = segments[0]
+        switch base {
+        case "p": base = "project"
+        case "t": base = "task"
+        case "ts": base = "tasks"
+        default: break
+        }
+
+        let subcmd = segments.count > 1 ? segments[1] : nil
+        let target = segments.count > 2 ? segments[2] : nil
+
+        return ParsedCommand(base: base, subcmd: subcmd, target: target, args: args)
+    }
+
+    /// Handle /project (or /p) commands.
+    static func handleProjectCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
+        switch cmd.subcmd {
+        case "create":
+            let argParts = cmd.args.split(separator: " ", maxSplits: 1).map(String.init)
+            guard let name = argParts.first, !name.isEmpty else {
+                try await sendOutput("Usage: /project:create <name> [directory]")
+                return
+            }
+            let directory = argParts.count > 1 ? argParts[1] : nil
+            do {
+                let _ = try ProjectStore(name: name, directory: directory)
+                var msg = "Created project '\(name)'."
+                if let dir = directory { msg += " Directory: \(dir)" }
+                try await sendOutput(msg)
+            } catch {
+                try await sendOutput("Failed to create project: \(error.localizedDescription)")
+            }
+
+        case "switch":
+            let name = cmd.args.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else {
+                try await sendOutput("Usage: /project:switch <name>")
+                return
+            }
+            let available = ProjectRegistry.listProjectNames()
+            guard available.contains(name) else {
+                try await sendOutput("Project '\(name)' not found. Available: \(available.joined(separator: ", "))")
+                return
+            }
+            do {
+                let store = try ProjectStore(name: name)
+                await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: name, store: store)
+                // Clear team association since we switched projects
+                await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
+                try await sendOutput("Switched to project '\(name)'.")
+            } catch {
+                try await sendOutput("Failed to switch project: \(error.localizedDescription)")
+            }
+
+        case "list":
             let names = ProjectRegistry.listProjectNames()
             if names.isEmpty {
-                try await sendOutput("No projects found. Use /project create <name> [directory] to create one.")
+                try await sendOutput("No projects found. Use /project:create <name> [directory] to create one.")
                 return
             }
             let currentProject = await SessionManager.shared.getProjectName(sessionID: sessionID)
             var lines = "**Projects**\n"
             for name in names {
-                let marker = (name == currentProject) ? " ← active" : ""
+                let marker = (name == currentProject) ? " <- active" : ""
                 lines += "  \(name)\(marker)\n"
             }
             try await sendOutput(lines)
-            return
-        }
 
-        if trimmed == "/project" {
-            // Show current project info
+        case nil:
+            // /project with no subcommand — show current project info
             guard let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID),
                   let store = await SessionManager.shared.getProjectStore(sessionID: sessionID) else {
-                try await sendOutput("No project assigned to this session. Use --project <name> when starting the TUI.")
+                try await sendOutput("No project assigned. Use /project:switch <name> or --project <name> at startup.")
                 return
             }
             var info = "**Project: \(projectName)**\n"
@@ -981,76 +1063,25 @@ extension ClientServiceProvider {
             let memCount = try store.listMemories().count
             info += "  Tasks: \(taskCount)  Memories: \(memCount)"
             try await sendOutput(info)
-            return
+
+        default:
+            try await sendOutput("Unknown project command ':\(cmd.subcmd ?? "")'. Use :create, :switch, :list")
         }
-
-        let rest = String(trimmed.dropFirst("/project ".count)).trimmingCharacters(in: .whitespaces)
-
-        if rest.hasPrefix("create ") {
-            let createArgs = String(rest.dropFirst("create ".count)).trimmingCharacters(in: .whitespaces)
-            let argParts = createArgs.split(separator: " ", maxSplits: 1).map(String.init)
-            let name = argParts[0]
-            let directory = argParts.count > 1 ? argParts[1] : nil
-            do {
-                let _ = try ProjectStore(name: name, directory: directory)
-                var msg = "Created project '\(name)'."
-                if let dir = directory { msg += " Directory: \(dir)" }
-                try await sendOutput(msg)
-            } catch {
-                try await sendOutput("Failed to create project: \(error.localizedDescription)")
-            }
-            return
-        }
-
-        try await sendOutput("Usage: /project, /projects, /project create <name> [directory]")
     }
 
-    /// Handle /team and /teams commands from the UI.
-    static func handleTeamUICommand(sessionID: String, text: String, sendOutput: (String) async throws -> Void) async throws {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
+    /// Handle /team commands.
+    static func handleTeamCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
+        let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID)
 
-        guard let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID) else {
-            try await sendOutput("No project assigned — teams require a project. Use --project <name> when starting the TUI.")
-            return
-        }
-
-        if trimmed == "/teams" {
-            let names = TeamRegistry.listTeamNames(projectName: projectName)
-            if names.isEmpty {
-                try await sendOutput("No teams in project '\(projectName)'. Use /team create <name> to create one.")
+        switch cmd.subcmd {
+        case "create":
+            guard let projectName = projectName else {
+                try await sendOutput("No project assigned — teams require a project.")
                 return
             }
-            let currentTeam = await SessionManager.shared.getTeamName(sessionID: sessionID)
-            var lines = "**Teams** (project: \(projectName))\n"
-            for name in names {
-                let marker = (name == currentTeam) ? " ← active" : ""
-                lines += "  \(name)\(marker)\n"
-            }
-            try await sendOutput(lines)
-            return
-        }
-
-        if trimmed == "/team" {
-            guard let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID),
-                  let store = await SessionManager.shared.getTeamStore(sessionID: sessionID) else {
-                try await sendOutput("No team assigned to this session. Use --team <name> when starting the TUI.")
-                return
-            }
-            var info = "**Team: \(teamName)** (project: \(projectName))\n"
-            info += "  Workspace: \(store.workspacePath.path)\n"
-            let taskCount = try store.listTasks().count
-            let memCount = try store.listMemories().count
-            info += "  Tasks: \(taskCount)  Memories: \(memCount)"
-            try await sendOutput(info)
-            return
-        }
-
-        let rest = String(trimmed.dropFirst("/team ".count)).trimmingCharacters(in: .whitespaces)
-
-        if rest.hasPrefix("create ") {
-            let name = String(rest.dropFirst("create ".count)).trimmingCharacters(in: .whitespaces)
+            let name = cmd.args.trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else {
-                try await sendOutput("Usage: /team create <name>")
+                try await sendOutput("Usage: /team:create <name>")
                 return
             }
             do {
@@ -1059,70 +1090,129 @@ extension ClientServiceProvider {
             } catch {
                 try await sendOutput("Failed to create team: \(error.localizedDescription)")
             }
-            return
-        }
 
-        try await sendOutput("Usage: /team, /teams, /team create <name>")
+        case "join":
+            guard let projectName = projectName else {
+                try await sendOutput("No project assigned — teams require a project.")
+                return
+            }
+            let name = cmd.args.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else {
+                try await sendOutput("Usage: /team:join <name>")
+                return
+            }
+            let available = TeamRegistry.listTeamNames(projectName: projectName)
+            guard available.contains(name) else {
+                try await sendOutput("Team '\(name)' not found in project '\(projectName)'. Available: \(available.joined(separator: ", "))")
+                return
+            }
+            do {
+                let store = try TeamStore(teamName: name, projectName: projectName)
+                await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: name, projectName: projectName, store: store)
+                try await sendOutput("Joined team '\(name)'.")
+            } catch {
+                try await sendOutput("Failed to join team: \(error.localizedDescription)")
+            }
+
+        case "leave":
+            guard let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID) else {
+                try await sendOutput("Not currently in a team.")
+                return
+            }
+            await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
+            try await sendOutput("Left team '\(teamName)'.")
+
+        case "list":
+            guard let projectName = projectName else {
+                try await sendOutput("No project assigned — teams require a project.")
+                return
+            }
+            let names = TeamRegistry.listTeamNames(projectName: projectName)
+            if names.isEmpty {
+                try await sendOutput("No teams in project '\(projectName)'. Use /team:create <name> to create one.")
+                return
+            }
+            let currentTeam = await SessionManager.shared.getTeamName(sessionID: sessionID)
+            var lines = "**Teams** (project: \(projectName))\n"
+            for name in names {
+                let marker = (name == currentTeam) ? " <- active" : ""
+                lines += "  \(name)\(marker)\n"
+            }
+            try await sendOutput(lines)
+
+        case nil:
+            // /team with no subcommand — show current team info
+            guard let projectName = projectName,
+                  let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID),
+                  let store = await SessionManager.shared.getTeamStore(sessionID: sessionID) else {
+                try await sendOutput("No team assigned. Use /team:join <name> or --team <name> at startup.")
+                return
+            }
+            var info = "**Team: \(teamName)** (project: \(projectName))\n"
+            info += "  Workspace: \(store.workspacePath.path)\n"
+            let taskCount = try store.listTasks().count
+            let memCount = try store.listMemories().count
+            info += "  Tasks: \(taskCount)  Memories: \(memCount)"
+            try await sendOutput(info)
+
+        default:
+            try await sendOutput("Unknown team command ':\(cmd.subcmd ?? "")'. Use :create, :join, :leave, :list")
+        }
     }
 
-    /// Parse and execute /task, /tasks, /project, /team commands from the UI.
-    static func handleTaskUICommand(sessionID: String, text: String) async throws {
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
+    /// Handle /task, /tasks (and shorthands /t, /ts) commands with scope modifiers.
+    /// Scope modifiers: :t[:teamName] for team, :p[:projectName] for project
+    static func handleTaskCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
+        let isList = (cmd.base == "tasks")
 
-        // Helper to send output back to UI
-        func sendOutput(_ msg: String) async throws {
-            var srvMsg = Pecan_ServerMessage()
-            var out = Pecan_AgentOutput()
-            out.sessionID = sessionID
-            out.text = msg
-            srvMsg.agentOutput = out
-            try await SessionManager.shared.sendToUI(sessionID: sessionID, message: srvMsg)
+        // Resolve scope from subcmd: "t"="team", "p"="project", nil=agent
+        let scope: String
+        let scopeTarget: String?
+        if let sub = cmd.subcmd {
+            switch sub {
+            case "t", "team":
+                scope = "team"
+                scopeTarget = cmd.target
+            case "p", "project":
+                scope = "project"
+                scopeTarget = cmd.target
+            default:
+                scope = ""
+                scopeTarget = nil
+            }
+        } else {
+            scope = ""
+            scopeTarget = nil
         }
 
-        // Handle /project commands
-        if trimmed == "/project" || trimmed.hasPrefix("/project ") || trimmed == "/projects" {
-            try await handleProjectUICommand(sessionID: sessionID, text: trimmed, sendOutput: sendOutput)
-            return
-        }
-
-        // Handle /team commands (but not /teams which is its own thing)
-        if (trimmed == "/team" || trimmed.hasPrefix("/team ") || trimmed == "/teams")
-            && !trimmed.hasPrefix("/team:") {
-            try await handleTeamUICommand(sessionID: sessionID, text: trimmed, sendOutput: sendOutput)
-            return
-        }
-
-        // Parse scope suffix (e.g., /task:team, /tasks:project)
-        let (parsedText, scope) = parseCommandScope(trimmed)
-
-        // Resolve the store for the given scope
+        // Resolve store
         let store: ScopedStore
         if scope.isEmpty {
-            // Default to agent session store
             guard let s = await SessionManager.shared.getStore(sessionID: sessionID) else {
                 throw NSError(domain: "TaskCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active session"])
             }
             store = s
-        } else if let s = await SessionManager.shared.storeForScope(sessionID: sessionID, scope: scope) {
+        } else if let s = await SessionManager.shared.resolveStore(sessionID: sessionID, scope: scope, target: scopeTarget) {
             store = s
         } else {
-            try await sendOutput("No \(scope) store available for this session.")
+            let label = scopeTarget.map { "\(scope) '\($0)'" } ?? scope
+            try await sendOutput("No \(label) store available for this session.")
             return
         }
 
-        let scopeLabel = scope.isEmpty ? "" : " [\(scope)]"
+        let scopeLabel = scope.isEmpty ? "" : scopeTarget.map { " [\(scope):\($0)]" } ?? " [\(scope)]"
 
-        // /tasks or /tasks <status>
-        if parsedText == "/tasks" || parsedText.hasPrefix("/tasks ") {
-            let statusFilter = parsedText == "/tasks" ? nil : String(parsedText.dropFirst("/tasks ".count)).trimmingCharacters(in: .whitespaces)
-            let tasks = try store.listTasks(status: statusFilter?.isEmpty == true ? nil : statusFilter, label: nil, search: nil)
+        // /tasks (list)
+        if isList {
+            let statusFilter = cmd.args.isEmpty ? nil : cmd.args
+            let tasks = try store.listTasks(status: statusFilter, label: nil, search: nil)
             if tasks.isEmpty {
                 try await sendOutput("No tasks found\(scopeLabel).")
                 return
             }
             var lines = "**Tasks\(scopeLabel)**\n"
             for task in tasks {
-                let focusMarker = task.focused == 1 ? " ★" : ""
+                let focusMarker = task.focused == 1 ? " *" : ""
                 let priorityStr = "P\(task.priority)"
                 lines += "  #\(task.id ?? 0) [\(task.status)] \(priorityStr) \(task.title)\(focusMarker)\n"
             }
@@ -1130,13 +1220,13 @@ extension ClientServiceProvider {
             return
         }
 
-        // /task #<id> ... or /task <text>
-        if parsedText == "/task" {
-            try await sendOutput("Usage: /task <instruction> or /task #<id> [field value]")
+        // /task with no args — show usage
+        if cmd.args.isEmpty {
+            try await sendOutput("Usage: /t <text> to create, /t #<id> to view, /ts to list")
             return
         }
 
-        let rest = String(parsedText.dropFirst("/task ".count)).trimmingCharacters(in: .whitespaces)
+        let rest = cmd.args
 
         // /task #<id> ...
         if rest.hasPrefix("#") {
@@ -1147,12 +1237,11 @@ extension ClientServiceProvider {
             }
 
             if parts.count == 1 {
-                // /task #<id> — show detail
                 guard let task = try store.getTask(id: taskID) else {
                     try await sendOutput("Task #\(taskID) not found\(scopeLabel).")
                     return
                 }
-                let focusStr = task.focused == 1 ? " ★ focused" : ""
+                let focusStr = task.focused == 1 ? " * focused" : ""
                 var detail = "**Task #\(task.id ?? 0)**: \(task.title)\(focusStr)\(scopeLabel)\n"
                 detail += "  Status: \(task.status)  Priority: \(task.priority)  Severity: \(task.severity)\n"
                 if !task.labels.isEmpty { detail += "  Labels: \(task.labels)\n" }
@@ -1172,7 +1261,6 @@ extension ClientServiceProvider {
             if field == "focus" {
                 try store.setFocused(taskID: taskID)
                 if scope.isEmpty {
-                    // Only update the UI focused task indicator for agent-scope tasks
                     let focused = try store.getFocusedTask()
                     try await SessionManager.shared.sendTaskUpdateToUI(sessionID: sessionID, focusedTitle: focused?.title ?? "")
                 }
@@ -1222,13 +1310,41 @@ extension ClientServiceProvider {
             }
 
             let updated = try store.updateTask(id: taskID, fields: fields)
-            try await sendOutput("Updated task #\(updated.id ?? 0)\(scopeLabel): \(field) → \(value)")
+            try await sendOutput("Updated task #\(updated.id ?? 0)\(scopeLabel): \(field) -> \(value)")
             return
         }
 
         // /task <text> — create task
         let task = try store.createTask(title: rest, description: "", priority: 3, severity: "normal", labels: "", dueDate: "", dependsOn: "")
         try await sendOutput("Created task #\(task.id ?? 0)\(scopeLabel): \(task.title)")
+    }
+
+    /// Main entry point for all slash commands routed from the UI input handler.
+    static func handleSlashCommand(sessionID: String, text: String) async throws {
+        let cmd = parseCommand(text)
+
+        func sendOutput(_ msg: String) async throws {
+            var srvMsg = Pecan_ServerMessage()
+            var out = Pecan_AgentOutput()
+            out.sessionID = sessionID
+            out.text = msg
+            srvMsg.agentOutput = out
+            try await SessionManager.shared.sendToUI(sessionID: sessionID, message: srvMsg)
+        }
+
+        switch cmd.base {
+        case "project", "projects":
+            // /projects is shorthand for /project:list
+            let effective = cmd.base == "projects" ? ParsedCommand(base: "project", subcmd: "list", target: nil, args: cmd.args) : cmd
+            try await handleProjectCommand(sessionID: sessionID, cmd: effective, sendOutput: sendOutput)
+        case "team", "teams":
+            let effective = cmd.base == "teams" ? ParsedCommand(base: "team", subcmd: "list", target: nil, args: cmd.args) : cmd
+            try await handleTeamCommand(sessionID: sessionID, cmd: effective, sendOutput: sendOutput)
+        case "task", "tasks":
+            try await handleTaskCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
+        default:
+            try await sendOutput("Unknown command '/\(cmd.base)'.")
+        }
     }
 }
 
