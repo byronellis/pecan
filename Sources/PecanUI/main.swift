@@ -728,6 +728,12 @@ actor TerminalManager {
         cursorPosition = 0
         return text
     }
+
+    func setInputBuffer(_ text: String) {
+        currentInputBuffer = text
+        cursorPosition = text.count
+        redrawPrompt()
+    }
 }
 
 enum InputKey {
@@ -844,6 +850,70 @@ func handleAgentPicker() async -> Int? {
     }
 }
 
+// MARK: - Command History
+
+actor CommandHistory {
+    static let shared = CommandHistory()
+
+    /// Per-session command history (sessionID -> entries, newest last)
+    private var history: [String: [String]] = [:]
+    /// Current browse index per session (nil = not browsing)
+    private var browseIndex: [String: Int] = [:]
+    /// Saved in-progress input when user starts browsing
+    private var savedInput: [String: String] = [:]
+
+    func add(_ command: String, sessionID: String) {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        // Don't duplicate consecutive entries
+        if history[sessionID]?.last == trimmed { return }
+        history[sessionID, default: []].append(trimmed)
+        // Reset browse position
+        browseIndex.removeValue(forKey: sessionID)
+        savedInput.removeValue(forKey: sessionID)
+    }
+
+    /// Move up in history. Returns the history entry to display, or nil if at top.
+    func navigateUp(sessionID: String, currentInput: String) -> String? {
+        let entries = history[sessionID] ?? []
+        guard !entries.isEmpty else { return nil }
+
+        let idx: Int
+        if let current = browseIndex[sessionID] {
+            idx = current - 1
+        } else {
+            // Starting to browse — save current input
+            savedInput[sessionID] = currentInput
+            idx = entries.count - 1
+        }
+
+        guard idx >= 0 else { return nil }
+        browseIndex[sessionID] = idx
+        return entries[idx]
+    }
+
+    /// Move down in history. Returns the entry to display, or the saved input if past the end.
+    func navigateDown(sessionID: String) -> String? {
+        guard let current = browseIndex[sessionID] else { return nil }
+        let entries = history[sessionID] ?? []
+
+        let idx = current + 1
+        if idx >= entries.count {
+            // Past the end — restore saved input
+            browseIndex.removeValue(forKey: sessionID)
+            let saved = savedInput.removeValue(forKey: sessionID) ?? ""
+            return saved
+        }
+        browseIndex[sessionID] = idx
+        return entries[idx]
+    }
+
+    func resetBrowse(sessionID: String) {
+        browseIndex.removeValue(forKey: sessionID)
+        savedInput.removeValue(forKey: sessionID)
+    }
+}
+
 func readInputLine(sessionState: SessionState) async -> String? {
     await TerminalManager.shared.setInputActive(true)
 
@@ -878,6 +948,10 @@ func readInputLine(sessionState: SessionState) async -> String? {
             case .enter:
                 let text = await TerminalManager.shared.getAndClearInput()
                 await TerminalManager.shared.setInputActive(false)
+                // Save to history
+                if let sid = await sessionState.getActiveID() {
+                    await CommandHistory.shared.add(text, sessionID: sid)
+                }
                 // Clear the prompt line — caller will echo the input
                 print("\r\u{1B}[K", terminator: "")
                 fflush(stdout)
@@ -904,7 +978,20 @@ func readInputLine(sessionState: SessionState) async -> String? {
                 await TerminalManager.shared.yank()
             case .character(let c):
                 await TerminalManager.shared.insertChar(c)
-            case .arrowUp, .arrowDown, .escape, .unknown:
+            case .arrowUp:
+                if let sid = await sessionState.getActiveID() {
+                    let currentBuf = await TerminalManager.shared.currentInputBuffer
+                    if let entry = await CommandHistory.shared.navigateUp(sessionID: sid, currentInput: currentBuf) {
+                        await TerminalManager.shared.setInputBuffer(entry)
+                    }
+                }
+            case .arrowDown:
+                if let sid = await sessionState.getActiveID() {
+                    if let entry = await CommandHistory.shared.navigateDown(sessionID: sid) {
+                        await TerminalManager.shared.setInputBuffer(entry)
+                    }
+                }
+            case .escape, .unknown:
                 break
             }
         } else {
@@ -1219,6 +1306,7 @@ func main() async throws {
                   \(ansiCyan)/team:leave\(ansiReset)        Leave current team
 
                 \(ansiBold)Keys\(ansiReset)
+                  \(ansiCyan)↑\(ansiReset) / \(ansiCyan)↓\(ansiReset)            Command history (per agent)
                   \(ansiCyan)Tab\(ansiReset)               Agent picker (↑↓ or hotkey to select)
                   \(ansiCyan)^A\(ansiReset) / \(ansiCyan)^E\(ansiReset)          Beginning / end of line
                   \(ansiCyan)^K\(ansiReset) / \(ansiCyan)^U\(ansiReset)          Kill to end / start of line
