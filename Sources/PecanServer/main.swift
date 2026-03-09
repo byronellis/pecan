@@ -709,6 +709,9 @@ actor SessionManager {
         try await SpawnerFactory.shared.terminate(sessionID: sessionID)
         agentStreams.removeValue(forKey: sessionID)
 
+        // Allow socket relay and VM resources to fully tear down
+        try await Task.sleep(nanoseconds: 500_000_000) // 500ms
+
         // Read current state from SQLite
         let agentName = try store.name
         let shares = try store.getShares()

@@ -161,10 +161,13 @@ actor ContainerSpawner {
             do {
                 let status = try await container.wait()
                 logger.info("Container for session \(sessionID) exited with status \(status)")
-                try? await container.stop()
-                var mgr = manager
-                try? mgr.delete(sessionID)
-                await self?.removeSession(sessionID)
+                // Only clean up if we haven't been terminated already (avoid double cleanup)
+                if await self?.containers[sessionID] != nil {
+                    try? await container.stop()
+                    var mgr = manager
+                    try? mgr.delete(sessionID)
+                    await self?.removeSession(sessionID)
+                }
             } catch {
                 logger.error("Error while waiting for container \(sessionID): \(error)")
             }
@@ -174,6 +177,8 @@ actor ContainerSpawner {
     func terminateAgent(sessionID: String) async throws {
         if let container = containers[sessionID] {
             try await container.stop()
+            // Wait for the container process to fully exit so the socket relay is torn down
+            _ = try? await container.wait()
             if var manager = managers[sessionID] {
                 try? manager.delete(sessionID)
             }
