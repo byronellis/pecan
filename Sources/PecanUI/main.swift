@@ -1035,6 +1035,13 @@ actor SessionState {
         return s.teamName
     }
 
+    func updateProjectTeam(sessionID: String, projectName: String, teamName: String) {
+        guard var session = sessions[sessionID] else { return }
+        session.projectName = projectName
+        session.teamName = teamName
+        sessions[sessionID] = session
+    }
+
     func setActive(_ id: String) {
         if sessions[id] != nil {
             activeSessionID = id
@@ -1238,6 +1245,19 @@ func main() async throws {
                     await sessionState.setFocusedTask(sessionID: update.sessionID, title: update.focusedTaskTitle)
                     let focusedTitle = await sessionState.getActiveFocusedTask()
                     await TerminalManager.shared.updateFocusedTask(focusedTitle)
+
+                case .sessionUpdate(let update):
+                    await sessionState.updateProjectTeam(
+                        sessionID: update.sessionID,
+                        projectName: update.projectName,
+                        teamName: update.teamName
+                    )
+                    // Refresh breadcrumbs if this is the active session
+                    if await sessionState.getActiveID() == update.sessionID {
+                        let projectDisplay = await sessionState.getActiveProjectName()
+                        let teamDisplay = await sessionState.getActiveTeamName()
+                        await TerminalManager.shared.updateProjectTeam(project: projectDisplay, team: teamDisplay)
+                    }
 
                 case nil:
                     break

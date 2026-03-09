@@ -201,6 +201,14 @@ public struct Pecan_ServerMessage: Sendable {
     set {payload = .taskUpdate(newValue)}
   }
 
+  public var sessionUpdate: Pecan_SessionUpdate {
+    get {
+      if case .sessionUpdate(let v)? = payload {return v}
+      return Pecan_SessionUpdate()
+    }
+    set {payload = .sessionUpdate(newValue)}
+  }
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public enum OneOf_Payload: Equatable, Sendable {
@@ -209,6 +217,7 @@ public struct Pecan_ServerMessage: Sendable {
     case approvalRequest(Pecan_ToolApprovalRequest)
     case taskCompleted(Pecan_TaskCompleted)
     case taskUpdate(Pecan_TaskUpdate)
+    case sessionUpdate(Pecan_SessionUpdate)
 
   }
 
@@ -802,6 +811,22 @@ public struct Pecan_TaskUpdate: Sendable {
   public init() {}
 }
 
+public struct Pecan_SessionUpdate: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var sessionID: String = String()
+
+  public var projectName: String = String()
+
+  public var teamName: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
 public struct Pecan_HttpProxyRequest: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -1096,7 +1121,14 @@ extension Pecan_ToolApproval: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
 
 extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ServerMessage"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_started\0\u{3}agent_output\0\u{3}approval_request\0\u{3}task_completed\0\u{3}task_update\0")
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "session_started"),
+    2: .standard(proto: "agent_output"),
+    3: .standard(proto: "approval_request"),
+    4: .standard(proto: "task_completed"),
+    5: .standard(proto: "task_update"),
+    6: .standard(proto: "session_update"),
+  ]
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1169,6 +1201,19 @@ extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
           self.payload = .taskUpdate(v)
         }
       }()
+      case 6: try {
+        var v: Pecan_SessionUpdate?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .sessionUpdate(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .sessionUpdate(v)
+        }
+      }()
       default: break
       }
     }
@@ -1199,6 +1244,10 @@ extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
     case .taskUpdate?: try {
       guard case .taskUpdate(let v)? = self.payload else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    }()
+    case .sessionUpdate?: try {
+      guard case .sessionUpdate(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
     }()
     case nil: break
     }
@@ -2518,6 +2567,47 @@ extension Pecan_TaskUpdate: SwiftProtobuf.Message, SwiftProtobuf._MessageImpleme
   public static func ==(lhs: Pecan_TaskUpdate, rhs: Pecan_TaskUpdate) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.focusedTaskTitle != rhs.focusedTaskTitle {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_SessionUpdate: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".SessionUpdate"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "session_id"),
+    2: .standard(proto: "project_name"),
+    3: .standard(proto: "team_name"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.projectName) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.teamName) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.sessionID.isEmpty {
+      try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
+    }
+    if !self.projectName.isEmpty {
+      try visitor.visitSingularStringField(value: self.projectName, fieldNumber: 2)
+    }
+    if !self.teamName.isEmpty {
+      try visitor.visitSingularStringField(value: self.teamName, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_SessionUpdate, rhs: Pecan_SessionUpdate) -> Bool {
+    if lhs.sessionID != rhs.sessionID {return false}
+    if lhs.projectName != rhs.projectName {return false}
+    if lhs.teamName != rhs.teamName {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

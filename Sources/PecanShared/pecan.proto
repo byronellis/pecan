@@ -44,6 +44,7 @@ message ServerMessage {
         ToolApprovalRequest approval_request = 3;
         TaskCompleted task_completed = 4;
         TaskUpdate task_update = 5;
+        SessionUpdate session_update = 6;
     }
 }
 
@@ -224,6 +225,12 @@ message TaskResponse {
 message TaskUpdate {
     string session_id = 1;
     string focused_task_title = 2;
+}
+
+message SessionUpdate {
+    string session_id = 1;
+    string project_name = 2;
+    string team_name = 3;
 }
 
 // ==========================================

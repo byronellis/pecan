@@ -607,6 +607,18 @@ actor SessionManager {
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 
+    func sendSessionUpdateToUI(sessionID: String) async throws {
+        let projectName = sessionProjects[sessionID] ?? ""
+        let teamName = sessionTeams[sessionID] ?? ""
+        var srvMsg = Pecan_ServerMessage()
+        var update = Pecan_SessionUpdate()
+        update.sessionID = sessionID
+        update.projectName = projectName
+        update.teamName = teamName
+        srvMsg.sessionUpdate = update
+        try await sendToUI(sessionID: sessionID, message: srvMsg)
+    }
+
     func sendTaskUpdateToUI(sessionID: String, focusedTitle: String) async throws {
         var srvMsg = Pecan_ServerMessage()
         var update = Pecan_TaskUpdate()
@@ -1034,7 +1046,10 @@ extension ClientServiceProvider {
                 await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: name, store: store)
                 // Clear team association since we switched projects
                 await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
-                try await sendOutput("Switched to project '\(name)'.")
+                // Restart container with new mounts and update UI breadcrumbs
+                try await SessionManager.shared.restartContainer(sessionID: sessionID)
+                try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
+                try await sendOutput("Switched to project '\(name)'. Agent restarted with project mounted.")
             } catch {
                 try await sendOutput("Failed to switch project: \(error.localizedDescription)")
             }
@@ -1125,7 +1140,9 @@ extension ClientServiceProvider {
             do {
                 let store = try TeamStore(teamName: name, projectName: projectName)
                 await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: name, projectName: projectName, store: store)
-                try await sendOutput("Joined team '\(name)'.")
+                try await SessionManager.shared.restartContainer(sessionID: sessionID)
+                try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
+                try await sendOutput("Joined team '\(name)'. Agent restarted with team workspace mounted.")
             } catch {
                 try await sendOutput("Failed to join team: \(error.localizedDescription)")
             }
@@ -1136,7 +1153,13 @@ extension ClientServiceProvider {
                 return
             }
             await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
-            try await sendOutput("Left team '\(teamName)'.")
+            do {
+                try await SessionManager.shared.restartContainer(sessionID: sessionID)
+                try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
+                try await sendOutput("Left team '\(teamName)'. Agent restarted.")
+            } catch {
+                try await sendOutput("Left team '\(teamName)' but failed to restart: \(error.localizedDescription)")
+            }
 
         case "list":
             guard let projectName = projectName else {
