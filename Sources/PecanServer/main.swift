@@ -705,8 +705,9 @@ actor SessionManager {
         statusMsg.agentOutput = out
         try await sendToUI(sessionID: sessionID, message: statusMsg)
 
-        // Terminate current container
+        // Terminate current container and clear stale agent stream
         try await SpawnerFactory.shared.terminate(sessionID: sessionID)
+        agentStreams.removeValue(forKey: sessionID)
 
         // Read current state from SQLite
         let agentName = try store.name

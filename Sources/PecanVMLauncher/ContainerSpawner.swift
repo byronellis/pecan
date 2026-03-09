@@ -27,6 +27,7 @@ public final class FileWriter: Writer, @unchecked Sendable {
 @available(macOS 15.0, *)
 actor ContainerSpawner {
     private var containers: [String: LinuxContainer] = [:]
+    private var managers: [String: ContainerManager] = [:]
 
     init() {}
 
@@ -154,13 +155,16 @@ actor ContainerSpawner {
         }
 
         containers[sessionID] = container
+        managers[sessionID] = manager
 
-        Task.detached {
+        Task.detached { [weak self] in
             do {
                 let status = try await container.wait()
                 logger.info("Container for session \(sessionID) exited with status \(status)")
                 try? await container.stop()
-                try? manager.delete(sessionID)
+                var mgr = manager
+                try? mgr.delete(sessionID)
+                await self?.removeSession(sessionID)
             } catch {
                 logger.error("Error while waiting for container \(sessionID): \(error)")
             }
@@ -170,8 +174,16 @@ actor ContainerSpawner {
     func terminateAgent(sessionID: String) async throws {
         if let container = containers[sessionID] {
             try await container.stop()
-            containers.removeValue(forKey: sessionID)
+            if var manager = managers[sessionID] {
+                try? manager.delete(sessionID)
+            }
+            removeSession(sessionID)
             logger.info("Terminated container for session \(sessionID)")
         }
+    }
+
+    private func removeSession(_ sessionID: String) {
+        containers.removeValue(forKey: sessionID)
+        managers.removeValue(forKey: sessionID)
     }
 }
