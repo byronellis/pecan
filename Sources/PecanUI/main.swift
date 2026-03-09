@@ -301,6 +301,9 @@ actor TerminalManager {
     var cursorChromeLine = 2
     /// Currently focused task title for the active agent
     var focusedTaskTitle: String?
+    /// Project and team names for breadcrumb display
+    var projectName: String?
+    var teamName: String?
 
     // Agent picker state
     var pickerVisible = false
@@ -363,26 +366,69 @@ actor TerminalManager {
         }
     }
 
-    /// Build the powerline status bar:  ⌂  agent_name │ task_title  [N]
+    func updateProjectTeam(project: String?, team: String?) {
+        projectName = project
+        teamName = team
+        if inputActive {
+            redrawPrompt()
+        }
+    }
+
+    /// Build the powerline status bar breadcrumb:
+    /// pecan > project > team > agent > task  [N agents]
+    /// Default project and team are hidden to reduce clutter.
     private func buildStatusBar() -> String {
         let width = terminalWidth()
         let activeAgent = agents.first(where: { $0.isActive })
         let activeName = activeAgent?.name ?? "no agent"
         let count = agents.count
 
-        // White bg + dark text for house flag
-        let homeFlag = "\u{1B}[47m\u{1B}[30m \(teamIcon) \(ansiReset)"
-        // Powerline arrow: white fg on cyan bg
-        let homeToCyan = "\u{1B}[37m\u{1B}[46m\(plSep)\(ansiReset)"
+        // Build breadcrumb segments: home, optional project, optional team, agent name
+        var breadcrumb = ""
+        var breadcrumbLen = 0
 
-        // Build the cyan segment content: agent name + optional focused task
+        // Home flag
+        let homeFlag = "\u{1B}[47m\u{1B}[30m \(teamIcon) \(ansiReset)"
+        breadcrumb += homeFlag
+        breadcrumbLen += 3
+
+        // Project segment (if non-default)
+        if let proj = projectName {
+            let projSep = "\u{1B}[37m\u{1B}[45m\(plSep)\(ansiReset)"  // white fg on magenta bg
+            let projSeg = "\u{1B}[45m\u{1B}[1m \(proj) \(ansiReset)"  // magenta bg
+            breadcrumb += projSep + projSeg
+            breadcrumbLen += 1 + proj.count + 2
+        }
+
+        // Team segment (if non-default)
+        if let team = teamName {
+            let teamSep: String
+            if projectName != nil {
+                teamSep = "\u{1B}[35m\u{1B}[44m\(plSep)\(ansiReset)"  // magenta fg on blue bg
+            } else {
+                teamSep = "\u{1B}[37m\u{1B}[44m\(plSep)\(ansiReset)"  // white fg on blue bg
+            }
+            let teamSeg = "\u{1B}[44m\u{1B}[1m \(team) \(ansiReset)"  // blue bg
+            breadcrumb += teamSep + teamSeg
+            breadcrumbLen += 1 + team.count + 2
+        }
+
+        // Agent segment (cyan)
+        let agentSep: String
+        if teamName != nil {
+            agentSep = "\u{1B}[34m\u{1B}[46m\(plSep)\(ansiReset)"  // blue fg on cyan bg
+        } else if projectName != nil {
+            agentSep = "\u{1B}[35m\u{1B}[46m\(plSep)\(ansiReset)"  // magenta fg on cyan bg
+        } else {
+            agentSep = "\u{1B}[37m\u{1B}[46m\(plSep)\(ansiReset)"  // white fg on cyan bg
+        }
+
         var cyanContent = " \(activeName) "
         var cyanVisibleLen = activeName.count + 2
         if let task = focusedTaskTitle, !task.isEmpty {
-            // Calculate max space for task title
             let rightVisible = count > 1 ? "\(count)".count + 2 : 0
-            let baseUsed = 3 + 1 + cyanVisibleLen + 1 + rightVisible  // home + sep + name + sep + right
-            let availableForTask = width - baseUsed - 5  // " │ " (3) + some margin
+            let baseUsed = breadcrumbLen + 1 + cyanVisibleLen + 1 + rightVisible
+            let availableForTask = width - baseUsed - 5
             if availableForTask > 5 {
                 let truncated = task.count > availableForTask ? String(task.prefix(availableForTask - 1)) + "…" : task
                 cyanContent = " \(activeName) │ \(truncated) "
@@ -390,20 +436,17 @@ actor TerminalManager {
             }
         }
 
-        // Cyan bg + bold white text
         let agentSeg = "\u{1B}[46m\u{1B}[1m\(cyanContent)\(ansiReset)"
-        // Powerline arrow: cyan fg on default bg
         let cyanToDefault = "\u{1B}[36m\(plSep)\(ansiReset)"
 
-        let left = homeFlag + homeToCyan + agentSeg + cyanToDefault
+        breadcrumb += agentSep + agentSeg + cyanToDefault
+        breadcrumbLen += 1 + cyanVisibleLen + 1
+
         let right = count > 1 ? "\(ansiDim)[\(count)]\(ansiReset)" : ""
-
-        // Visible char widths: " ⌂ " (3) + sep (1) + cyanContent + sep (1)
-        let leftVisible = 3 + 1 + cyanVisibleLen + 1
         let rightVisible = count > 1 ? "\(count)".count + 2 : 0
-        let padding = max(0, width - leftVisible - rightVisible)
+        let padding = max(0, width - breadcrumbLen - rightVisible)
 
-        return left + String(repeating: " ", count: padding) + right
+        return breadcrumb + String(repeating: " ", count: padding) + right
     }
 
     /// Render the 3-line chrome: separator + prompt + status bar
@@ -874,6 +917,8 @@ actor SessionState {
     struct Session {
         let id: String
         let name: String
+        var projectName: String
+        var teamName: String
     }
 
     /// Ordered list of sessions (insertion order)
@@ -883,12 +928,24 @@ actor SessionState {
     /// sessionID -> focused task title
     private var focusedTasks: [String: String] = [:]
 
-    func addSession(id: String, name: String) {
-        sessions[id] = Session(id: id, name: name)
+    func addSession(id: String, name: String, projectName: String = "", teamName: String = "") {
+        sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName)
         if !sessionOrder.contains(id) {
             sessionOrder.append(id)
         }
         activeSessionID = id
+    }
+
+    func getActiveProjectName() -> String? {
+        guard let id = activeSessionID, let s = sessions[id] else { return nil }
+        return s.projectName.isEmpty ? nil : s.projectName
+    }
+
+    func getActiveTeamName() -> String? {
+        guard let id = activeSessionID, let s = sessions[id] else { return nil }
+        // Hide "default" team
+        if s.teamName.isEmpty || s.teamName == "default" { return nil }
+        return s.teamName
     }
 
     func setActive(_ id: String) {
@@ -959,7 +1016,26 @@ func main() async throws {
         print("\r\nExiting Pecan UI...\r")
         exit(0)
     }
-    
+
+    // Parse CLI arguments
+    var cliProjectName: String? = nil
+    var cliTeamName: String? = nil
+    do {
+        var i = 1
+        while i < CommandLine.arguments.count {
+            switch CommandLine.arguments[i] {
+            case "--project":
+                i += 1
+                if i < CommandLine.arguments.count { cliProjectName = CommandLine.arguments[i] }
+            case "--team":
+                i += 1
+                if i < CommandLine.arguments.count { cliTeamName = CommandLine.arguments[i] }
+            default: break
+            }
+            i += 1
+        }
+    }
+
     // Load config just to verify we can parse ~/.pecan/config.yaml
     do {
         let config = try Config.load()
@@ -1010,10 +1086,21 @@ func main() async throws {
                 switch message.payload {
                 case .sessionStarted(let started):
                     let name = started.agentName.isEmpty ? "agent" : started.agentName
-                    await sessionState.addSession(id: started.sessionID, name: name)
+                    await sessionState.addSession(id: started.sessionID, name: name, projectName: started.projectName, teamName: started.teamName)
                     let agents = await sessionState.agentList()
                     await TerminalManager.shared.updateAgents(agents)
-                    await TerminalManager.shared.printSystem("Session started: \(name) (\(started.sessionID))")
+                    // Update breadcrumb with project/team
+                    let projectDisplay = await sessionState.getActiveProjectName()
+                    let teamDisplay = await sessionState.getActiveTeamName()
+                    await TerminalManager.shared.updateProjectTeam(project: projectDisplay, team: teamDisplay)
+                    var startMsg = "Session started: \(name) (\(started.sessionID))"
+                    if !started.projectName.isEmpty {
+                        startMsg += " [project: \(started.projectName)]"
+                    }
+                    if !started.teamName.isEmpty && started.teamName != "default" {
+                        startMsg += " [team: \(started.teamName)]"
+                    }
+                    await TerminalManager.shared.printSystem(startMsg)
 
                 case .agentOutput(let output):
                     if let data = output.text.data(using: .utf8),
@@ -1078,6 +1165,8 @@ func main() async throws {
     var initialMsg = Pecan_ClientMessage()
     var startTask = Pecan_StartTaskRequest()
     startTask.initialPrompt = "Initialize new session"
+    if let p = cliProjectName { startTask.projectName = p }
+    if let t = cliTeamName { startTask.teamName = t }
     initialMsg.startTask = startTask
     try await call.requestStream.send(initialMsg)
     
@@ -1106,13 +1195,23 @@ func main() async throws {
                   \(ansiCyan)/unshare\(ansiReset) \(ansiDim)<path>\(ansiReset)  Remove a shared directory
                   \(ansiCyan)/quit\(ansiReset)             Exit Pecan
 
-                \(ansiBold)Tasks\(ansiReset)
+                \(ansiBold)Tasks\(ansiReset) \(ansiDim)(append :team or :project for scoped commands)\(ansiReset)
                   \(ansiCyan)/task\(ansiReset) \(ansiDim)<text>\(ansiReset)      Create a new task
                   \(ansiCyan)/tasks\(ansiReset)             List all tasks
                   \(ansiCyan)/tasks\(ansiReset) \(ansiDim)<status>\(ansiReset)   List tasks by status
                   \(ansiCyan)/task #\(ansiReset)\(ansiDim)<id>\(ansiReset)       Show task details
                   \(ansiCyan)/task #\(ansiReset)\(ansiDim)<id>\(ansiReset) \(ansiDim)<field> <value>\(ansiReset)
                                     Update task field (priority, severity, status, label, due, focus, depends, description)
+
+                \(ansiBold)Projects & Teams\(ansiReset)
+                  \(ansiCyan)/projects\(ansiReset)          List all projects
+                  \(ansiCyan)/project\(ansiReset)           Show current project info
+                  \(ansiCyan)/project create\(ansiReset) \(ansiDim)<name> [directory]\(ansiReset)
+                                    Create a new project
+                  \(ansiCyan)/teams\(ansiReset)             List teams in current project
+                  \(ansiCyan)/team\(ansiReset)              Show current team info
+                  \(ansiCyan)/team create\(ansiReset) \(ansiDim)<name>\(ansiReset)
+                                    Create a new team in current project
 
                 \(ansiBold)Keys\(ansiReset)
                   \(ansiCyan)Tab\(ansiReset)               Agent picker (↑↓ or hotkey to select)
@@ -1146,6 +1245,8 @@ func main() async throws {
                 var msg = Pecan_ClientMessage()
                 var startTask = Pecan_StartTaskRequest()
                 startTask.initialPrompt = "Initialize new session"
+                if let p = cliProjectName { startTask.projectName = p }
+                if let t = cliTeamName { startTask.teamName = t }
                 msg.startTask = startTask
                 try await call.requestStream.send(msg)
                 continue
@@ -1161,6 +1262,8 @@ func main() async throws {
                 var startTask = Pecan_StartTaskRequest()
                 startTask.initialPrompt = "Initialize forked session"
                 startTask.forkSessionID = currentSid
+                if let p = cliProjectName { startTask.projectName = p }
+                if let t = cliTeamName { startTask.teamName = t }
                 msg.startTask = startTask
                 try await call.requestStream.send(msg)
                 continue

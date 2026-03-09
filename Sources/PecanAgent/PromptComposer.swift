@@ -8,6 +8,8 @@ public actor PromptComposer {
     private var fragments: [String: any PromptFragment] = [:]
     private var activeToolTags: Set<String> = ["core", "tasks", "memory", "web", "triggers", "meta", "skills"]
     private var focusedTask: PromptContext.TaskInfo? = nil
+    private var projectInfo: PromptContext.ProjectInfo? = nil
+    private var teamInfo: PromptContext.TeamInfo? = nil
 
     public func register(fragment: any PromptFragment) {
         fragments[fragment.id] = fragment
@@ -29,13 +31,31 @@ public actor PromptComposer {
         focusedTask
     }
 
+    public func setProjectContext(name: String, directory: String, mount: String) {
+        projectInfo = PromptContext.ProjectInfo(name: name, directory: directory, mount: mount)
+    }
+
+    public func setTeamContext(name: String, mount: String) {
+        teamInfo = PromptContext.TeamInfo(name: name, mount: mount)
+    }
+
+    public func getProjectInfo() -> PromptContext.ProjectInfo? {
+        projectInfo
+    }
+
+    public func getTeamInfo() -> PromptContext.TeamInfo? {
+        teamInfo
+    }
+
     /// Compose the full system prompt by rendering all fragments in priority order.
     public func compose(agentID: String, sessionID: String) async -> String {
         let context = PromptContext(
             activeToolTags: activeToolTags,
             focusedTask: focusedTask,
             agentID: agentID,
-            sessionID: sessionID
+            sessionID: sessionID,
+            project: projectInfo,
+            team: teamInfo
         )
 
         let sorted = fragments.values.sorted { $0.priority < $1.priority }
@@ -53,6 +73,7 @@ public actor PromptComposer {
     /// Register all built-in prompt fragments.
     public func registerBuiltinFragments() {
         register(fragment: BaseIdentityFragment())
+        register(fragment: ProjectTeamContextFragment())
         register(fragment: GuidelinesFragment())
         register(fragment: CoreMemoriesFragment())
         register(fragment: FocusedTaskFragment())

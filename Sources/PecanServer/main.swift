@@ -16,6 +16,14 @@ actor SessionManager {
     // Per-session persistent stores
     private var sessionStores: [String: SessionStore] = [:]
 
+    // Project/team associations: sessionID -> name
+    private var sessionProjects: [String: String] = [:]
+    private var sessionTeams: [String: String] = [:]
+
+    // Shared stores (multiple sessions can reference the same project/team)
+    private var projectStores: [String: ProjectStore] = [:]
+    private var teamStores: [String: TeamStore] = [:]  // keyed as "project/team"
+
     // Agent idle/busy tracking for trigger delivery
     private var agentBusy: [String: Bool] = [:]
 
@@ -33,6 +41,48 @@ actor SessionManager {
 
     func getStore(sessionID: String) -> SessionStore? {
         sessionStores[sessionID]
+    }
+
+    func setProjectForSession(sessionID: String, projectName: String, store: ProjectStore) {
+        sessionProjects[sessionID] = projectName
+        projectStores[projectName] = store
+    }
+
+    func setTeamForSession(sessionID: String, teamName: String, projectName: String, store: TeamStore) {
+        sessionTeams[sessionID] = teamName
+        let key = "\(projectName)/\(teamName)"
+        teamStores[key] = store
+    }
+
+    func getProjectName(sessionID: String) -> String? {
+        sessionProjects[sessionID]
+    }
+
+    func getTeamName(sessionID: String) -> String? {
+        sessionTeams[sessionID]
+    }
+
+    func getProjectStore(sessionID: String) -> ProjectStore? {
+        guard let name = sessionProjects[sessionID] else { return nil }
+        return projectStores[name]
+    }
+
+    func getTeamStore(sessionID: String) -> TeamStore? {
+        guard let projectName = sessionProjects[sessionID],
+              let teamName = sessionTeams[sessionID] else { return nil }
+        return teamStores["\(projectName)/\(teamName)"]
+    }
+
+    /// Returns the appropriate store for the given scope relative to a session.
+    func storeForScope(sessionID: String, scope: String) -> ScopedStore? {
+        switch scope {
+        case "project":
+            return getProjectStore(sessionID: sessionID)
+        case "team":
+            return getTeamStore(sessionID: sessionID)
+        default:
+            return sessionStores[sessionID]
+        }
     }
 
     func sendToUI(sessionID: String, message: Pecan_ServerMessage) async throws {
@@ -101,11 +151,7 @@ actor SessionManager {
         }
     }
 
-    func handleTaskCommand(sessionID: String, action: String, payloadJSON: String) async throws -> String {
-        guard let store = sessionStores[sessionID] else {
-            throw NSError(domain: "TaskCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No session store for \(sessionID)"])
-        }
-
+    func handleTaskCommand(sessionID: String, action: String, payloadJSON: String, scope: String = "") async throws -> String {
         let payload: [String: Any]
         if let data = payloadJSON.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
@@ -114,6 +160,107 @@ actor SessionManager {
             payload = [:]
         }
 
+        // Handle project/team management actions (not scoped to a store)
+        switch action {
+        case "project_create":
+            guard let name = payload["name"] as? String, !name.isEmpty else {
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing project name"])
+            }
+            let directory = payload["directory"] as? String
+            let store = try ProjectStore(name: name, directory: directory)
+            projectStores[name] = store
+            let result: [String: Any] = ["name": name, "directory": directory ?? "", "ok": true]
+            let data = try JSONSerialization.data(withJSONObject: result)
+            return String(data: data, encoding: .utf8) ?? "{}"
+
+        case "project_list":
+            let names = ProjectRegistry.listProjectNames()
+            var projects: [[String: Any]] = []
+            for name in names {
+                var info: [String: Any] = ["name": name]
+                if let store = projectStores[name] {
+                    info["directory"] = store.directory ?? ""
+                } else if let store = try? ProjectStore(name: name) {
+                    info["directory"] = store.directory ?? ""
+                }
+                projects.append(info)
+            }
+            let data = try JSONSerialization.data(withJSONObject: projects)
+            return String(data: data, encoding: .utf8) ?? "[]"
+
+        case "project_get":
+            guard let name = payload["name"] as? String, !name.isEmpty else {
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing project name"])
+            }
+            let store = try ProjectStore(name: name)
+            let result: [String: Any] = ["name": name, "directory": store.directory ?? ""]
+            let data = try JSONSerialization.data(withJSONObject: result)
+            return String(data: data, encoding: .utf8) ?? "{}"
+
+        case "team_create":
+            guard let teamName = payload["name"] as? String, !teamName.isEmpty else {
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing team name"])
+            }
+            guard let projectName = sessionProjects[sessionID] ?? payload["project"] as? String, !projectName.isEmpty else {
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "No project context for team creation"])
+            }
+            let store = try TeamStore(teamName: teamName, projectName: projectName)
+            teamStores["\(projectName)/\(teamName)"] = store
+            let result: [String: Any] = ["name": teamName, "project": projectName, "ok": true]
+            let data = try JSONSerialization.data(withJSONObject: result)
+            return String(data: data, encoding: .utf8) ?? "{}"
+
+        case "team_list":
+            let projectName = sessionProjects[sessionID] ?? payload["project"] as? String ?? ""
+            guard !projectName.isEmpty else {
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "No project context for team listing"])
+            }
+            let names = TeamRegistry.listTeamNames(projectName: projectName)
+            let teams = names.map { ["name": $0, "project": projectName] as [String: Any] }
+            let data = try JSONSerialization.data(withJSONObject: teams)
+            return String(data: data, encoding: .utf8) ?? "[]"
+
+        case "team_get":
+            guard let teamName = payload["name"] as? String, !teamName.isEmpty else {
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing team name"])
+            }
+            let projectName = sessionProjects[sessionID] ?? payload["project"] as? String ?? ""
+            guard !projectName.isEmpty else {
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "No project context"])
+            }
+            let store = try TeamStore(teamName: teamName, projectName: projectName)
+            let result: [String: Any] = ["name": teamName, "project": projectName, "workspace": store.workspacePath.path]
+            let data = try JSONSerialization.data(withJSONObject: result)
+            return String(data: data, encoding: .utf8) ?? "{}"
+
+        default:
+            break  // Fall through to scoped store dispatch below
+        }
+
+        // For "list" action with no explicit scope, merge results from all available scopes
+        if action == "list" && (scope.isEmpty || scope == "agent") {
+            return try handleMergedTaskList(sessionID: sessionID, payload: payload)
+        }
+        if action == "memory_list" && (scope.isEmpty || scope == "agent") {
+            return try handleMergedMemoryList(sessionID: sessionID, payload: payload)
+        }
+
+        // Resolve store by scope
+        let resolvedScope = scope.isEmpty ? "agent" : scope
+        guard let store = storeForScope(sessionID: sessionID, scope: resolvedScope) else {
+            if resolvedScope == "project" {
+                throw NSError(domain: "TaskCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No project context for this session"])
+            } else if resolvedScope == "team" {
+                throw NSError(domain: "TaskCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No team context for this session"])
+            }
+            throw NSError(domain: "TaskCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No session store for \(sessionID)"])
+        }
+
+        return try await dispatchToStore(store: store, sessionID: sessionID, action: action, payload: payload, scope: resolvedScope)
+    }
+
+    /// Dispatch a task/memory/trigger action to a specific ScopedStore.
+    private func dispatchToStore(store: ScopedStore, sessionID: String, action: String, payload: [String: Any], scope: String) async throws -> String {
         switch action {
         case "create":
             guard let title = payload["title"] as? String, !title.isEmpty else {
@@ -128,7 +275,7 @@ actor SessionManager {
                 dueDate: payload["due_date"] as? String ?? "",
                 dependsOn: payload["depends_on"] as? String ?? ""
             )
-            return try taskToJSON(task)
+            return try taskToJSON(task, scope: scope)
 
         case "list":
             let tasks = try store.listTasks(
@@ -136,7 +283,7 @@ actor SessionManager {
                 label: payload["label"] as? String,
                 search: payload["search"] as? String
             )
-            let dicts = tasks.map { taskToDict($0) }
+            let dicts = tasks.map { taskToDict($0, scope: scope) }
             let data = try JSONSerialization.data(withJSONObject: dicts)
             return String(data: data, encoding: .utf8) ?? "[]"
 
@@ -147,7 +294,7 @@ actor SessionManager {
             guard let task = try store.getTask(id: taskID) else {
                 throw NSError(domain: "TaskCommand", code: 4, userInfo: [NSLocalizedDescriptionKey: "Task #\(taskID) not found"])
             }
-            return try taskToJSON(task)
+            return try taskToJSON(task, scope: scope)
 
         case "update":
             guard let taskID = taskIDFromPayload(payload) else {
@@ -156,12 +303,11 @@ actor SessionManager {
             var fields = payload
             fields.removeValue(forKey: "task_id")
             let task = try store.updateTask(id: taskID, fields: fields)
-            return try taskToJSON(task)
+            return try taskToJSON(task, scope: scope)
 
         case "focus":
             let taskID = taskIDFromPayload(payload) ?? 0
             try store.setFocused(taskID: taskID)
-            // Send TaskUpdate to UI
             let focused = try store.getFocusedTask()
             try await sendTaskUpdateToUI(sessionID: sessionID, focusedTitle: focused?.title ?? "")
             return "{\"ok\":true}"
@@ -246,9 +392,12 @@ actor SessionManager {
             try store.removeMemoryTag(memoryId: memID, tag: tag)
             return "{\"ok\":true}"
 
-        // MARK: Trigger actions
+        // MARK: Trigger actions (session-only)
 
         case "trigger_create":
+            guard let sessionStore = store as? SessionStore else {
+                throw NSError(domain: "TaskCommand", code: 5, userInfo: [NSLocalizedDescriptionKey: "Triggers are only available at agent scope"])
+            }
             guard let instruction = payload["instruction"] as? String, !instruction.isEmpty else {
                 throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing instruction"])
             }
@@ -256,26 +405,102 @@ actor SessionManager {
                 throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing fire_at"])
             }
             let interval = payload["interval_seconds"] as? Int ?? 0
-            let trigger = try store.createTrigger(instruction: instruction, fireAt: fireAt, intervalSeconds: interval)
+            let trigger = try sessionStore.createTrigger(instruction: instruction, fireAt: fireAt, intervalSeconds: interval)
             return try triggerToJSON(trigger)
 
         case "trigger_list":
+            guard let sessionStore = store as? SessionStore else {
+                throw NSError(domain: "TaskCommand", code: 5, userInfo: [NSLocalizedDescriptionKey: "Triggers are only available at agent scope"])
+            }
             let status = payload["status"] as? String
-            let triggers = try store.listTriggers(status: status)
+            let triggers = try sessionStore.listTriggers(status: status)
             let dicts = triggers.map { triggerToDict($0) }
             let data = try JSONSerialization.data(withJSONObject: dicts)
             return String(data: data, encoding: .utf8) ?? "[]"
 
         case "trigger_cancel":
+            guard let sessionStore = store as? SessionStore else {
+                throw NSError(domain: "TaskCommand", code: 5, userInfo: [NSLocalizedDescriptionKey: "Triggers are only available at agent scope"])
+            }
             guard let triggerID = idFromPayload(payload, key: "trigger_id") else {
                 throw NSError(domain: "TaskCommand", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing trigger_id"])
             }
-            try store.cancelTrigger(id: triggerID)
+            try sessionStore.cancelTrigger(id: triggerID)
             return "{\"ok\":true}"
 
         default:
             throw NSError(domain: "TaskCommand", code: 5, userInfo: [NSLocalizedDescriptionKey: "Unknown action: \(action)"])
         }
+    }
+
+    /// Merged task list: collects tasks from agent, team, and project scopes.
+    private func handleMergedTaskList(sessionID: String, payload: [String: Any]) throws -> String {
+        var allTasks: [[String: Any]] = []
+
+        if let store = sessionStores[sessionID] {
+            let tasks = try store.listTasks(
+                status: payload["status"] as? String,
+                label: payload["label"] as? String,
+                search: payload["search"] as? String
+            )
+            allTasks.append(contentsOf: tasks.map { taskToDict($0, scope: "agent") })
+        }
+
+        if let store = getTeamStore(sessionID: sessionID) {
+            let tasks = try store.listTasks(
+                status: payload["status"] as? String,
+                label: payload["label"] as? String,
+                search: payload["search"] as? String
+            )
+            allTasks.append(contentsOf: tasks.map { taskToDict($0, scope: "team") })
+        }
+
+        if let store = getProjectStore(sessionID: sessionID) {
+            let tasks = try store.listTasks(
+                status: payload["status"] as? String,
+                label: payload["label"] as? String,
+                search: payload["search"] as? String
+            )
+            allTasks.append(contentsOf: tasks.map { taskToDict($0, scope: "project") })
+        }
+
+        let data = try JSONSerialization.data(withJSONObject: allTasks)
+        return String(data: data, encoding: .utf8) ?? "[]"
+    }
+
+    /// Merged memory list: collects memories from agent, team, and project scopes.
+    private func handleMergedMemoryList(sessionID: String, payload: [String: Any]) throws -> String {
+        var allMemories: [[String: Any]] = []
+
+        if let store = sessionStores[sessionID] {
+            let memories = try store.listMemories(tag: payload["tag"] as? String)
+            allMemories.append(contentsOf: memories.map {
+                var dict = memoryToDict($0.0, tags: $0.1)
+                dict["scope"] = "agent"
+                return dict
+            })
+        }
+
+        if let store = getTeamStore(sessionID: sessionID) {
+            let memories = try store.listMemories(tag: payload["tag"] as? String)
+            allMemories.append(contentsOf: memories.map {
+                var dict = memoryToDict($0.0, tags: $0.1)
+                dict["scope"] = "team"
+                return dict
+            })
+        }
+
+        if let store = getProjectStore(sessionID: sessionID) {
+            let memories = try store.listMemories(tag: payload["tag"] as? String)
+            allMemories.append(contentsOf: memories.map {
+                var dict = memoryToDict($0.0, tags: $0.1)
+                dict["scope"] = "project"
+                return dict
+            })
+        }
+
+        let data = try JSONSerialization.data(withJSONObject: allMemories)
+        return String(data: data, encoding: .utf8) ?? "[]"
     }
 
     private func taskIDFromPayload(_ payload: [String: Any]) -> Int64? {
@@ -285,7 +510,7 @@ actor SessionManager {
         return nil
     }
 
-    private func taskToDict(_ task: TaskRecord) -> [String: Any] {
+    private func taskToDict(_ task: TaskRecord, scope: String = "agent") -> [String: Any] {
         return [
             "id": Int(task.id ?? 0),
             "title": task.title,
@@ -298,12 +523,13 @@ actor SessionManager {
             "depends_on": task.dependsOn,
             "focused": task.focused == 1,
             "created_at": task.createdAt,
-            "updated_at": task.updatedAt
+            "updated_at": task.updatedAt,
+            "scope": scope
         ]
     }
 
-    private func taskToJSON(_ task: TaskRecord) throws -> String {
-        let dict = taskToDict(task)
+    private func taskToJSON(_ task: TaskRecord, scope: String = "agent") throws -> String {
+        let dict = taskToDict(task, scope: scope)
         let data = try JSONSerialization.data(withJSONObject: dict)
         return String(data: data, encoding: .utf8) ?? "{}"
     }
@@ -412,6 +638,8 @@ actor SessionManager {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
         sessionStores.removeValue(forKey: sessionID)
+        sessionProjects.removeValue(forKey: sessionID)
+        sessionTeams.removeValue(forKey: sessionID)
 
         do {
             try await SpawnerFactory.shared.terminate(sessionID: sessionID)
@@ -440,7 +668,17 @@ actor SessionManager {
         // Read current state from SQLite
         let agentName = try store.name
         let shares = try store.getShares()
-        let shareMounts = shares.map { MountSpec(source: $0.hostPath, destination: $0.guestPath, readOnly: $0.mode == "ro") }
+        var shareMounts = shares.map { MountSpec(source: $0.hostPath, destination: $0.guestPath, readOnly: $0.mode == "ro") }
+
+        // Add project and team mounts if available
+        if let projectStore = getProjectStore(sessionID: sessionID) {
+            if let dir = projectStore.directory {
+                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+            }
+        }
+        if let teamStore = getTeamStore(sessionID: sessionID) {
+            shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
+        }
 
         // Respawn with updated mounts
         try await SpawnerFactory.shared.spawn(
@@ -524,30 +762,59 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     await SessionManager.shared.setStore(sessionID: sessionID, store: store)
                     await SessionManager.shared.registerUI(sessionID: sessionID, stream: responseStream)
 
+                    // Set up project and team if specified
+                    var projectName = startReq.projectName
+                    var teamName = startReq.teamName
+
+                    if !projectName.isEmpty {
+                        do {
+                            let projectStore = try ProjectStore(name: projectName)
+                            await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: projectName, store: projectStore)
+
+                            // Add project directory mount
+                            if let dir = projectStore.directory {
+                                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+                            }
+
+                            // If no team specified, use default team
+                            if teamName.isEmpty {
+                                teamName = "default"
+                            }
+
+                            let teamStore = try TeamStore(teamName: teamName, projectName: projectName)
+                            await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: teamName, projectName: projectName, store: teamStore)
+
+                            // Add team workspace mount
+                            shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
+
+                            logger.info("Session \(sessionID) assigned to project '\(projectName)' team '\(teamName)'")
+                        } catch {
+                            logger.error("Failed to set up project/team: \(error)")
+                        }
+                    } else {
+                        // Clear for the SessionStarted message
+                        projectName = ""
+                        teamName = ""
+                    }
+
                     // Notify UI that session started
                     var response = Pecan_ServerMessage()
                     var started = Pecan_SessionStarted()
                     started.sessionID = sessionID
                     started.agentName = agentName
+                    started.projectName = projectName
+                    started.teamName = teamName
                     response.sessionStarted = started
                     try await responseStream.send(response)
 
                     // Spawn the agent using the Pluggable VM architecture
                     do {
-                        if shareMounts.isEmpty {
-                            try await SpawnerFactory.shared.spawn(
-                                sessionID: sessionID,
-                                agentName: agentName,
-                                workspacePath: store.workspacePath.path
-                            )
-                        } else {
-                            try await SpawnerFactory.shared.spawn(
-                                sessionID: sessionID,
-                                agentName: agentName,
-                                workspacePath: store.workspacePath.path,
-                                shares: shareMounts
-                            )
-                        }
+                        try await SpawnerFactory.shared.spawn(
+                            sessionID: sessionID,
+                            agentName: agentName,
+                            workspacePath: store.workspacePath.path,
+                            shares: shareMounts
+                        )
                     } catch {
                         logger.error("Failed to spawn agent: \(error)")
                         var errorMsg = Pecan_ServerMessage()
@@ -574,11 +841,11 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             errorMsg.agentOutput = out
                             try await SessionManager.shared.sendToUI(sessionID: req.sessionID, message: errorMsg)
                         }
-                    } else if text.hasPrefix("/task") {
+                    } else if text.hasPrefix("/task") || text.hasPrefix("/project") || text.hasPrefix("/team") {
                         do {
                             try await Self.handleTaskUICommand(sessionID: req.sessionID, text: text)
                         } catch {
-                            logger.error("Task command failed: \(error)")
+                            logger.error("Task/project/team command failed: \(error)")
                             var errorMsg = Pecan_ServerMessage()
                             var out = Pecan_AgentOutput()
                             out.sessionID = req.sessionID
@@ -652,12 +919,154 @@ extension ClientServiceProvider {
 }
 
 extension ClientServiceProvider {
-    /// Parse and execute /task and /tasks commands from the UI.
-    static func handleTaskUICommand(sessionID: String, text: String) async throws {
-        guard let store = await SessionManager.shared.getStore(sessionID: sessionID) else {
-            throw NSError(domain: "TaskCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active session"])
+    /// Parse scope suffix from commands like /task:team or /tasks:project.
+    /// Returns (baseCommand, scope) where scope is "" for no suffix.
+    private static func parseCommandScope(_ text: String) -> (String, String) {
+        // Match /command:scope patterns
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+
+        // Extract the first word (command)
+        let parts = trimmed.split(separator: " ", maxSplits: 1)
+        let command = String(parts.first ?? "")
+
+        // Check for :scope suffix on command
+        if let colonIdx = command.firstIndex(of: ":") {
+            let baseCmd = String(command[command.startIndex..<colonIdx])
+            let scope = String(command[command.index(after: colonIdx)...])
+            if ["agent", "team", "project"].contains(scope) {
+                // Reconstruct with base command
+                let rest = parts.count > 1 ? " \(parts[1])" : ""
+                return ("\(baseCmd)\(rest)", scope)
+            }
+        }
+        return (trimmed, "")
+    }
+
+    /// Handle /project and /projects commands from the UI.
+    static func handleProjectUICommand(sessionID: String, text: String, sendOutput: (String) async throws -> Void) async throws {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+
+        if trimmed == "/projects" {
+            let names = ProjectRegistry.listProjectNames()
+            if names.isEmpty {
+                try await sendOutput("No projects found. Use /project create <name> [directory] to create one.")
+                return
+            }
+            let currentProject = await SessionManager.shared.getProjectName(sessionID: sessionID)
+            var lines = "**Projects**\n"
+            for name in names {
+                let marker = (name == currentProject) ? " ← active" : ""
+                lines += "  \(name)\(marker)\n"
+            }
+            try await sendOutput(lines)
+            return
         }
 
+        if trimmed == "/project" {
+            // Show current project info
+            guard let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID),
+                  let store = await SessionManager.shared.getProjectStore(sessionID: sessionID) else {
+                try await sendOutput("No project assigned to this session. Use --project <name> when starting the TUI.")
+                return
+            }
+            var info = "**Project: \(projectName)**\n"
+            if let dir = store.directory {
+                info += "  Directory: \(dir)\n"
+            }
+            let teams = TeamRegistry.listTeamNames(projectName: projectName)
+            if !teams.isEmpty {
+                info += "  Teams: \(teams.joined(separator: ", "))\n"
+            }
+            let taskCount = try store.listTasks().count
+            let memCount = try store.listMemories().count
+            info += "  Tasks: \(taskCount)  Memories: \(memCount)"
+            try await sendOutput(info)
+            return
+        }
+
+        let rest = String(trimmed.dropFirst("/project ".count)).trimmingCharacters(in: .whitespaces)
+
+        if rest.hasPrefix("create ") {
+            let createArgs = String(rest.dropFirst("create ".count)).trimmingCharacters(in: .whitespaces)
+            let argParts = createArgs.split(separator: " ", maxSplits: 1).map(String.init)
+            let name = argParts[0]
+            let directory = argParts.count > 1 ? argParts[1] : nil
+            do {
+                let _ = try ProjectStore(name: name, directory: directory)
+                var msg = "Created project '\(name)'."
+                if let dir = directory { msg += " Directory: \(dir)" }
+                try await sendOutput(msg)
+            } catch {
+                try await sendOutput("Failed to create project: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        try await sendOutput("Usage: /project, /projects, /project create <name> [directory]")
+    }
+
+    /// Handle /team and /teams commands from the UI.
+    static func handleTeamUICommand(sessionID: String, text: String, sendOutput: (String) async throws -> Void) async throws {
+        let trimmed = text.trimmingCharacters(in: .whitespaces)
+
+        guard let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID) else {
+            try await sendOutput("No project assigned — teams require a project. Use --project <name> when starting the TUI.")
+            return
+        }
+
+        if trimmed == "/teams" {
+            let names = TeamRegistry.listTeamNames(projectName: projectName)
+            if names.isEmpty {
+                try await sendOutput("No teams in project '\(projectName)'. Use /team create <name> to create one.")
+                return
+            }
+            let currentTeam = await SessionManager.shared.getTeamName(sessionID: sessionID)
+            var lines = "**Teams** (project: \(projectName))\n"
+            for name in names {
+                let marker = (name == currentTeam) ? " ← active" : ""
+                lines += "  \(name)\(marker)\n"
+            }
+            try await sendOutput(lines)
+            return
+        }
+
+        if trimmed == "/team" {
+            guard let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID),
+                  let store = await SessionManager.shared.getTeamStore(sessionID: sessionID) else {
+                try await sendOutput("No team assigned to this session. Use --team <name> when starting the TUI.")
+                return
+            }
+            var info = "**Team: \(teamName)** (project: \(projectName))\n"
+            info += "  Workspace: \(store.workspacePath.path)\n"
+            let taskCount = try store.listTasks().count
+            let memCount = try store.listMemories().count
+            info += "  Tasks: \(taskCount)  Memories: \(memCount)"
+            try await sendOutput(info)
+            return
+        }
+
+        let rest = String(trimmed.dropFirst("/team ".count)).trimmingCharacters(in: .whitespaces)
+
+        if rest.hasPrefix("create ") {
+            let name = String(rest.dropFirst("create ".count)).trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else {
+                try await sendOutput("Usage: /team create <name>")
+                return
+            }
+            do {
+                let _ = try TeamStore(teamName: name, projectName: projectName)
+                try await sendOutput("Created team '\(name)' in project '\(projectName)'.")
+            } catch {
+                try await sendOutput("Failed to create team: \(error.localizedDescription)")
+            }
+            return
+        }
+
+        try await sendOutput("Usage: /team, /teams, /team create <name>")
+    }
+
+    /// Parse and execute /task, /tasks, /project, /team commands from the UI.
+    static func handleTaskUICommand(sessionID: String, text: String) async throws {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
 
         // Helper to send output back to UI
@@ -670,15 +1079,48 @@ extension ClientServiceProvider {
             try await SessionManager.shared.sendToUI(sessionID: sessionID, message: srvMsg)
         }
 
+        // Handle /project commands
+        if trimmed == "/project" || trimmed.hasPrefix("/project ") || trimmed == "/projects" {
+            try await handleProjectUICommand(sessionID: sessionID, text: trimmed, sendOutput: sendOutput)
+            return
+        }
+
+        // Handle /team commands (but not /teams which is its own thing)
+        if (trimmed == "/team" || trimmed.hasPrefix("/team ") || trimmed == "/teams")
+            && !trimmed.hasPrefix("/team:") {
+            try await handleTeamUICommand(sessionID: sessionID, text: trimmed, sendOutput: sendOutput)
+            return
+        }
+
+        // Parse scope suffix (e.g., /task:team, /tasks:project)
+        let (parsedText, scope) = parseCommandScope(trimmed)
+
+        // Resolve the store for the given scope
+        let store: ScopedStore
+        if scope.isEmpty {
+            // Default to agent session store
+            guard let s = await SessionManager.shared.getStore(sessionID: sessionID) else {
+                throw NSError(domain: "TaskCommand", code: 1, userInfo: [NSLocalizedDescriptionKey: "No active session"])
+            }
+            store = s
+        } else if let s = await SessionManager.shared.storeForScope(sessionID: sessionID, scope: scope) {
+            store = s
+        } else {
+            try await sendOutput("No \(scope) store available for this session.")
+            return
+        }
+
+        let scopeLabel = scope.isEmpty ? "" : " [\(scope)]"
+
         // /tasks or /tasks <status>
-        if trimmed == "/tasks" || trimmed.hasPrefix("/tasks ") {
-            let statusFilter = trimmed == "/tasks" ? nil : String(trimmed.dropFirst("/tasks ".count)).trimmingCharacters(in: .whitespaces)
-            let tasks = try store.listTasks(status: statusFilter?.isEmpty == true ? nil : statusFilter)
+        if parsedText == "/tasks" || parsedText.hasPrefix("/tasks ") {
+            let statusFilter = parsedText == "/tasks" ? nil : String(parsedText.dropFirst("/tasks ".count)).trimmingCharacters(in: .whitespaces)
+            let tasks = try store.listTasks(status: statusFilter?.isEmpty == true ? nil : statusFilter, label: nil, search: nil)
             if tasks.isEmpty {
-                try await sendOutput("No tasks found.")
+                try await sendOutput("No tasks found\(scopeLabel).")
                 return
             }
-            var lines = "**Tasks**\n"
+            var lines = "**Tasks\(scopeLabel)**\n"
             for task in tasks {
                 let focusMarker = task.focused == 1 ? " ★" : ""
                 let priorityStr = "P\(task.priority)"
@@ -689,12 +1131,12 @@ extension ClientServiceProvider {
         }
 
         // /task #<id> ... or /task <text>
-        if trimmed == "/task" {
+        if parsedText == "/task" {
             try await sendOutput("Usage: /task <instruction> or /task #<id> [field value]")
             return
         }
 
-        let rest = String(trimmed.dropFirst("/task ".count)).trimmingCharacters(in: .whitespaces)
+        let rest = String(parsedText.dropFirst("/task ".count)).trimmingCharacters(in: .whitespaces)
 
         // /task #<id> ...
         if rest.hasPrefix("#") {
@@ -707,11 +1149,11 @@ extension ClientServiceProvider {
             if parts.count == 1 {
                 // /task #<id> — show detail
                 guard let task = try store.getTask(id: taskID) else {
-                    try await sendOutput("Task #\(taskID) not found.")
+                    try await sendOutput("Task #\(taskID) not found\(scopeLabel).")
                     return
                 }
                 let focusStr = task.focused == 1 ? " ★ focused" : ""
-                var detail = "**Task #\(task.id ?? 0)**: \(task.title)\(focusStr)\n"
+                var detail = "**Task #\(task.id ?? 0)**: \(task.title)\(focusStr)\(scopeLabel)\n"
                 detail += "  Status: \(task.status)  Priority: \(task.priority)  Severity: \(task.severity)\n"
                 if !task.labels.isEmpty { detail += "  Labels: \(task.labels)\n" }
                 if !task.dueDate.isEmpty { detail += "  Due: \(task.dueDate)\n" }
@@ -729,9 +1171,12 @@ extension ClientServiceProvider {
 
             if field == "focus" {
                 try store.setFocused(taskID: taskID)
-                let focused = try store.getFocusedTask()
-                try await SessionManager.shared.sendTaskUpdateToUI(sessionID: sessionID, focusedTitle: focused?.title ?? "")
-                try await sendOutput("Task #\(taskID) is now focused.")
+                if scope.isEmpty {
+                    // Only update the UI focused task indicator for agent-scope tasks
+                    let focused = try store.getFocusedTask()
+                    try await SessionManager.shared.sendTaskUpdateToUI(sessionID: sessionID, focusedTitle: focused?.title ?? "")
+                }
+                try await sendOutput("Task #\(taskID) is now focused\(scopeLabel).")
                 return
             }
 
@@ -777,13 +1222,13 @@ extension ClientServiceProvider {
             }
 
             let updated = try store.updateTask(id: taskID, fields: fields)
-            try await sendOutput("Updated task #\(updated.id ?? 0): \(field) → \(value)")
+            try await sendOutput("Updated task #\(updated.id ?? 0)\(scopeLabel): \(field) → \(value)")
             return
         }
 
         // /task <text> — create task
-        let task = try store.createTask(title: rest)
-        try await sendOutput("Created task #\(task.id ?? 0): \(task.title)")
+        let task = try store.createTask(title: rest, description: "", priority: 3, severity: "normal", labels: "", dueDate: "", dependsOn: "")
+        try await sendOutput("Created task #\(task.id ?? 0)\(scopeLabel): \(task.title)")
     }
 }
 
@@ -835,12 +1280,28 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                 case .register(let reg):
                     logger.info("Agent \(reg.agentID) registered for session \(reg.sessionID)")
                     activeSessionID = reg.sessionID
-                    
+
                     await SessionManager.shared.registerAgent(sessionID: reg.sessionID, stream: responseStream)
-                    
+
                     var cmdMsg = Pecan_HostCommand()
                     var resp = Pecan_RegistrationResponse()
                     resp.success = true
+
+                    // Include project/team context
+                    if let projectName = await SessionManager.shared.getProjectName(sessionID: reg.sessionID) {
+                        resp.projectName = projectName
+                        if let projectStore = await SessionManager.shared.getProjectStore(sessionID: reg.sessionID) {
+                            resp.projectDirectory = projectStore.directory ?? ""
+                            if projectStore.directory != nil {
+                                resp.projectMount = "/project"
+                            }
+                        }
+                    }
+                    if let teamName = await SessionManager.shared.getTeamName(sessionID: reg.sessionID) {
+                        resp.teamName = teamName
+                        resp.teamMount = "/team"
+                    }
+
                     cmdMsg.registrationResponse = resp
                     try await responseStream.send(cmdMsg)
                     
@@ -952,7 +1413,7 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                 case .taskCommand(let cmd):
                     guard let sid = activeSessionID else { continue }
                     do {
-                        let result = try await SessionManager.shared.handleTaskCommand(sessionID: sid, action: cmd.action, payloadJSON: cmd.payloadJson)
+                        let result = try await SessionManager.shared.handleTaskCommand(sessionID: sid, action: cmd.action, payloadJSON: cmd.payloadJson, scope: cmd.scope)
                         var cmdMsg = Pecan_HostCommand()
                         var resp = Pecan_TaskResponse()
                         resp.requestID = cmd.requestID

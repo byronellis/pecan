@@ -15,11 +15,24 @@ public struct PromptContext: Sendable {
     public let focusedTask: TaskInfo?
     public let agentID: String
     public let sessionID: String
+    public let project: ProjectInfo?
+    public let team: TeamInfo?
 
     public struct TaskInfo: Sendable {
         public let id: Int
         public let title: String
         public let description: String
         public let status: String
+    }
+
+    public struct ProjectInfo: Sendable {
+        public let name: String
+        public let directory: String   // host directory
+        public let mount: String       // guest mount path (e.g. "/project")
+    }
+
+    public struct TeamInfo: Sendable {
+        public let name: String
+        public let mount: String       // guest mount path (e.g. "/team")
     }
 }

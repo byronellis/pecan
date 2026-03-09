@@ -32,6 +32,45 @@ struct GuidelinesFragment: PromptFragment, Sendable {
     }
 }
 
+// MARK: - ProjectTeamContextFragment (priority 50)
+
+struct ProjectTeamContextFragment: PromptFragment, Sendable {
+    let id = "builtin.project_team"
+    let name = "Project & Team Context"
+    let priority = 50
+
+    func render(context: PromptContext) async -> String? {
+        var lines: [String] = []
+
+        if let project = context.project {
+            lines.append("## Project: \(project.name)")
+            if !project.directory.isEmpty {
+                lines.append("Project directory is mounted at `\(project.mount)` (host: \(project.directory)).")
+            }
+            lines.append("Use `scope: \"project\"` in task/memory tools to work with project-level data.")
+        }
+
+        if let team = context.team {
+            // Don't show "default" team name
+            if team.name != "default" {
+                lines.append("## Team: \(team.name)")
+            }
+            if !team.mount.isEmpty {
+                lines.append("Team shared workspace is mounted at `\(team.mount)`.")
+            }
+            lines.append("Use `scope: \"team\"` in task/memory tools to work with team-level data.")
+        }
+
+        if let project = context.project, let team = context.team {
+            lines.append("")
+            lines.append("Task and memory listings merge results from all scopes (agent, team, project) by default. Each result includes a `scope` field indicating its origin.")
+            _ = project; _ = team  // silence unused warnings
+        }
+
+        return lines.isEmpty ? nil : lines.joined(separator: "\n")
+    }
+}
+
 // MARK: - CoreMemoriesFragment (priority 200)
 // Note: Core memories are injected as a separate system message via injectCoreMemories()
 // because they require TaskClient which needs the response loop running. This fragment

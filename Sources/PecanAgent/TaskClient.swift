@@ -20,7 +20,7 @@ public actor TaskClient {
         }
     }
 
-    public func sendCommand(action: String, payload: [String: Any]) async throws -> String {
+    public func sendCommand(action: String, payload: [String: Any], scope: String = "") async throws -> String {
         guard let send = sendCallback else {
             throw NSError(domain: "TaskClient", code: 2, userInfo: [NSLocalizedDescriptionKey: "TaskClient not configured"])
         }
@@ -33,6 +33,7 @@ public actor TaskClient {
         cmd.requestID = requestID
         cmd.action = action
         cmd.payloadJson = payloadJSON
+        cmd.scope = scope
         msg.taskCommand = cmd
 
         // Send the message first, then wait for the response

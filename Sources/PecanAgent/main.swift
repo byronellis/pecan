@@ -164,9 +164,26 @@ func main() async throws {
             case .registrationResponse(let resp):
                 logger.info("Registration successful: \(resp.success)")
 
+                // Store project/team context for prompt composition and tools
+                if !resp.projectName.isEmpty {
+                    await PromptComposer.shared.setProjectContext(
+                        name: resp.projectName,
+                        directory: resp.projectDirectory,
+                        mount: resp.projectMount
+                    )
+                }
+                if !resp.teamName.isEmpty {
+                    await PromptComposer.shared.setTeamContext(
+                        name: resp.teamName,
+                        mount: resp.teamMount
+                    )
+                }
+
                 await HookManager.shared.fire(event: "agent.registered", data: [
                     "agent_id": agentID,
-                    "session_id": sessionID
+                    "session_id": sessionID,
+                    "project": resp.projectName,
+                    "team": resp.teamName,
                 ])
 
                 // Immediately send a progress update that we are alive

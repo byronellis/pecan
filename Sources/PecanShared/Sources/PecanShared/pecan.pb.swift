@@ -111,6 +111,12 @@ public struct Pecan_StartTaskRequest: Sendable {
   /// if set, copy context+shares from this session
   public var forkSessionID: String = String()
 
+  /// optional: assign agent to this project
+  public var projectName: String = String()
+
+  /// optional: assign agent to this team within the project
+  public var teamName: String = String()
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -217,6 +223,10 @@ public struct Pecan_SessionStarted: Sendable {
   public var sessionID: String = String()
 
   public var agentName: String = String()
+
+  public var projectName: String = String()
+
+  public var teamName: String = String()
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -666,6 +676,19 @@ public struct Pecan_RegistrationResponse: Sendable {
 
   public var success: Bool = false
 
+  public var projectName: String = String()
+
+  public var teamName: String = String()
+
+  /// host directory the project is associated with
+  public var projectDirectory: String = String()
+
+  /// guest mount path for project directory
+  public var projectMount: String = String()
+
+  /// guest mount path for team workspace
+  public var teamMount: String = String()
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -734,10 +757,15 @@ public struct Pecan_TaskCommand: Sendable {
 
   public var requestID: String = String()
 
-  /// "create", "list", "get", "update", "focus"
+  /// "create", "list", "get", "update", "focus",
+  /// "project_create", "project_list", "project_get",
+  /// "team_create", "team_list", "team_get"
   public var action: String = String()
 
   public var payloadJson: String = String()
+
+  /// "agent" (default), "team", "project"
+  public var scope: String = String()
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -941,16 +969,20 @@ extension Pecan_ClientMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
 
 extension Pecan_StartTaskRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".StartTaskRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}initial_prompt\0\u{3}fork_session_id\0")
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "initial_prompt"),
+    2: .standard(proto: "fork_session_id"),
+    3: .standard(proto: "project_name"),
+    4: .standard(proto: "team_name"),
+  ]
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.initialPrompt) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.forkSessionID) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.projectName) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.teamName) }()
       default: break
       }
     }
@@ -963,12 +995,20 @@ extension Pecan_StartTaskRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageI
     if !self.forkSessionID.isEmpty {
       try visitor.visitSingularStringField(value: self.forkSessionID, fieldNumber: 2)
     }
+    if !self.projectName.isEmpty {
+      try visitor.visitSingularStringField(value: self.projectName, fieldNumber: 3)
+    }
+    if !self.teamName.isEmpty {
+      try visitor.visitSingularStringField(value: self.teamName, fieldNumber: 4)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Pecan_StartTaskRequest, rhs: Pecan_StartTaskRequest) -> Bool {
     if lhs.initialPrompt != rhs.initialPrompt {return false}
     if lhs.forkSessionID != rhs.forkSessionID {return false}
+    if lhs.projectName != rhs.projectName {return false}
+    if lhs.teamName != rhs.teamName {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1174,16 +1214,20 @@ extension Pecan_ServerMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImpl
 
 extension Pecan_SessionStarted: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".SessionStarted"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}agent_name\0")
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "session_id"),
+    2: .standard(proto: "agent_name"),
+    3: .standard(proto: "project_name"),
+    4: .standard(proto: "team_name"),
+  ]
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.agentName) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.projectName) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.teamName) }()
       default: break
       }
     }
@@ -1196,12 +1240,20 @@ extension Pecan_SessionStarted: SwiftProtobuf.Message, SwiftProtobuf._MessageImp
     if !self.agentName.isEmpty {
       try visitor.visitSingularStringField(value: self.agentName, fieldNumber: 2)
     }
+    if !self.projectName.isEmpty {
+      try visitor.visitSingularStringField(value: self.projectName, fieldNumber: 3)
+    }
+    if !self.teamName.isEmpty {
+      try visitor.visitSingularStringField(value: self.teamName, fieldNumber: 4)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Pecan_SessionStarted, rhs: Pecan_SessionStarted) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.agentName != rhs.agentName {return false}
+    if lhs.projectName != rhs.projectName {return false}
+    if lhs.teamName != rhs.teamName {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2152,15 +2204,24 @@ extension Pecan_ContextResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageIm
 
 extension Pecan_RegistrationResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".RegistrationResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}success\0")
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "success"),
+    2: .standard(proto: "project_name"),
+    3: .standard(proto: "team_name"),
+    4: .standard(proto: "project_directory"),
+    5: .standard(proto: "project_mount"),
+    6: .standard(proto: "team_mount"),
+  ]
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.projectName) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.teamName) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.projectDirectory) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self.projectMount) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self.teamMount) }()
       default: break
       }
     }
@@ -2170,11 +2231,31 @@ extension Pecan_RegistrationResponse: SwiftProtobuf.Message, SwiftProtobuf._Mess
     if self.success != false {
       try visitor.visitSingularBoolField(value: self.success, fieldNumber: 1)
     }
+    if !self.projectName.isEmpty {
+      try visitor.visitSingularStringField(value: self.projectName, fieldNumber: 2)
+    }
+    if !self.teamName.isEmpty {
+      try visitor.visitSingularStringField(value: self.teamName, fieldNumber: 3)
+    }
+    if !self.projectDirectory.isEmpty {
+      try visitor.visitSingularStringField(value: self.projectDirectory, fieldNumber: 4)
+    }
+    if !self.projectMount.isEmpty {
+      try visitor.visitSingularStringField(value: self.projectMount, fieldNumber: 5)
+    }
+    if !self.teamMount.isEmpty {
+      try visitor.visitSingularStringField(value: self.teamMount, fieldNumber: 6)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Pecan_RegistrationResponse, rhs: Pecan_RegistrationResponse) -> Bool {
     if lhs.success != rhs.success {return false}
+    if lhs.projectName != rhs.projectName {return false}
+    if lhs.teamName != rhs.teamName {return false}
+    if lhs.projectDirectory != rhs.projectDirectory {return false}
+    if lhs.projectMount != rhs.projectMount {return false}
+    if lhs.teamMount != rhs.teamMount {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2322,17 +2403,20 @@ extension Pecan_ProcessInput: SwiftProtobuf.Message, SwiftProtobuf._MessageImple
 
 extension Pecan_TaskCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".TaskCommand"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}request_id\0\u{1}action\0\u{3}payload_json\0")
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+    2: .same(proto: "action"),
+    3: .standard(proto: "payload_json"),
+    4: .same(proto: "scope"),
+  ]
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self.action) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self.payloadJson) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self.scope) }()
       default: break
       }
     }
@@ -2348,6 +2432,9 @@ extension Pecan_TaskCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
     if !self.payloadJson.isEmpty {
       try visitor.visitSingularStringField(value: self.payloadJson, fieldNumber: 3)
     }
+    if !self.scope.isEmpty {
+      try visitor.visitSingularStringField(value: self.scope, fieldNumber: 4)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -2355,6 +2442,7 @@ extension Pecan_TaskCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplem
     if lhs.requestID != rhs.requestID {return false}
     if lhs.action != rhs.action {return false}
     if lhs.payloadJson != rhs.payloadJson {return false}
+    if lhs.scope != rhs.scope {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

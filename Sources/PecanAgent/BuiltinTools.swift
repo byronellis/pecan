@@ -308,7 +308,8 @@ public struct TaskCreateTool: PecanTool, Sendable {
             "priority": { "type": "integer", "description": "1 (critical) to 5 (low). Default 3." },
             "severity": { "type": "string", "description": "low, normal, high, or critical. Default normal." },
             "labels": { "type": "string", "description": "Comma-separated labels." },
-            "due_date": { "type": "string", "description": "ISO 8601 due date or empty." }
+            "due_date": { "type": "string", "description": "ISO 8601 due date or empty." },
+            "scope": { "type": "string", "description": "Where to create: 'agent' (default), 'team', or 'project'." }
         },
         "required": ["title"]
     }
@@ -322,7 +323,8 @@ public struct TaskCreateTool: PecanTool, Sendable {
         if let v = args["severity"] as? String { payload["severity"] = v }
         if let v = args["labels"] as? String { payload["labels"] = v }
         if let v = args["due_date"] as? String { payload["due_date"] = v }
-        let result = try await TaskClient.shared.sendCommand(action: "create", payload: payload)
+        let scope = args["scope"] as? String ?? ""
+        let result = try await TaskClient.shared.sendCommand(action: "create", payload: payload, scope: scope)
         if let data = result.data(using: .utf8),
            let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
             await HookManager.shared.fire(event: "task.created", data: obj)
@@ -341,7 +343,7 @@ public struct TaskCreateTool: PecanTool, Sendable {
 
 public struct TaskListTool: PecanTool, Sendable {
     public let name = "task_list"
-    public let description = "List tasks. Optionally filter by status, label, or search text."
+    public let description = "List tasks. By default merges agent, team, and project tasks. Use scope to filter to a single level."
     public let tags: Set<String> = ["tasks"]
     public let parametersJSONSchema = """
     {
@@ -349,7 +351,8 @@ public struct TaskListTool: PecanTool, Sendable {
         "properties": {
             "status": { "type": "string", "description": "Filter by status (todo, implementing, testing, preparing, done, blocked)." },
             "label": { "type": "string", "description": "Filter by label." },
-            "search": { "type": "string", "description": "Search in title and description." }
+            "search": { "type": "string", "description": "Search in title and description." },
+            "scope": { "type": "string", "description": "Filter to scope: 'agent', 'team', 'project', or empty for all (default)." }
         }
     }
     """
@@ -360,7 +363,8 @@ public struct TaskListTool: PecanTool, Sendable {
         if let v = args["status"] as? String { payload["status"] = v }
         if let v = args["label"] as? String { payload["label"] = v }
         if let v = args["search"] as? String { payload["search"] = v }
-        return try await TaskClient.shared.sendCommand(action: "list", payload: payload)
+        let scope = args["scope"] as? String ?? ""
+        return try await TaskClient.shared.sendCommand(action: "list", payload: payload, scope: scope)
     }
 
     public func formatResult(_ result: String) -> String? {
@@ -369,18 +373,24 @@ public struct TaskListTool: PecanTool, Sendable {
         if arr.isEmpty { return "(no tasks)" }
 
         // Build table rows
-        var rows: [(id: String, status: String, priority: String, title: String, labels: String)] = []
+        var rows: [(id: String, scope: String, status: String, priority: String, title: String, labels: String)] = []
         for task in arr {
             let id = "#\(task["id"] ?? "?")"
+            let scope = task["scope"] as? String ?? "agent"
             let status = task["status"] as? String ?? ""
             let priority = "P\(task["priority"] ?? 3)"
             let title = task["title"] as? String ?? ""
             let labels = task["labels"] as? String ?? ""
-            rows.append((id: id, status: status, priority: priority, title: title, labels: labels))
+            rows.append((id: id, scope: scope, status: status, priority: priority, title: title, labels: labels))
         }
+
+        // Check if we have mixed scopes
+        let scopes = Set(rows.map(\.scope))
+        let showScope = scopes.count > 1
 
         // Calculate column widths
         let idW = max(2, rows.map(\.id.count).max() ?? 2)
+        let scopeW = showScope ? max(5, rows.map(\.scope.count).max() ?? 5) : 0
         let statusW = max(6, rows.map(\.status.count).max() ?? 6)
         let prioW = max(4, rows.map(\.priority.count).max() ?? 4)
         let titleW = max(5, rows.map(\.title.count).max() ?? 5)
@@ -390,10 +400,18 @@ public struct TaskListTool: PecanTool, Sendable {
         }
 
         var lines: [String] = []
-        lines.append("\(pad("ID", idW)) | \(pad("Status", statusW)) | \(pad("Pri", prioW)) | \(pad("Title", titleW)) | Labels")
-        lines.append(String(repeating: "-", count: idW) + "-+-" + String(repeating: "-", count: statusW) + "-+-" + String(repeating: "-", count: prioW) + "-+-" + String(repeating: "-", count: titleW) + "-+-------")
-        for r in rows {
-            lines.append("\(pad(r.id, idW)) | \(pad(r.status, statusW)) | \(pad(r.priority, prioW)) | \(pad(r.title, titleW)) | \(r.labels)")
+        if showScope {
+            lines.append("\(pad("ID", idW)) | \(pad("Scope", scopeW)) | \(pad("Status", statusW)) | \(pad("Pri", prioW)) | \(pad("Title", titleW)) | Labels")
+            lines.append(String(repeating: "-", count: idW) + "-+-" + String(repeating: "-", count: scopeW) + "-+-" + String(repeating: "-", count: statusW) + "-+-" + String(repeating: "-", count: prioW) + "-+-" + String(repeating: "-", count: titleW) + "-+-------")
+            for r in rows {
+                lines.append("\(pad(r.id, idW)) | \(pad(r.scope, scopeW)) | \(pad(r.status, statusW)) | \(pad(r.priority, prioW)) | \(pad(r.title, titleW)) | \(r.labels)")
+            }
+        } else {
+            lines.append("\(pad("ID", idW)) | \(pad("Status", statusW)) | \(pad("Pri", prioW)) | \(pad("Title", titleW)) | Labels")
+            lines.append(String(repeating: "-", count: idW) + "-+-" + String(repeating: "-", count: statusW) + "-+-" + String(repeating: "-", count: prioW) + "-+-" + String(repeating: "-", count: titleW) + "-+-------")
+            for r in rows {
+                lines.append("\(pad(r.id, idW)) | \(pad(r.status, statusW)) | \(pad(r.priority, prioW)) | \(pad(r.title, titleW)) | \(r.labels)")
+            }
         }
         return lines.joined(separator: "\n")
     }
@@ -793,7 +811,8 @@ public struct MemoryAddTool: PecanTool, Sendable {
         "type": "object",
         "properties": {
             "content": { "type": "string", "description": "The memory content to store." },
-            "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for organization. Use 'core' for system prompt injection." }
+            "tags": { "type": "array", "items": { "type": "string" }, "description": "Optional tags for organization. Use 'core' for system prompt injection." },
+            "scope": { "type": "string", "description": "Where to store: 'agent' (default), 'team', or 'project'." }
         },
         "required": ["content"]
     }
@@ -803,7 +822,8 @@ public struct MemoryAddTool: PecanTool, Sendable {
         let args = try parseArguments(argumentsJSON)
         var payload: [String: Any] = ["content": args["content"] as? String ?? ""]
         if let tags = args["tags"] as? [String] { payload["tags"] = tags }
-        return try await TaskClient.shared.sendCommand(action: "memory_create", payload: payload)
+        let scope = args["scope"] as? String ?? ""
+        return try await TaskClient.shared.sendCommand(action: "memory_create", payload: payload, scope: scope)
     }
 
     public func formatResult(_ result: String) -> String? {

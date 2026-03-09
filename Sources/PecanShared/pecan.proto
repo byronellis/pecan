@@ -21,6 +21,8 @@ message ClientMessage {
 message StartTaskRequest {
     string initial_prompt = 1;
     string fork_session_id = 2;  // if set, copy context+shares from this session
+    string project_name = 3;     // optional: assign agent to this project
+    string team_name = 4;        // optional: assign agent to this team within the project
 }
 
 message TaskInput {
@@ -48,6 +50,8 @@ message ServerMessage {
 message SessionStarted {
     string session_id = 1;
     string agent_name = 2;
+    string project_name = 3;
+    string team_name = 4;
 }
 
 message AgentOutput {
@@ -175,6 +179,11 @@ message ContextResponse {
 
 message RegistrationResponse {
     bool success = 1;
+    string project_name = 2;
+    string team_name = 3;
+    string project_directory = 4;   // host directory the project is associated with
+    string project_mount = 5;       // guest mount path for project directory
+    string team_mount = 6;          // guest mount path for team workspace
 }
 
 message LLMCompletionResponse {
@@ -199,8 +208,11 @@ message ProcessInput {
 
 message TaskCommand {
     string request_id = 1;
-    string action = 2;        // "create", "list", "get", "update", "focus"
+    string action = 2;        // "create", "list", "get", "update", "focus",
+                               // "project_create", "project_list", "project_get",
+                               // "team_create", "team_list", "team_get"
     string payload_json = 3;
+    string scope = 4;         // "agent" (default), "team", "project"
 }
 
 message TaskResponse {
