@@ -265,6 +265,47 @@ func truncateResult(_ text: String, maxLines: Int = 10) -> String {
     return (shown + ["\(ansiDim)│ ... (\(lines.count - maxLines) more lines)\(ansiReset)"]).joined(separator: "\r\n")
 }
 
+/// Render a raw agent output text into formatted display string.
+/// Returns nil for output types that only produce side effects (e.g. thinking throbber).
+func renderAgentOutput(_ rawText: String) -> String? {
+    guard let data = rawText.data(using: .utf8),
+          let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+          let msgType = json["type"] else {
+        // Plain text / unparseable
+        return formatMarkdown(rawText)
+    }
+
+    switch msgType {
+    case "thinking":
+        return nil // throbber — no visual output to render
+
+    case "tool_call":
+        let toolName = json["name"] ?? "unknown"
+        let args = json["arguments"] ?? "{}"
+        let header = "\(ansiDim)┌─\(ansiReset) \(ansiBold)\(ansiCyan)🔧 \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
+        let body = formatToolArguments(args)
+        let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
+        return "\(header)\r\n\(body)\r\n\(footer)"
+
+    case "tool_result":
+        let toolName = json["name"] ?? "unknown"
+        let result = json["result"] ?? ""
+        let formatted = json["formatted"] ?? ""
+        let displayResult = formatted.isEmpty ? result : formatted
+        let header = "\(ansiDim)├─\(ansiReset) \(ansiGreen)✓ \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
+        let body = truncateResult(displayResult)
+        let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
+        return "\(header)\r\n\(body)\r\n\(footer)"
+
+    case "response":
+        let text = json["text"] ?? ""
+        return formatMarkdown(text)
+
+    default:
+        return formatMarkdown(rawText)
+    }
+}
+
 /// ANSI 256-color background for user input lines (dark gray)
 let ansiUserInputBg = "\u{001B}[48;5;236m"
 /// Prompt character
@@ -1014,6 +1055,10 @@ actor SessionState {
     private var activeSessionID: String?
     /// sessionID -> focused task title
     private var focusedTasks: [String: String] = [:]
+    /// Buffered raw output texts for non-active sessions (rendered on drain)
+    private var outputBuffers: [String: [String]] = [:]
+    /// Max buffered entries per session to prevent unbounded memory growth
+    private let maxBufferEntries = 1000
 
     func addSession(id: String, name: String, projectName: String = "", teamName: String = "") {
         sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName)
@@ -1101,6 +1146,24 @@ actor SessionState {
     func getAgentName() -> String? {
         guard let id = activeSessionID else { return nil }
         return sessions[id]?.name
+    }
+
+    func isActiveSession(_ sessionID: String) -> Bool {
+        return sessionID == activeSessionID
+    }
+
+    func bufferOutput(_ sessionID: String, rawText: String) {
+        if outputBuffers[sessionID] == nil {
+            outputBuffers[sessionID] = []
+        }
+        outputBuffers[sessionID]!.append(rawText)
+        if outputBuffers[sessionID]!.count > maxBufferEntries {
+            outputBuffers[sessionID]!.removeFirst(outputBuffers[sessionID]!.count - maxBufferEntries)
+        }
+    }
+
+    func drainBuffer(_ sessionID: String) -> [String] {
+        return outputBuffers.removeValue(forKey: sessionID) ?? []
     }
 }
 
@@ -1197,42 +1260,31 @@ func main() async throws {
                     await TerminalManager.shared.printSystem(startMsg)
 
                 case .agentOutput(let output):
-                    if let data = output.text.data(using: .utf8),
-                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-                       let msgType = json["type"] {
-                        switch msgType {
-                        case "thinking":
-                            await TerminalManager.shared.startThrobber(message: "Thinking...")
+                    let isActive = await sessionState.isActiveSession(output.sessionID)
 
-                        case "tool_call":
-                            let toolName = json["name"] ?? "unknown"
-                            let args = json["arguments"] ?? "{}"
-                            let header = "\(ansiDim)┌─\(ansiReset) \(ansiBold)\(ansiCyan)🔧 \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
-                            let body = formatToolArguments(args)
-                            let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
-                            await TerminalManager.shared.printOutput("\(header)\r\n\(body)\r\n\(footer)")
-                            await TerminalManager.shared.startThrobber(message: "Running \(toolName)...")
-
-                        case "tool_result":
-                            let toolName = json["name"] ?? "unknown"
-                            let result = json["result"] ?? ""
-                            let formatted = json["formatted"] ?? ""
-                            let displayResult = formatted.isEmpty ? result : formatted
-                            let header = "\(ansiDim)├─\(ansiReset) \(ansiGreen)✓ \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
-                            let body = truncateResult(displayResult)
-                            let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
-                            await TerminalManager.shared.printOutput("\(header)\r\n\(body)\r\n\(footer)")
-
-                        case "response":
-                            let text = json["text"] ?? ""
-                            await TerminalManager.shared.printOutput(formatMarkdown(text))
-
-                        default:
-                            await TerminalManager.shared.printOutput(formatMarkdown(output.text))
+                    if isActive {
+                        // Render live — includes side effects like throbbers
+                        if let data = output.text.data(using: .utf8),
+                           let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                           let msgType = json["type"] {
+                            // Start throbber for thinking/tool_call (side effect only for live view)
+                            if msgType == "thinking" {
+                                await TerminalManager.shared.startThrobber(message: "Thinking...")
+                            } else if msgType == "tool_call" {
+                                let toolName = json["name"] ?? "unknown"
+                                if let rendered = renderAgentOutput(output.text) {
+                                    await TerminalManager.shared.printOutput(rendered)
+                                }
+                                await TerminalManager.shared.startThrobber(message: "Running \(toolName)...")
+                            } else if let rendered = renderAgentOutput(output.text) {
+                                await TerminalManager.shared.printOutput(rendered)
+                            }
+                        } else if let rendered = renderAgentOutput(output.text) {
+                            await TerminalManager.shared.printOutput(rendered)
                         }
                     } else {
-                        // Plain text / unparseable — backward compat
-                        await TerminalManager.shared.printOutput(formatMarkdown(output.text))
+                        // Buffer raw text for non-active sessions
+                        await sessionState.bufferOutput(output.sessionID, rawText: output.text)
                     }
 
                 case .approvalRequest(let req):
@@ -1375,8 +1427,13 @@ func main() async throws {
                 var startTask = Pecan_StartTaskRequest()
                 startTask.initialPrompt = "Initialize forked session"
                 startTask.forkSessionID = currentSid
-                if let p = cliProjectName { startTask.projectName = p }
-                if let t = cliTeamName { startTask.teamName = t }
+                // Inherit project/team from the session being forked
+                if let p = await sessionState.getActiveProjectName() {
+                    startTask.projectName = p
+                }
+                if let t = await sessionState.getActiveTeamName() {
+                    startTask.teamName = t
+                }
                 msg.startTask = startTask
                 try await call.requestStream.send(msg)
                 continue
@@ -1388,7 +1445,26 @@ func main() async throws {
                 if await sessionState.setActiveByName(name) {
                     let agents = await sessionState.agentList()
                     await TerminalManager.shared.updateAgents(agents)
+                    // Update breadcrumbs to reflect the switched-to session's project/team
+                    let projectDisplay = await sessionState.getActiveProjectName()
+                    let teamDisplay = await sessionState.getActiveTeamName()
+                    await TerminalManager.shared.updateProjectTeam(project: projectDisplay, team: teamDisplay)
+                    let focusedTask = await sessionState.getActiveFocusedTask()
+                    await TerminalManager.shared.updateFocusedTask(focusedTask)
                     await TerminalManager.shared.printSystem("Switched to \(name)")
+                    // Replay any buffered output from while this agent was in the background
+                    if let sid = await sessionState.getActiveID() {
+                        let buffered = await sessionState.drainBuffer(sid)
+                        if !buffered.isEmpty {
+                            await TerminalManager.shared.printSystem("--- buffered output ---")
+                            for rawText in buffered {
+                                if let rendered = renderAgentOutput(rawText) {
+                                    await TerminalManager.shared.printOutput(rendered)
+                                }
+                            }
+                            await TerminalManager.shared.printSystem("--- end buffered output ---")
+                        }
+                    }
                 } else {
                     let all = await sessionState.allSessions().map(\.name).joined(separator: ", ")
                     await TerminalManager.shared.printSystem("No agent named '\(name)'. Available: \(all)")

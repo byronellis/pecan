@@ -26,8 +26,12 @@ public final class FileWriter: Writer, @unchecked Sendable {
 /// A spawner that creates an isolated Linux VM using Apple's Containerization framework.
 @available(macOS 15.0, *)
 actor ContainerSpawner {
-    private var containers: [String: LinuxContainer] = [:]
-    private var managers: [String: ContainerManager] = [:]
+    /// Maps sessionID → (containerName, container) so we can delete by the correct name.
+    private var containers: [String: (name: String, container: LinuxContainer)] = [:]
+    /// Shared manager reused across all containers (avoids stale state from manager recreation).
+    private var sharedManager: ContainerManager?
+    /// Counter to generate unique container names across restarts of the same session.
+    private var restartCounters: [String: Int] = [:]
 
     init() {}
 
@@ -52,28 +56,41 @@ actor ContainerSpawner {
         )
     }
 
+    /// Lazily initialize and return the shared ContainerManager.
+    private func getOrCreateManager() async throws -> ContainerManager {
+        if let manager = sharedManager {
+            return manager
+        }
+        let kernelPath = try resolveKernelPath()
+        let initfsReference = "ghcr.io/apple/containerization/vminit:0.26.5"
+        logger.info("Initializing shared ContainerManager with kernel: \(kernelPath), initfs: \(initfsReference)")
+        let manager = try await ContainerManager(
+            kernel: Kernel(path: URL(fileURLWithPath: kernelPath), platform: .linuxArm),
+            initfsReference: initfsReference,
+            rosetta: false
+        )
+        sharedManager = manager
+        return manager
+    }
+
     func spawnAgent(sessionID: String, grpcSocketPath: String, agentName: String, mounts: [MountSpec]) async throws {
         logger.info("Setting up Containerization VM for session \(sessionID) (agent: \(agentName))...")
 
-        let kernelPath = try resolveKernelPath()
-        let initfsReference = "ghcr.io/apple/containerization/vminit:0.26.5"
-
-        logger.info("Initializing ContainerManager with kernel: \(kernelPath), initfs: \(initfsReference)")
-
-        var manager: ContainerManager
-        do {
-            manager = try await ContainerManager(
-                kernel: Kernel(path: URL(fileURLWithPath: kernelPath), platform: .linuxArm),
-                initfsReference: initfsReference,
-                rosetta: false
-            )
-        } catch {
-            logger.error("Failed to initialize ContainerManager: \(error)")
-            throw error
+        // If there's already a running container for this session, save it for background cleanup
+        let oldEntry = containers[sessionID]
+        if oldEntry != nil {
+            logger.info("Session \(sessionID) already has a running container — will replace it")
         }
 
+        var manager = try await getOrCreateManager()
+
+        // Generate a unique container name to avoid collisions with recently deleted containers
+        let counter = (restartCounters[sessionID] ?? 0) + 1
+        restartCounters[sessionID] = counter
+        let containerName = counter == 1 ? sessionID : "\(sessionID)-\(counter)"
+
         let imageReference = "docker.io/library/alpine:3.19"
-        logger.info("Creating container \(sessionID) from \(imageReference)...")
+        logger.info("Creating container \(containerName) from \(imageReference)...")
 
         let currentPath = FileManager.default.currentDirectoryPath
         let logDir = URL(fileURLWithPath: currentPath).appendingPathComponent(".run/containers")
@@ -94,7 +111,7 @@ actor ContainerSpawner {
         let container: LinuxContainer
         do {
             container = try await manager.create(
-                sessionID,
+                containerName,
                 reference: imageReference,
                 rootfsSizeInBytes: 1024 * 1024 * 1024,
                 networking: false
@@ -137,58 +154,70 @@ actor ContainerSpawner {
                 logger.debug("Container config for \(sessionID): cpus=\(config.cpus), memory=\(config.memoryInBytes), args=\(config.process.arguments)")
             }
         } catch {
-            logger.error("Failed to create container \(sessionID): \(error)")
+            logger.error("Failed to create container \(containerName): \(error)")
             throw error
         }
 
-        logger.info("Starting lifecycle for container \(sessionID)...")
+        logger.info("Starting lifecycle for container \(containerName)...")
         do {
             try await container.create()
-            logger.debug("Container \(sessionID) created successfully.")
+            logger.debug("Container \(containerName) created successfully.")
             try await container.start()
-            logger.info("Container \(sessionID) started successfully.")
+            logger.info("Container \(containerName) started successfully.")
         } catch {
-            logger.error("Failed to start container \(sessionID): \(error)")
+            logger.error("Failed to start container \(containerName): \(error)")
             try? await container.stop()
-            try? manager.delete(sessionID)
+            try? manager.delete(containerName)
             throw error
         }
 
-        containers[sessionID] = container
-        managers[sessionID] = manager
+        containers[sessionID] = (name: containerName, container: container)
 
+        // Tear down the old container in the background now that the new one is running
+        if let old = oldEntry {
+            var mgr = manager  // copy for the detached task
+            Task.detached {
+                logger.info("Cleaning up old container \(old.name) for session \(sessionID)...")
+                try? await old.container.stop()
+                _ = try? await old.container.wait()
+                try? mgr.delete(old.name)
+                logger.info("Old container \(old.name) cleaned up.")
+            }
+        }
+
+        let capturedName = containerName
         Task.detached { [weak self] in
             do {
                 let status = try await container.wait()
-                logger.info("Container for session \(sessionID) exited with status \(status)")
+                logger.info("Container \(capturedName) for session \(sessionID) exited with status \(status)")
                 // Only clean up if we haven't been terminated already (avoid double cleanup)
-                if await self?.containers[sessionID] != nil {
+                if let entry = await self?.containers[sessionID], entry.name == capturedName {
                     try? await container.stop()
-                    var mgr = manager
-                    try? mgr.delete(sessionID)
+                    if var mgr = await self?.sharedManager {
+                        try? mgr.delete(capturedName)
+                    }
                     await self?.removeSession(sessionID)
                 }
             } catch {
-                logger.error("Error while waiting for container \(sessionID): \(error)")
+                logger.error("Error while waiting for container \(capturedName): \(error)")
             }
         }
     }
 
     func terminateAgent(sessionID: String) async throws {
-        if let container = containers[sessionID] {
-            try await container.stop()
+        if let entry = containers[sessionID] {
+            try await entry.container.stop()
             // Wait for the container process to fully exit so the socket relay is torn down
-            _ = try? await container.wait()
-            if var manager = managers[sessionID] {
-                try? manager.delete(sessionID)
+            _ = try? await entry.container.wait()
+            if var manager = sharedManager {
+                try? manager.delete(entry.name)
             }
             removeSession(sessionID)
-            logger.info("Terminated container for session \(sessionID)")
+            logger.info("Terminated container \(entry.name) for session \(sessionID)")
         }
     }
 
     private func removeSession(_ sessionID: String) {
         containers.removeValue(forKey: sessionID)
-        managers.removeValue(forKey: sessionID)
     }
 }

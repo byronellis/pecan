@@ -705,19 +705,11 @@ actor SessionManager {
         statusMsg.agentOutput = out
         try await sendToUI(sessionID: sessionID, message: statusMsg)
 
-        // Terminate current container and clear stale agent stream
-        try await SpawnerFactory.shared.terminate(sessionID: sessionID)
-        agentStreams.removeValue(forKey: sessionID)
-
-        // Allow socket relay and VM resources to fully tear down
-        try await Task.sleep(nanoseconds: 500_000_000) // 500ms
-
-        // Read current state from SQLite
+        // Build new mounts from current state
         let agentName = try store.name
         let shares = try store.getShares()
         var shareMounts = shares.map { MountSpec(source: $0.hostPath, destination: $0.guestPath, readOnly: $0.mode == "ro") }
 
-        // Add project and team mounts if available
         if let projectStore = getProjectStore(sessionID: sessionID) {
             if let dir = projectStore.directory {
                 shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
@@ -727,7 +719,10 @@ actor SessionManager {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
         }
 
-        // Respawn with updated mounts
+        // Clear stale agent stream so the new agent can register
+        agentStreams.removeValue(forKey: sessionID)
+
+        // Spawn the new container first (the old one is still running — that's fine)
         try await SpawnerFactory.shared.spawn(
             sessionID: sessionID,
             agentName: agentName,
@@ -742,6 +737,10 @@ actor SessionManager {
         readyOut.text = "Environment ready."
         readyMsg.agentOutput = readyOut
         try await sendToUI(sessionID: sessionID, message: readyMsg)
+
+        // The old container is cleaned up by the spawner — when spawnAgent is called
+        // for a session that already has a running container, it tears down the old one
+        // in the background after the new one is up.
     }
 }
 
@@ -1051,10 +1050,14 @@ extension ClientServiceProvider {
                 // Clear team association since we switched projects
                 await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
                 // Restart container with new mounts and update UI breadcrumbs
+                logger.info("Restarting container for project switch to '\(name)'...")
                 try await SessionManager.shared.restartContainer(sessionID: sessionID)
+                logger.info("Container restarted, sending session update...")
                 try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
+                logger.info("Session update sent.")
                 try await sendOutput("Switched to project '\(name)'. Agent restarted with project mounted.")
             } catch {
+                logger.error("Project switch failed at: \(error)")
                 try await sendOutput("Failed to switch project: \(error.localizedDescription)")
             }
 
