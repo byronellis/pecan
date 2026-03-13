@@ -9,15 +9,17 @@ public struct Config: Codable, Sendable {
     public struct ModelProvider: Codable, Sendable {
         public let name: String?
         public let provider: String?
-        public let url: String
+        public let url: String?
         public let apiKey: String?
         public let modelId: String?
         public let description: String?
-        
+        public let huggingfaceRepo: String?
+
         enum CodingKeys: String, CodingKey {
             case name, provider, url, description
             case apiKey = "api_key"
             case modelId = "model_id"
+            case huggingfaceRepo = "huggingface_repo"
         }
         
         public var resolvedProvider: String {

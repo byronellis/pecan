@@ -3077,3 +3077,772 @@ extension Pecan_LauncherResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageI
     return true
   }
 }
+
+// MARK: - MLX Server IPC
+
+public struct Pecan_MLXRequest: Sendable {
+  public var payload: Pecan_MLXRequest.OneOf_Payload? = nil
+
+  public var loadModel: Pecan_MLXLoadModelRequest {
+    get {
+      if case .loadModel(let v)? = payload {return v}
+      return Pecan_MLXLoadModelRequest()
+    }
+    set {payload = .loadModel(newValue)}
+  }
+
+  public var unloadModel: Pecan_MLXUnloadModelRequest {
+    get {
+      if case .unloadModel(let v)? = payload {return v}
+      return Pecan_MLXUnloadModelRequest()
+    }
+    set {payload = .unloadModel(newValue)}
+  }
+
+  public var generate: Pecan_MLXGenerateRequest {
+    get {
+      if case .generate(let v)? = payload {return v}
+      return Pecan_MLXGenerateRequest()
+    }
+    set {payload = .generate(newValue)}
+  }
+
+  public var listModels: Pecan_MLXListModelsRequest {
+    get {
+      if case .listModels(let v)? = payload {return v}
+      return Pecan_MLXListModelsRequest()
+    }
+    set {payload = .listModels(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_Payload: Equatable, Sendable {
+    case loadModel(Pecan_MLXLoadModelRequest)
+    case unloadModel(Pecan_MLXUnloadModelRequest)
+    case generate(Pecan_MLXGenerateRequest)
+    case listModels(Pecan_MLXListModelsRequest)
+  }
+
+  public init() {}
+}
+
+public struct Pecan_MLXLoadModelRequest: Sendable {
+  public var requestID: String = String()
+  public var huggingfaceRepo: String = String()
+  public var alias: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXUnloadModelRequest: Sendable {
+  public var requestID: String = String()
+  public var alias: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXGenerateRequest: Sendable {
+  public var requestID: String = String()
+  public var alias: String = String()
+  public var prompt: String = String()
+  public var temperature: Float = 0
+  public var maxTokens: Int32 = 0
+  public var messages: [Pecan_MLXChatMessage] = []
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXChatMessage: Sendable {
+  public var role: String = String()
+  public var content: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXListModelsRequest: Sendable {
+  public var requestID: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXResponse: Sendable {
+  public var requestID: String = String()
+  public var payload: Pecan_MLXResponse.OneOf_Payload? = nil
+
+  public var loadModel: Pecan_MLXLoadModelResponse {
+    get {
+      if case .loadModel(let v)? = payload {return v}
+      return Pecan_MLXLoadModelResponse()
+    }
+    set {payload = .loadModel(newValue)}
+  }
+
+  public var unloadModel: Pecan_MLXUnloadModelResponse {
+    get {
+      if case .unloadModel(let v)? = payload {return v}
+      return Pecan_MLXUnloadModelResponse()
+    }
+    set {payload = .unloadModel(newValue)}
+  }
+
+  public var generate: Pecan_MLXGenerateResponse {
+    get {
+      if case .generate(let v)? = payload {return v}
+      return Pecan_MLXGenerateResponse()
+    }
+    set {payload = .generate(newValue)}
+  }
+
+  public var listModels: Pecan_MLXListModelsResponse {
+    get {
+      if case .listModels(let v)? = payload {return v}
+      return Pecan_MLXListModelsResponse()
+    }
+    set {payload = .listModels(newValue)}
+  }
+
+  public var error: Pecan_MLXErrorResponse {
+    get {
+      if case .error(let v)? = payload {return v}
+      return Pecan_MLXErrorResponse()
+    }
+    set {payload = .error(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_Payload: Equatable, Sendable {
+    case loadModel(Pecan_MLXLoadModelResponse)
+    case unloadModel(Pecan_MLXUnloadModelResponse)
+    case generate(Pecan_MLXGenerateResponse)
+    case listModels(Pecan_MLXListModelsResponse)
+    case error(Pecan_MLXErrorResponse)
+  }
+
+  public init() {}
+}
+
+public struct Pecan_MLXLoadModelResponse: Sendable {
+  public var alias: String = String()
+  public var success: Bool = false
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXUnloadModelResponse: Sendable {
+  public var alias: String = String()
+  public var success: Bool = false
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXGenerateResponse: Sendable {
+  public var text: String = String()
+  public var promptTokens: Int32 = 0
+  public var completionTokens: Int32 = 0
+  public var isFinal: Bool = false
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_MLXListModelsResponse: Sendable {
+  public var models: [Pecan_MLXListModelsResponse.LoadedModel] = []
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public struct LoadedModel: Sendable {
+    public var alias: String = String()
+    public var huggingfaceRepo: String = String()
+    public var unknownFields = SwiftProtobuf.UnknownStorage()
+    public init() {}
+  }
+
+  public init() {}
+}
+
+public struct Pecan_MLXErrorResponse: Sendable {
+  public var errorMessage: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+// MARK: - MLX Message Extensions
+
+extension Pecan_MLXRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "load_model"),
+    2: .standard(proto: "unload_model"),
+    3: .same(proto: "generate"),
+    4: .standard(proto: "list_models"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try {
+        var v: Pecan_MLXLoadModelRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .loadModel(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .loadModel(v)
+        }
+      }()
+      case 2: try {
+        var v: Pecan_MLXUnloadModelRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .unloadModel(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .unloadModel(v)
+        }
+      }()
+      case 3: try {
+        var v: Pecan_MLXGenerateRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .generate(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .generate(v)
+        }
+      }()
+      case 4: try {
+        var v: Pecan_MLXListModelsRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .listModels(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .listModels(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    switch self.payload {
+    case .loadModel?: try {
+      guard case .loadModel(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    }()
+    case .unloadModel?: try {
+      guard case .unloadModel(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case .generate?: try {
+      guard case .generate(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    }()
+    case .listModels?: try {
+      guard case .listModels(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXRequest, rhs: Pecan_MLXRequest) -> Bool {
+    if lhs.payload != rhs.payload {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXLoadModelRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXLoadModelRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+    2: .standard(proto: "huggingface_repo"),
+    3: .same(proto: "alias"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.huggingfaceRepo) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.alias) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty { try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1) }
+    if !self.huggingfaceRepo.isEmpty { try visitor.visitSingularStringField(value: self.huggingfaceRepo, fieldNumber: 2) }
+    if !self.alias.isEmpty { try visitor.visitSingularStringField(value: self.alias, fieldNumber: 3) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXLoadModelRequest, rhs: Pecan_MLXLoadModelRequest) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.huggingfaceRepo != rhs.huggingfaceRepo {return false}
+    if lhs.alias != rhs.alias {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXUnloadModelRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXUnloadModelRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+    2: .same(proto: "alias"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.alias) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty { try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1) }
+    if !self.alias.isEmpty { try visitor.visitSingularStringField(value: self.alias, fieldNumber: 2) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXUnloadModelRequest, rhs: Pecan_MLXUnloadModelRequest) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.alias != rhs.alias {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXGenerateRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXGenerateRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+    2: .same(proto: "alias"),
+    3: .same(proto: "prompt"),
+    4: .same(proto: "temperature"),
+    5: .standard(proto: "max_tokens"),
+    6: .same(proto: "messages"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.alias) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.prompt) }()
+      case 4: try { try decoder.decodeSingularFloatField(value: &self.temperature) }()
+      case 5: try { try decoder.decodeSingularInt32Field(value: &self.maxTokens) }()
+      case 6: try { try decoder.decodeRepeatedMessageField(value: &self.messages) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty { try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1) }
+    if !self.alias.isEmpty { try visitor.visitSingularStringField(value: self.alias, fieldNumber: 2) }
+    if !self.prompt.isEmpty { try visitor.visitSingularStringField(value: self.prompt, fieldNumber: 3) }
+    if self.temperature != 0 { try visitor.visitSingularFloatField(value: self.temperature, fieldNumber: 4) }
+    if self.maxTokens != 0 { try visitor.visitSingularInt32Field(value: self.maxTokens, fieldNumber: 5) }
+    if !self.messages.isEmpty { try visitor.visitRepeatedMessageField(value: self.messages, fieldNumber: 6) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXGenerateRequest, rhs: Pecan_MLXGenerateRequest) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.alias != rhs.alias {return false}
+    if lhs.prompt != rhs.prompt {return false}
+    if lhs.temperature != rhs.temperature {return false}
+    if lhs.maxTokens != rhs.maxTokens {return false}
+    if lhs.messages != rhs.messages {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXChatMessage: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXChatMessage"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "role"),
+    2: .same(proto: "content"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.role) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.content) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.role.isEmpty { try visitor.visitSingularStringField(value: self.role, fieldNumber: 1) }
+    if !self.content.isEmpty { try visitor.visitSingularStringField(value: self.content, fieldNumber: 2) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXChatMessage, rhs: Pecan_MLXChatMessage) -> Bool {
+    if lhs.role != rhs.role {return false}
+    if lhs.content != rhs.content {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXListModelsRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXListModelsRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty { try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXListModelsRequest, rhs: Pecan_MLXListModelsRequest) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXResponse"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "request_id"),
+    2: .standard(proto: "load_model"),
+    3: .standard(proto: "unload_model"),
+    4: .same(proto: "generate"),
+    5: .standard(proto: "list_models"),
+    6: .same(proto: "error"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.requestID) }()
+      case 2: try {
+        var v: Pecan_MLXLoadModelResponse?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .loadModel(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .loadModel(v)
+        }
+      }()
+      case 3: try {
+        var v: Pecan_MLXUnloadModelResponse?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .unloadModel(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .unloadModel(v)
+        }
+      }()
+      case 4: try {
+        var v: Pecan_MLXGenerateResponse?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .generate(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .generate(v)
+        }
+      }()
+      case 5: try {
+        var v: Pecan_MLXListModelsResponse?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .listModels(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .listModels(v)
+        }
+      }()
+      case 6: try {
+        var v: Pecan_MLXErrorResponse?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .error(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .error(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.requestID.isEmpty {
+      try visitor.visitSingularStringField(value: self.requestID, fieldNumber: 1)
+    }
+    switch self.payload {
+    case .loadModel?: try {
+      guard case .loadModel(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case .unloadModel?: try {
+      guard case .unloadModel(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    }()
+    case .generate?: try {
+      guard case .generate(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    }()
+    case .listModels?: try {
+      guard case .listModels(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    }()
+    case .error?: try {
+      guard case .error(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXResponse, rhs: Pecan_MLXResponse) -> Bool {
+    if lhs.requestID != rhs.requestID {return false}
+    if lhs.payload != rhs.payload {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXLoadModelResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXLoadModelResponse"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "alias"),
+    2: .same(proto: "success"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.alias) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.alias.isEmpty { try visitor.visitSingularStringField(value: self.alias, fieldNumber: 1) }
+    if self.success != false { try visitor.visitSingularBoolField(value: self.success, fieldNumber: 2) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXLoadModelResponse, rhs: Pecan_MLXLoadModelResponse) -> Bool {
+    if lhs.alias != rhs.alias {return false}
+    if lhs.success != rhs.success {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXUnloadModelResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXUnloadModelResponse"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "alias"),
+    2: .same(proto: "success"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.alias) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.alias.isEmpty { try visitor.visitSingularStringField(value: self.alias, fieldNumber: 1) }
+    if self.success != false { try visitor.visitSingularBoolField(value: self.success, fieldNumber: 2) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXUnloadModelResponse, rhs: Pecan_MLXUnloadModelResponse) -> Bool {
+    if lhs.alias != rhs.alias {return false}
+    if lhs.success != rhs.success {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXGenerateResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXGenerateResponse"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "text"),
+    2: .standard(proto: "prompt_tokens"),
+    3: .standard(proto: "completion_tokens"),
+    4: .standard(proto: "is_final"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.text) }()
+      case 2: try { try decoder.decodeSingularInt32Field(value: &self.promptTokens) }()
+      case 3: try { try decoder.decodeSingularInt32Field(value: &self.completionTokens) }()
+      case 4: try { try decoder.decodeSingularBoolField(value: &self.isFinal) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.text.isEmpty { try visitor.visitSingularStringField(value: self.text, fieldNumber: 1) }
+    if self.promptTokens != 0 { try visitor.visitSingularInt32Field(value: self.promptTokens, fieldNumber: 2) }
+    if self.completionTokens != 0 { try visitor.visitSingularInt32Field(value: self.completionTokens, fieldNumber: 3) }
+    if self.isFinal != false { try visitor.visitSingularBoolField(value: self.isFinal, fieldNumber: 4) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXGenerateResponse, rhs: Pecan_MLXGenerateResponse) -> Bool {
+    if lhs.text != rhs.text {return false}
+    if lhs.promptTokens != rhs.promptTokens {return false}
+    if lhs.completionTokens != rhs.completionTokens {return false}
+    if lhs.isFinal != rhs.isFinal {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXListModelsResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXListModelsResponse"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "models"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeRepeatedMessageField(value: &self.models) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.models.isEmpty { try visitor.visitRepeatedMessageField(value: self.models, fieldNumber: 1) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXListModelsResponse, rhs: Pecan_MLXListModelsResponse) -> Bool {
+    if lhs.models != rhs.models {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXListModelsResponse.LoadedModel: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = Pecan_MLXListModelsResponse.protoMessageName + ".LoadedModel"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "alias"),
+    2: .standard(proto: "huggingface_repo"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.alias) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.huggingfaceRepo) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.alias.isEmpty { try visitor.visitSingularStringField(value: self.alias, fieldNumber: 1) }
+    if !self.huggingfaceRepo.isEmpty { try visitor.visitSingularStringField(value: self.huggingfaceRepo, fieldNumber: 2) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXListModelsResponse.LoadedModel, rhs: Pecan_MLXListModelsResponse.LoadedModel) -> Bool {
+    if lhs.alias != rhs.alias {return false}
+    if lhs.huggingfaceRepo != rhs.huggingfaceRepo {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_MLXErrorResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".MLXErrorResponse"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "error_message"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.errorMessage) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.errorMessage.isEmpty { try visitor.visitSingularStringField(value: self.errorMessage, fieldNumber: 1) }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_MLXErrorResponse, rhs: Pecan_MLXErrorResponse) -> Bool {
+    if lhs.errorMessage != rhs.errorMessage {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}

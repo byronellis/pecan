@@ -298,3 +298,85 @@ message LauncherResponse {
     bool success = 2;
     string error_message = 3;
 }
+
+// ==========================================
+// MLX Server IPC (Server <-> MLX Server)
+// ==========================================
+
+message MLXRequest {
+    oneof payload {
+        MLXLoadModelRequest load_model = 1;
+        MLXUnloadModelRequest unload_model = 2;
+        MLXGenerateRequest generate = 3;
+        MLXListModelsRequest list_models = 4;
+    }
+}
+
+message MLXLoadModelRequest {
+    string request_id = 1;
+    string huggingface_repo = 2;    // e.g. "mlx-community/Qwen2.5-Coder-7B-4bit"
+    string alias = 3;               // local name to reference it by
+}
+
+message MLXUnloadModelRequest {
+    string request_id = 1;
+    string alias = 2;
+}
+
+message MLXGenerateRequest {
+    string request_id = 1;
+    string alias = 2;               // which loaded model to use
+    string prompt = 3;              // formatted prompt text
+    float temperature = 4;
+    int32 max_tokens = 5;
+    repeated MLXChatMessage messages = 6;  // chat messages (alternative to raw prompt)
+}
+
+message MLXChatMessage {
+    string role = 1;                // "system", "user", "assistant"
+    string content = 2;
+}
+
+message MLXListModelsRequest {
+    string request_id = 1;
+}
+
+message MLXResponse {
+    string request_id = 1;
+    oneof payload {
+        MLXLoadModelResponse load_model = 2;
+        MLXUnloadModelResponse unload_model = 3;
+        MLXGenerateResponse generate = 4;
+        MLXListModelsResponse list_models = 5;
+        MLXErrorResponse error = 6;
+    }
+}
+
+message MLXLoadModelResponse {
+    string alias = 1;
+    bool success = 2;
+}
+
+message MLXUnloadModelResponse {
+    string alias = 1;
+    bool success = 2;
+}
+
+message MLXGenerateResponse {
+    string text = 1;                // generated text
+    int32 prompt_tokens = 2;
+    int32 completion_tokens = 3;
+    bool is_final = 4;             // true for last chunk or non-streaming
+}
+
+message MLXListModelsResponse {
+    message LoadedModel {
+        string alias = 1;
+        string huggingface_repo = 2;
+    }
+    repeated LoadedModel models = 1;
+}
+
+message MLXErrorResponse {
+    string error_message = 1;
+}

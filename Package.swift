@@ -14,7 +14,8 @@ let package = Package(
         .executable(name: "pecan-test-client", targets: ["PecanTestClient"]),
         .executable(name: "pecan", targets: ["PecanUI"]),
         .executable(name: "pecan-agent", targets: ["PecanAgent"]),
-],
+        .executable(name: "pecan-mlx-server", targets: ["PecanMLXServer"]),
+    ],
     dependencies: [
         .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.23.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.25.2"),
@@ -24,6 +25,7 @@ let package = Package(
         .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/containerization.git", branch: "main"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+        .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "2.30.3"),
     ],
     targets: [
         .target(
@@ -69,6 +71,14 @@ let package = Package(
             dependencies: [
                 "PecanShared",
                 .product(name: "Lua", package: "LuaSwift")
+            ]),
+        .executableTarget(
+            name: "PecanMLXServer",
+            dependencies: [
+                "PecanShared",
+                .product(name: "MLXLLM", package: "mlx-swift-lm"),
+                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
+                .product(name: "Logging", package: "swift-log"),
             ]),
     ]
 )

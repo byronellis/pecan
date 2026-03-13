@@ -1531,7 +1531,7 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     logger.info("LLM Request from agent: \(req.requestID) using model: \(modelKey)")
                     
                     if let modelConfig = config.models[modelKey] {
-                        let provider = ProviderFactory.create(config: modelConfig)
+                        let provider = ProviderFactory.create(config: modelConfig, alias: modelKey)
                         do {
                             let contextData = try await SessionManager.shared.getContext(sessionID: sid)
                             var contextMessages: [[String: Any]] = []
@@ -1759,6 +1759,37 @@ func main() async throws {
         Task { await SpawnerFactory.shared.shutdownLauncher() }
     }
 
+    // Launch MLX server if any models use the mlx provider
+    let hasMLXModels = config.models.values.contains { $0.resolvedProvider.lowercased() == "mlx" }
+    if hasMLXModels {
+        do {
+            let mlxManager = try MLXProcessManager()
+            try mlxManager.waitForSocket()
+            ProviderFactory.mlxManager = mlxManager
+
+            // Preload configured MLX models
+            for (alias, modelConfig) in config.models where modelConfig.resolvedProvider.lowercased() == "mlx" {
+                if let repo = modelConfig.huggingfaceRepo {
+                    logger.info("Preloading MLX model '\(alias)' from \(repo)")
+                    var req = Pecan_MLXRequest()
+                    var loadReq = Pecan_MLXLoadModelRequest()
+                    loadReq.alias = alias
+                    loadReq.huggingfaceRepo = repo
+                    loadReq.requestID = UUID().uuidString
+                    req.loadModel = loadReq
+                    let resp = try mlxManager.sendRequest(req, timeout: 300)
+                    if case .error(let err) = resp.payload {
+                        logger.error("Failed to preload MLX model '\(alias)': \(err.errorMessage)")
+                    } else {
+                        logger.info("MLX model '\(alias)' preloaded successfully")
+                    }
+                }
+            }
+        } catch {
+            logger.error("Failed to start MLX server: \(error). MLX models will be unavailable.")
+        }
+    }
+
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
     let providers = [ClientServiceProvider(), AgentServiceProvider(config: config)] as [CallHandlerProvider]
 
@@ -1799,6 +1830,7 @@ func main() async throws {
             Task {
                 await SpawnerFactory.shared.shutdownLauncher()
             }
+            ProviderFactory.mlxManager?.shutdown()
             exit(0)
         }
     }
