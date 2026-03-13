@@ -1,5 +1,7 @@
 import Foundation
 import Logging
+import PecanShared
+import SwiftProtobuf
 
 @available(macOS 15.0, *)
 func runLauncher() async throws {
@@ -77,63 +79,76 @@ func runLauncher() async throws {
 func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
     defer { close(fd) }
 
-    // Read all data until newline
-    var data = Data()
-    var buffer = [UInt8](repeating: 0, count: 4096)
-    while true {
-        let bytesRead = read(fd, &buffer, buffer.count)
-        if bytesRead <= 0 { break }
-        data.append(contentsOf: buffer[0..<bytesRead])
-        if data.contains(UInt8(ascii: "\n")) { break }
+    // Read 4-byte length prefix
+    var lengthBytes = [UInt8](repeating: 0, count: 4)
+    let headerRead = read(fd, &lengthBytes, 4)
+    guard headerRead == 4 else {
+        logger.warning("Failed to read request length")
+        return
     }
+    let messageLength = Int(UInt32(bigEndian: lengthBytes.withUnsafeBufferPointer {
+        $0.baseAddress!.withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+    }))
 
-    // Trim to first line
-    if let newlineIndex = data.firstIndex(of: UInt8(ascii: "\n")) {
-        data = data[data.startIndex..<newlineIndex]
+    // Read message body
+    var data = Data(count: messageLength)
+    var totalRead = 0
+    while totalRead < messageLength {
+        let n = data.withUnsafeMutableBytes { ptr in
+            read(fd, ptr.baseAddress! + totalRead, messageLength - totalRead)
+        }
+        if n <= 0 { break }
+        totalRead += n
     }
-
-    guard !data.isEmpty else {
-        logger.warning("Empty request received")
+    guard totalRead == messageLength else {
+        logger.warning("Incomplete request: got \(totalRead) of \(messageLength) bytes")
         return
     }
 
-    let decoder = JSONDecoder()
-    let encoder = JSONEncoder()
+    var response = Pecan_LauncherResponse()
 
-    let response: LauncherResponse
     do {
-        let request = try decoder.decode(LauncherRequest.self, from: data)
-        switch request {
+        let request = try Pecan_LauncherRequest(serializedBytes: data)
+        switch request.payload {
         case .spawn(let req):
             logger.info("Spawn request for session \(req.sessionID)")
+            response.sessionID = req.sessionID
             do {
                 try await spawner.spawnAgent(sessionID: req.sessionID, grpcSocketPath: req.grpcSocketPath, agentName: req.agentName, mounts: req.mounts)
-                response = .spawnOK(sessionID: req.sessionID)
+                response.success = true
             } catch {
                 logger.error("Spawn failed for \(req.sessionID): \(error)")
-                response = .spawnError(sessionID: req.sessionID, error: error.localizedDescription)
+                response.success = false
+                response.errorMessage = error.localizedDescription
             }
         case .terminate(let req):
             logger.info("Terminate request for session \(req.sessionID)")
+            response.sessionID = req.sessionID
             do {
                 try await spawner.terminateAgent(sessionID: req.sessionID)
-                response = .terminateOK(sessionID: req.sessionID)
+                response.success = true
             } catch {
                 logger.error("Terminate failed for \(req.sessionID): \(error)")
-                response = .terminateError(sessionID: req.sessionID, error: error.localizedDescription)
+                response.success = false
+                response.errorMessage = error.localizedDescription
             }
+        case nil:
+            logger.error("Empty launcher request")
+            response.errorMessage = "Empty request payload"
         }
     } catch {
         logger.error("Failed to decode request: \(error)")
-        // Can't determine sessionID from malformed request
-        response = LauncherResponse(type: "error", sessionID: "unknown", error: "Invalid request: \(error.localizedDescription)")
+        response.errorMessage = "Invalid request: \(error.localizedDescription)"
     }
 
-    // Write response + newline
+    // Write length-prefixed response
     do {
-        var responseData = try encoder.encode(response)
-        responseData.append(UInt8(ascii: "\n"))
-        _ = responseData.withUnsafeBytes { ptr in
+        let responseData: [UInt8] = try response.serializedBytes()
+        var length = UInt32(responseData.count).bigEndian
+        _ = withUnsafeBytes(of: &length) { ptr in
+            write(fd, ptr.baseAddress!, 4)
+        }
+        _ = responseData.withUnsafeBufferPointer { ptr in
             write(fd, ptr.baseAddress!, ptr.count)
         }
     } catch {

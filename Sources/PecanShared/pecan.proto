@@ -264,3 +264,37 @@ message HttpProxyResponse {
     string body = 4;
     string error_message = 5;
 }
+
+// ==========================================
+// VM Launcher IPC (Server <-> VM Launcher)
+// ==========================================
+
+message LauncherMountSpec {
+    string source = 1;
+    string destination = 2;
+    bool read_only = 3;
+}
+
+message LauncherRequest {
+    oneof payload {
+        LauncherSpawnRequest spawn = 1;
+        LauncherTerminateRequest terminate = 2;
+    }
+}
+
+message LauncherSpawnRequest {
+    string session_id = 1;
+    string grpc_socket_path = 2;
+    string agent_name = 3;
+    repeated LauncherMountSpec mounts = 4;
+}
+
+message LauncherTerminateRequest {
+    string session_id = 1;
+}
+
+message LauncherResponse {
+    string session_id = 1;
+    bool success = 2;
+    string error_message = 3;
+}

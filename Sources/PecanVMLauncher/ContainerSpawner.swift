@@ -3,6 +3,7 @@ import Containerization
 import ContainerizationExtras
 import ContainerizationOS
 import Logging
+import PecanShared
 
 let logger = Logger(label: "com.pecan.vm-launcher")
 
@@ -73,7 +74,7 @@ actor ContainerSpawner {
         return manager
     }
 
-    func spawnAgent(sessionID: String, grpcSocketPath: String, agentName: String, mounts: [MountSpec]) async throws {
+    func spawnAgent(sessionID: String, grpcSocketPath: String, agentName: String, mounts: [Pecan_LauncherMountSpec]) async throws {
         logger.info("Setting up Containerization VM for session \(sessionID) (agent: \(agentName))...")
 
         // If there's already a running container for this session, save it for background cleanup

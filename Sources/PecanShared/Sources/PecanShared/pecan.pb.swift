@@ -2792,3 +2792,288 @@ extension Pecan_HttpProxyResponse: SwiftProtobuf.Message, SwiftProtobuf._Message
     return true
   }
 }
+
+// MARK: - VM Launcher IPC
+
+public struct Pecan_LauncherMountSpec: Sendable {
+  public var source: String = String()
+  public var destination: String = String()
+  public var readOnly: Bool = false
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_LauncherRequest: Sendable {
+  public var payload: Pecan_LauncherRequest.OneOf_Payload? = nil
+
+  public var spawn: Pecan_LauncherSpawnRequest {
+    get {
+      if case .spawn(let v)? = payload {return v}
+      return Pecan_LauncherSpawnRequest()
+    }
+    set {payload = .spawn(newValue)}
+  }
+
+  public var terminate: Pecan_LauncherTerminateRequest {
+    get {
+      if case .terminate(let v)? = payload {return v}
+      return Pecan_LauncherTerminateRequest()
+    }
+    set {payload = .terminate(newValue)}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public enum OneOf_Payload: Equatable, Sendable {
+    case spawn(Pecan_LauncherSpawnRequest)
+    case terminate(Pecan_LauncherTerminateRequest)
+  }
+
+  public init() {}
+}
+
+public struct Pecan_LauncherSpawnRequest: Sendable {
+  public var sessionID: String = String()
+  public var grpcSocketPath: String = String()
+  public var agentName: String = String()
+  public var mounts: [Pecan_LauncherMountSpec] = []
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_LauncherTerminateRequest: Sendable {
+  public var sessionID: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+public struct Pecan_LauncherResponse: Sendable {
+  public var sessionID: String = String()
+  public var success: Bool = false
+  public var errorMessage: String = String()
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+  public init() {}
+}
+
+// MARK: - VM Launcher IPC Message Extensions
+
+extension Pecan_LauncherMountSpec: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LauncherMountSpec"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "source"),
+    2: .same(proto: "destination"),
+    3: .standard(proto: "read_only"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.source) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.destination) }()
+      case 3: try { try decoder.decodeSingularBoolField(value: &self.readOnly) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.source.isEmpty {
+      try visitor.visitSingularStringField(value: self.source, fieldNumber: 1)
+    }
+    if !self.destination.isEmpty {
+      try visitor.visitSingularStringField(value: self.destination, fieldNumber: 2)
+    }
+    if self.readOnly != false {
+      try visitor.visitSingularBoolField(value: self.readOnly, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_LauncherMountSpec, rhs: Pecan_LauncherMountSpec) -> Bool {
+    if lhs.source != rhs.source {return false}
+    if lhs.destination != rhs.destination {return false}
+    if lhs.readOnly != rhs.readOnly {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_LauncherRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LauncherRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .same(proto: "spawn"),
+    2: .same(proto: "terminate"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try {
+        var v: Pecan_LauncherSpawnRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .spawn(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .spawn(v)
+        }
+      }()
+      case 2: try {
+        var v: Pecan_LauncherTerminateRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .terminate(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .terminate(v)
+        }
+      }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    switch self.payload {
+    case .spawn?: try {
+      guard case .spawn(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 1)
+    }()
+    case .terminate?: try {
+      guard case .terminate(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
+    }()
+    case nil: break
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_LauncherRequest, rhs: Pecan_LauncherRequest) -> Bool {
+    if lhs.payload != rhs.payload {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_LauncherSpawnRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LauncherSpawnRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "session_id"),
+    2: .standard(proto: "grpc_socket_path"),
+    3: .standard(proto: "agent_name"),
+    4: .same(proto: "mounts"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.grpcSocketPath) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.agentName) }()
+      case 4: try { try decoder.decodeRepeatedMessageField(value: &self.mounts) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.sessionID.isEmpty {
+      try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
+    }
+    if !self.grpcSocketPath.isEmpty {
+      try visitor.visitSingularStringField(value: self.grpcSocketPath, fieldNumber: 2)
+    }
+    if !self.agentName.isEmpty {
+      try visitor.visitSingularStringField(value: self.agentName, fieldNumber: 3)
+    }
+    if !self.mounts.isEmpty {
+      try visitor.visitRepeatedMessageField(value: self.mounts, fieldNumber: 4)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_LauncherSpawnRequest, rhs: Pecan_LauncherSpawnRequest) -> Bool {
+    if lhs.sessionID != rhs.sessionID {return false}
+    if lhs.grpcSocketPath != rhs.grpcSocketPath {return false}
+    if lhs.agentName != rhs.agentName {return false}
+    if lhs.mounts != rhs.mounts {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_LauncherTerminateRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LauncherTerminateRequest"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "session_id"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.sessionID.isEmpty {
+      try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_LauncherTerminateRequest, rhs: Pecan_LauncherTerminateRequest) -> Bool {
+    if lhs.sessionID != rhs.sessionID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_LauncherResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LauncherResponse"
+  public static let _protobuf_nameMap: SwiftProtobuf._NameMap = [
+    1: .standard(proto: "session_id"),
+    2: .same(proto: "success"),
+    3: .standard(proto: "error_message"),
+  ]
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self.errorMessage) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.sessionID.isEmpty {
+      try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
+    }
+    if self.success != false {
+      try visitor.visitSingularBoolField(value: self.success, fieldNumber: 2)
+    }
+    if !self.errorMessage.isEmpty {
+      try visitor.visitSingularStringField(value: self.errorMessage, fieldNumber: 3)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_LauncherResponse, rhs: Pecan_LauncherResponse) -> Bool {
+    if lhs.sessionID != rhs.sessionID {return false}
+    if lhs.success != rhs.success {return false}
+    if lhs.errorMessage != rhs.errorMessage {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}

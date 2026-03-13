@@ -14,8 +14,7 @@ let package = Package(
         .executable(name: "pecan-test-client", targets: ["PecanTestClient"]),
         .executable(name: "pecan", targets: ["PecanUI"]),
         .executable(name: "pecan-agent", targets: ["PecanAgent"]),
-        .executable(name: "pecan-builder", targets: ["PecanBuilder"]),
-    ],
+],
     dependencies: [
         .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.23.0"),
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.25.2"),
@@ -46,12 +45,7 @@ let package = Package(
             dependencies: [
                 "PecanShared",
             ]),
-        .executableTarget(
-            name: "PecanBuilder",
-            dependencies: [
-                .product(name: "Containerization", package: "containerization")
-            ]),
-        .executableTarget(
+.executableTarget(
             name: "PecanServer",
             dependencies: [
                 "PecanShared",
@@ -60,6 +54,7 @@ let package = Package(
         .executableTarget(
             name: "PecanVMLauncher",
             dependencies: [
+                "PecanShared",
                 .product(name: "Containerization", package: "containerization"),
                 .product(name: "Logging", package: "swift-log"),
             ]),

@@ -1,55 +1,7 @@
 import Foundation
+import PecanShared
+import SwiftProtobuf
 import Logging
-
-// IPC protocol types — duplicated from PecanVMLauncher to avoid coupling targets.
-
-private enum LauncherRequest: Codable {
-    case spawn(SpawnRequest)
-    case terminate(TerminateRequest)
-
-    struct SpawnRequest: Codable {
-        let type: String
-        let sessionID: String
-        let grpcSocketPath: String
-        let agentName: String
-        let mounts: [MountSpec]
-    }
-
-    struct TerminateRequest: Codable {
-        let type: String
-        let sessionID: String
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case type
-    }
-
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let type = try container.decode(String.self, forKey: .type)
-        switch type {
-        case "spawn":
-            self = .spawn(try SpawnRequest(from: decoder))
-        case "terminate":
-            self = .terminate(try TerminateRequest(from: decoder))
-        default:
-            throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown type: \(type)")
-        }
-    }
-
-    func encode(to encoder: Encoder) throws {
-        switch self {
-        case .spawn(let req): try req.encode(to: encoder)
-        case .terminate(let req): try req.encode(to: encoder)
-        }
-    }
-}
-
-private struct LauncherResponse: Codable {
-    let type: String
-    let sessionID: String
-    let error: String?
-}
 
 /// Spawns agents by sending IPC commands to the pecan-vm-launcher process over a Unix socket.
 public actor RemoteSpawner: AgentSpawner {
@@ -66,54 +18,57 @@ public actor RemoteSpawner: AgentSpawner {
 
         // Build the full mounts list
         let fm = FileManager.default
-        var mounts: [MountSpec] = [
-            MountSpec(source: workspacePath, destination: "/home/\(agentName)", readOnly: false),
-            MountSpec(source: "\(currentPath)/.build/aarch64-swift-linux-musl/release", destination: "/opt/pecan", readOnly: true),
-            MountSpec(source: "\(homeDir)/.pecan/tools", destination: "/home/\(agentName)/.pecan/tools", readOnly: true),
+        var mounts: [Pecan_LauncherMountSpec] = [
+            .with { $0.source = workspacePath; $0.destination = "/home/\(agentName)"; $0.readOnly = false },
+            .with { $0.source = "\(currentPath)/.build/aarch64-swift-linux-musl/release"; $0.destination = "/opt/pecan"; $0.readOnly = true },
+            .with { $0.source = "\(homeDir)/.pecan/tools"; $0.destination = "/home/\(agentName)/.pecan/tools"; $0.readOnly = true },
         ]
 
         // Mount skills directories if they exist on the host
         let skillsPath = "\(homeDir)/.pecan/skills"
         if fm.fileExists(atPath: skillsPath) {
-            mounts.append(MountSpec(source: skillsPath, destination: "/home/\(agentName)/.pecan/skills", readOnly: true))
+            mounts.append(.with { $0.source = skillsPath; $0.destination = "/home/\(agentName)/.pecan/skills"; $0.readOnly = true })
         }
         let agentsSkillsPath = "\(homeDir)/.agents/skills"
         if fm.fileExists(atPath: agentsSkillsPath) {
-            mounts.append(MountSpec(source: agentsSkillsPath, destination: "/home/\(agentName)/.agents/skills", readOnly: true))
+            mounts.append(.with { $0.source = agentsSkillsPath; $0.destination = "/home/\(agentName)/.agents/skills"; $0.readOnly = true })
         }
-        mounts.append(contentsOf: shares)
+        // Convert MountSpec shares to protobuf
+        for share in shares {
+            mounts.append(.with { $0.source = share.source; $0.destination = share.destination; $0.readOnly = share.readOnly })
+        }
 
-        let request = LauncherRequest.SpawnRequest(
-            type: "spawn",
-            sessionID: sessionID,
-            grpcSocketPath: grpcSocketPath,
-            agentName: agentName,
-            mounts: mounts
-        )
+        var request = Pecan_LauncherRequest()
+        request.spawn = .with {
+            $0.sessionID = sessionID
+            $0.grpcSocketPath = grpcSocketPath
+            $0.agentName = agentName
+            $0.mounts = mounts
+        }
+
         let response = try await sendRequest(request)
-        if response.type == "spawn_error" {
+        if !response.success {
             throw NSError(
                 domain: "RemoteSpawner", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: response.error ?? "Unknown spawn error"]
+                userInfo: [NSLocalizedDescriptionKey: response.errorMessage.isEmpty ? "Unknown spawn error" : response.errorMessage]
             )
         }
     }
 
     public func terminateAgent(sessionID: String) async throws {
-        let request = LauncherRequest.TerminateRequest(
-            type: "terminate",
-            sessionID: sessionID
-        )
+        var request = Pecan_LauncherRequest()
+        request.terminate = .with { $0.sessionID = sessionID }
+
         let response = try await sendRequest(request)
-        if response.type == "terminate_error" {
+        if !response.success {
             throw NSError(
                 domain: "RemoteSpawner", code: 2,
-                userInfo: [NSLocalizedDescriptionKey: response.error ?? "Unknown terminate error"]
+                userInfo: [NSLocalizedDescriptionKey: response.errorMessage.isEmpty ? "Unknown terminate error" : response.errorMessage]
             )
         }
     }
 
-    private func sendRequest<T: Encodable>(_ request: T) async throws -> LauncherResponse {
+    private func sendRequest(_ request: Pecan_LauncherRequest) async throws -> Pecan_LauncherResponse {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw NSError(domain: "RemoteSpawner", code: 3,
@@ -148,36 +103,49 @@ public actor RemoteSpawner: AgentSpawner {
         var timeout = timeval(tv_sec: 30, tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
 
-        // Send request + newline
-        var requestData = try JSONEncoder().encode(request)
-        requestData.append(UInt8(ascii: "\n"))
-        let writeResult = requestData.withUnsafeBytes { ptr in
+        // Send length-prefixed protobuf
+        let requestData: [UInt8] = try request.serializedBytes()
+        var length = UInt32(requestData.count).bigEndian
+        let headerWritten = withUnsafeBytes(of: &length) { ptr in
+            write(fd, ptr.baseAddress!, 4)
+        }
+        guard headerWritten == 4 else {
+            throw NSError(domain: "RemoteSpawner", code: 5,
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to write request length"])
+        }
+        let bodyWritten = requestData.withUnsafeBufferPointer { ptr in
             write(fd, ptr.baseAddress!, ptr.count)
         }
-        guard writeResult == requestData.count else {
+        guard bodyWritten == requestData.count else {
             throw NSError(domain: "RemoteSpawner", code: 5,
-                         userInfo: [NSLocalizedDescriptionKey: "Failed to write request"])
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to write request body"])
         }
 
-        // Read response
-        var responseData = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while true {
-            let bytesRead = read(fd, &buffer, buffer.count)
-            if bytesRead <= 0 { break }
-            responseData.append(contentsOf: buffer[0..<bytesRead])
-            if responseData.contains(UInt8(ascii: "\n")) { break }
-        }
-
-        if let newlineIndex = responseData.firstIndex(of: UInt8(ascii: "\n")) {
-            responseData = responseData[responseData.startIndex..<newlineIndex]
-        }
-
-        guard !responseData.isEmpty else {
+        // Read length-prefixed response
+        var responseLengthBytes = [UInt8](repeating: 0, count: 4)
+        let headerRead = read(fd, &responseLengthBytes, 4)
+        guard headerRead == 4 else {
             throw NSError(domain: "RemoteSpawner", code: 6,
-                         userInfo: [NSLocalizedDescriptionKey: "Empty response from launcher"])
+                         userInfo: [NSLocalizedDescriptionKey: "Failed to read response length"])
+        }
+        let responseLength = Int(UInt32(bigEndian: responseLengthBytes.withUnsafeBufferPointer {
+            $0.baseAddress!.withMemoryRebound(to: UInt32.self, capacity: 1) { $0.pointee }
+        }))
+
+        var responseData = Data(count: responseLength)
+        var totalRead = 0
+        while totalRead < responseLength {
+            let n = responseData.withUnsafeMutableBytes { ptr in
+                read(fd, ptr.baseAddress! + totalRead, responseLength - totalRead)
+            }
+            if n <= 0 { break }
+            totalRead += n
+        }
+        guard totalRead == responseLength else {
+            throw NSError(domain: "RemoteSpawner", code: 6,
+                         userInfo: [NSLocalizedDescriptionKey: "Incomplete response from launcher"])
         }
 
-        return try JSONDecoder().decode(LauncherResponse.self, from: responseData)
+        return try Pecan_LauncherResponse(serializedBytes: responseData)
     }
 }
