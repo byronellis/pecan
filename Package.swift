@@ -45,7 +45,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PecanFSServer",
-            dependencies: ["CPecanFuse"],
+            dependencies: [
+                "CPecanFuse",
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v5),  // FUSE is pthread-based; Swift concurrency not used
             ]

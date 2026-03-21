@@ -63,6 +63,7 @@ public actor ToolManager {
     public func registerBuiltinTools() {
         register(tool: ReadFileTool())
         register(tool: WriteFileTool())
+        register(tool: AppendFileTool())
         register(tool: EditFileTool())
         register(tool: SearchFilesTool())
         register(tool: BashTool())

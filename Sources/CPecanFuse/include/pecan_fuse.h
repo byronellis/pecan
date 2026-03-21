@@ -17,6 +17,7 @@ typedef int (*PecanTruncateFn) (const char *path, off_t size);
 typedef int (*PecanRenameFn)   (const char *from, const char *to);
 typedef int (*PecanMkdirFn)    (const char *path, mode_t mode);
 typedef int (*PecanRmdirFn)    (const char *path);
+typedef int (*PecanReleaseFn)  (const char *path);
 
 // Set these before calling pecan_fuse_main().
 extern PecanGetattrFn  pecan_cb_getattr;
@@ -29,6 +30,7 @@ extern PecanTruncateFn pecan_cb_truncate;
 extern PecanRenameFn   pecan_cb_rename;
 extern PecanMkdirFn    pecan_cb_mkdir;
 extern PecanRmdirFn    pecan_cb_rmdir;
+extern PecanReleaseFn  pecan_cb_release;
 
 // Run the FUSE event loop. Pass argc/argv from main() — first non-option
 // argument is the mount point.

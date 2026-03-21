@@ -8,6 +8,7 @@ final class TeamStore: ScopedStore, Sendable {
     let projectName: String
     let teamDir: URL
     let workspacePath: URL
+    var dbPath: String { teamDir.appendingPathComponent("team.db").path }
     let dbQueue: DatabaseQueue
 
     /// Create or open a team store within a project.

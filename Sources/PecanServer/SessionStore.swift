@@ -101,6 +101,7 @@ final class SessionStore: ScopedStore, Sendable {
     let sessionID: String
     let sessionDir: URL
     let workspacePath: URL
+    var dbPath: String { sessionDir.appendingPathComponent("session.db").path }
     let dbQueue: DatabaseQueue
 
     /// Create a new session store (new session).

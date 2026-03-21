@@ -79,21 +79,34 @@ struct MemoryFragment: PromptFragment, Sendable {
     let priority = 200
 
     func render(context: PromptContext) async -> String? {
-        """
-        ## Memory
-        You have a persistent memory filesystem mounted at `/memory/`. \
-        Files here are plain Markdown and survive across sessions.
-
-        **Reading memories**: `ls /memory/`, `cat /memory/notes.md`, etc.
-        **Writing memories**: Use `write_file` or `bash` to create/update `.md` files.
-        **Core memories** (auto-injected into your context at startup): place files in `/memory/core/`.
-
-        Keep memory files focused and well-named. Examples:
-        - `/memory/core/preferences.md` — user preferences, always injected
-        - `/memory/core/project_context.md` — key project facts, always injected
-        - `/memory/notes.md` — scratch notes
-        - `/memory/learnings.md` — things you've discovered about the codebase
-        """
+        var lines = [
+            "## Memory",
+            "You have a persistent memory filesystem at `/memory/`. Each file represents all memories sharing a tag.",
+            "Files survive across sessions and are backed by a database.",
+            "",
+            "**Reading**: `cat /memory/CORE.md`, `ls /memory/`",
+            "**Adding a new memory**: `append_file path=/memory/NOTES.md content=\"...\"`",
+            "  (appending to a tag file always creates a new memory entry)",
+            "**Editing / full replace**: `write_file` with the complete block document — existing `<!-- memory:N -->` IDs are preserved; blocks without IDs are inserted; missing IDs are deleted.",
+            "**Core memories** (auto-injected into context at startup): tag `core` → `/memory/CORE.md`",
+            "",
+            "File format:",
+            "```",
+            "<!-- memory:1 -->",
+            "Content of first memory.",
+            "",
+            "<!-- memory:2 -->",
+            "Content of second memory.",
+            "```",
+        ]
+        if context.project != nil {
+            lines.append("")
+            lines.append("**Project memories**: `/memory/project/TAG.md` — shared across all agents in this project.")
+        }
+        if context.team != nil {
+            lines.append("**Team memories**: `/memory/team/TAG.md` — shared within the team.")
+        }
+        return lines.joined(separator: "\n")
     }
 }
 

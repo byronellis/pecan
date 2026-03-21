@@ -6,11 +6,9 @@ import Darwin
 #endif
 
 // MARK: - Global filesystem instance
-// FUSE callbacks are C function pointers and cannot capture state, so we
-// use a process-global. FUSE is inherently single-mount-per-process anyway.
 nonisolated(unsafe) var _fs: MemoryFilesystem?
 
-// MARK: - FUSE callback globals (C-callable Swift functions)
+// MARK: - FUSE callbacks
 
 func cb_getattr(_ path: UnsafePointer<CChar>?, _ stbuf: UnsafeMutablePointer<stat>?) -> Int32 {
     guard let fs = _fs, let path, let stbuf else { return -ENOENT }
@@ -55,35 +53,35 @@ func cb_rename(_ from: UnsafePointer<CChar>?, _ to: UnsafePointer<CChar>?) -> In
     return fs.rename(from: String(cString: from), to: String(cString: to))
 }
 
-func cb_mkdir(_ path: UnsafePointer<CChar>?, _ mode: mode_t) -> Int32 {
-    guard let fs = _fs, let path else { return -EINVAL }
-    return fs.mkdir(String(cString: path))
-}
-
-func cb_rmdir(_ path: UnsafePointer<CChar>?) -> Int32 {
-    guard let fs = _fs, let path else { return -ENOENT }
-    return fs.rmdir(String(cString: path))
+func cb_release(_ path: UnsafePointer<CChar>?) -> Int32 {
+    guard let fs = _fs, let path else { return 0 }
+    return fs.release(String(cString: path))
 }
 
 // MARK: - Entry point
 
 let args = CommandLine.arguments
-guard args.count >= 2 else {
-    fputs("Usage: pecan-fs-server <mountpoint> [--persist <dir>]\n", stderr)
+
+func argValue(_ flag: String) -> String? {
+    guard let idx = args.firstIndex(of: flag), idx + 1 < args.count else { return nil }
+    return args[idx + 1]
+}
+
+guard args.count >= 2, !args[1].hasPrefix("--") else {
+    fputs("Usage: pecan-fs-server <mountpoint> --agent-db <path> [--project-db <path>] [--team-db <path>]\n", stderr)
+    exit(1)
+}
+guard let agentDBPath = argValue("--agent-db") else {
+    fputs("Error: --agent-db <path> is required\n", stderr)
     exit(1)
 }
 
-// Parse --persist <dir> option
-var persistPath: String? = nil
-if let idx = args.firstIndex(of: "--persist"), idx + 1 < args.count {
-    persistPath = args[idx + 1]
-    if let dir = persistPath {
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-    }
-}
+_fs = MemoryFilesystem(
+    agentDBPath: agentDBPath,
+    projectDBPath: argValue("--project-db"),
+    teamDBPath: argValue("--team-db")
+)
 
-// Set up the filesystem and wire callbacks
-_fs = MemoryFilesystem(persistPath: persistPath)
 pecan_cb_getattr  = cb_getattr
 pecan_cb_readdir  = cb_readdir
 pecan_cb_read     = cb_read
@@ -92,19 +90,18 @@ pecan_cb_create   = cb_create
 pecan_cb_unlink   = cb_unlink
 pecan_cb_truncate = cb_truncate
 pecan_cb_rename   = cb_rename
-pecan_cb_mkdir    = cb_mkdir
-pecan_cb_rmdir    = cb_rmdir
+pecan_cb_release  = cb_release
+// mkdir/rmdir intentionally not wired — directories are virtual
 
-// Build argc/argv for FUSE (strip our own --persist args, keep mountpoint + any -f/-d)
+// Build FUSE argc/argv: strip our flags, keep mountpoint + any -f/-d
+let ourFlags: Set<String> = ["--agent-db", "--project-db", "--team-db"]
 var fuseArgs: [String] = [args[0]]
 var skip = false
 for arg in args.dropFirst() {
     if skip { skip = false; continue }
-    if arg == "--persist" { skip = true; continue }
+    if ourFlags.contains(arg) { skip = true; continue }
     fuseArgs.append(arg)
 }
-
-// Run FUSE in foreground (-f) so the process stays alive as a child
 if !fuseArgs.contains("-f") && !fuseArgs.contains("-d") {
     fuseArgs.append("-f")
 }

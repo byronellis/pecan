@@ -719,8 +719,13 @@ actor SessionManager {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
         }
 
-        // Mount per-session FUSE memory filesystem
-        if let memMount = try? await FSServerManager.shared.mount(sessionID: sessionID) {
+        // Mount per-session FUSE memory filesystem backed by SQLite
+        if let store = getStore(sessionID: sessionID),
+           let memMount = try? await FSServerManager.shared.mount(
+               sessionID: sessionID,
+               agentDBPath: store.dbPath,
+               projectDBPath: getProjectStore(sessionID: sessionID)?.dbPath,
+               teamDBPath: getTeamStore(sessionID: sessionID)?.dbPath) {
             shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
         }
 
@@ -858,8 +863,12 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     response.sessionStarted = started
                     try await responseStream.send(response)
 
-                    // Mount per-session FUSE memory filesystem
-                    if let memMount = try? await FSServerManager.shared.mount(sessionID: sessionID) {
+                    // Mount per-session FUSE memory filesystem backed by SQLite
+                    if let memMount = try? await FSServerManager.shared.mount(
+                        sessionID: sessionID,
+                        agentDBPath: store.dbPath,
+                        projectDBPath: await SessionManager.shared.getProjectStore(sessionID: sessionID)?.dbPath,
+                        teamDBPath: await SessionManager.shared.getTeamStore(sessionID: sessionID)?.dbPath) {
                         shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
                     }
 

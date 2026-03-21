@@ -26,19 +26,10 @@ actor StreamWriter {
 /// Read core memory files from /memory/core_*.md and inject as a system message.
 /// Must be called from a detached Task so it doesn't block the response loop.
 func injectCoreMemories(_ writer: StreamWriter) async {
-    let coreDir = "/memory/core"
-    guard let files = try? FileManager.default.contentsOfDirectory(atPath: coreDir) else { return }
-    let coreFiles = files.filter { $0.hasSuffix(".md") }.sorted()
-    guard !coreFiles.isEmpty else { return }
-
-    var section = "## Core Memories\n"
-    for file in coreFiles {
-        let path = "\(coreDir)/\(file)"
-        if let content = try? String(contentsOfFile: path, encoding: .utf8), !content.isEmpty {
-            let name = String(file.dropLast(3))  // strip ".md"
-            section += "\n### \(name)\n\(content)"
-        }
-    }
+    let corePath = "/memory/CORE.md"
+    guard let content = try? String(contentsOfFile: corePath, encoding: .utf8),
+          !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+    let section = "## Core Memories\n\n\(content)"
 
     do {
         var ctxMsg = Pecan_AgentEvent()
@@ -51,7 +42,7 @@ func injectCoreMemories(_ writer: StreamWriter) async {
         ctxCmd.addMessage = addMsg
         ctxMsg.contextCommand = ctxCmd
         try await writer.send(ctxMsg)
-        logger.info("Injected \(coreFiles.count) core memory files into context")
+        logger.info("Injected core memories from \(corePath)")
     } catch {
         logger.debug("Could not inject core memories: \(error)")
     }

@@ -9,6 +9,7 @@ final class ProjectStore: ScopedStore, Sendable {
     let projectDir: URL
     /// The directory this project is associated with (e.g. a git repo root)
     let directory: String?
+    var dbPath: String { projectDir.appendingPathComponent("project.db").path }
     let dbQueue: DatabaseQueue
 
     /// Create or open a project store.

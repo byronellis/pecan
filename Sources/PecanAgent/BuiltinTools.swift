@@ -800,6 +800,46 @@ public struct HttpRequestTool: PecanTool, Sendable {
     }
 }
 
+// MARK: - AppendFileTool
+
+public struct AppendFileTool: PecanTool, Sendable {
+    public let name = "append_file"
+    public let description = "Append content to a file. For /memory/TAG.md files this creates a new memory entry. The file is created if it does not exist."
+    public let parametersJSONSchema = """
+    {
+        "type": "object",
+        "properties": {
+            "path": { "type": "string", "description": "Absolute path to the file." },
+            "content": { "type": "string", "description": "Content to append." }
+        },
+        "required": ["path", "content"]
+    }
+    """
+
+    public func execute(argumentsJSON: String) async throws -> String {
+        let args = try parseArguments(argumentsJSON)
+        guard let path = args["path"] as? String else { throw ToolError.invalidArguments("Missing path") }
+        guard let content = args["content"] as? String else { throw ToolError.invalidArguments("Missing content") }
+
+        let resolved = (path as NSString).expandingTildeInPath
+        if !FileManager.default.fileExists(atPath: resolved) {
+            let dir = (resolved as NSString).deletingLastPathComponent
+            try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+            FileManager.default.createFile(atPath: resolved, contents: nil)
+        }
+        guard let fh = FileHandle(forWritingAtPath: resolved) else {
+            throw ToolError.executionFailed("Cannot open \(path) for writing")
+        }
+        defer { fh.closeFile() }
+        fh.seekToEndOfFile()
+        guard let data = content.data(using: .utf8) else {
+            throw ToolError.executionFailed("Cannot encode content as UTF-8")
+        }
+        fh.write(data)
+        return "Appended \(data.count) bytes to \(path)"
+    }
+}
+
 // MARK: - Trigger Tools
 
 public struct TriggerCreateTool: PecanTool, Sendable {
