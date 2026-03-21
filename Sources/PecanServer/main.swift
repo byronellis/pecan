@@ -719,6 +719,11 @@ actor SessionManager {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
         }
 
+        // Mount per-session FUSE memory filesystem
+        if let memMount = try? await FSServerManager.shared.mount(sessionID: sessionID) {
+            shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
+        }
+
         // Clear stale agent stream so the new agent can register
         agentStreams.removeValue(forKey: sessionID)
 
@@ -852,6 +857,11 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     started.teamName = teamName
                     response.sessionStarted = started
                     try await responseStream.send(response)
+
+                    // Mount per-session FUSE memory filesystem
+                    if let memMount = try? await FSServerManager.shared.mount(sessionID: sessionID) {
+                        shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
+                    }
 
                     // Spawn the agent using the Pluggable VM architecture
                     do {

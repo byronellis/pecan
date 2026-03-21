@@ -9,6 +9,7 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
+        .executable(name: "pecan-fs-server", targets: ["PecanFSServer"]),
         .executable(name: "pecan-server", targets: ["PecanServer"]),
         .executable(name: "pecan-vm-launcher", targets: ["PecanVMLauncher"]),
         .executable(name: "pecan-test-client", targets: ["PecanTestClient"]),
@@ -28,6 +29,27 @@ let package = Package(
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", from: "2.30.3"),
     ],
     targets: [
+        // C shim wrapping libfuse-t for Swift consumption
+        .target(
+            name: "CPecanFuse",
+            dependencies: [],
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("FUSE_USE_VERSION", to: "26"),
+                .define("_FILE_OFFSET_BITS", to: "64"),
+                .unsafeFlags(["-I/usr/local/include"]),
+            ],
+            linkerSettings: [
+                .unsafeFlags(["-L/usr/local/lib", "-lfuse-t"]),
+            ]
+        ),
+        .executableTarget(
+            name: "PecanFSServer",
+            dependencies: ["CPecanFuse"],
+            swiftSettings: [
+                .swiftLanguageMode(.v5),  // FUSE is pthread-based; Swift concurrency not used
+            ]
+        ),
         .target(
             name: "PecanShared",
             dependencies: [
