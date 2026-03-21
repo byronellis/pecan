@@ -75,15 +75,6 @@ public actor ToolManager {
         register(tool: TaskGetTool())
         register(tool: TaskUpdateTool())
         register(tool: TaskFocusTool())
-        // Memory tools
-        register(tool: MemoryAddTool())
-        register(tool: MemoryGetTool())
-        register(tool: MemoryListTool())
-        register(tool: MemorySearchTool())
-        register(tool: MemoryUpdateTool())
-        register(tool: MemoryDeleteTool())
-        register(tool: MemoryTagTool())
-        register(tool: MemoryUntagTool())
         // Trigger tools
         register(tool: TriggerCreateTool())
         register(tool: TriggerListTool())

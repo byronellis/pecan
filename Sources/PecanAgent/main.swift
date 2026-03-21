@@ -23,21 +23,24 @@ actor StreamWriter {
     }
 }
 
-/// Fetch core memories and inject them into context as a separate system message.
+/// Read core memory files from /memory/core_*.md and inject as a system message.
 /// Must be called from a detached Task so it doesn't block the response loop.
 func injectCoreMemories(_ writer: StreamWriter) async {
-    do {
-        let coreResult = try await TaskClient.shared.sendCommand(action: "memory_list", payload: ["tag": "core"])
-        guard let data = coreResult.data(using: .utf8),
-              let memories = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
-              !memories.isEmpty else { return }
+    let memoryDir = "/memory"
+    guard let files = try? FileManager.default.contentsOfDirectory(atPath: memoryDir) else { return }
+    let coreFiles = files.filter { $0.hasPrefix("core_") && $0.hasSuffix(".md") }.sorted()
+    guard !coreFiles.isEmpty else { return }
 
-        var section = "## Core Memories\n"
-        for mem in memories {
-            let content = mem["content"] as? String ?? ""
-            section += "\n- \(content)"
+    var section = "## Core Memories\n"
+    for file in coreFiles {
+        let path = "\(memoryDir)/\(file)"
+        if let content = try? String(contentsOfFile: path, encoding: .utf8), !content.isEmpty {
+            let name = String(file.dropFirst(5).dropLast(3))  // strip "core_" prefix and ".md" suffix
+            section += "\n### \(name)\n\(content)"
         }
+    }
 
+    do {
         var ctxMsg = Pecan_AgentEvent()
         var ctxCmd = Pecan_ContextCommand()
         ctxCmd.requestID = UUID().uuidString
@@ -48,9 +51,9 @@ func injectCoreMemories(_ writer: StreamWriter) async {
         ctxCmd.addMessage = addMsg
         ctxMsg.contextCommand = ctxCmd
         try await writer.send(ctxMsg)
-        logger.info("Injected \(memories.count) core memories into context")
+        logger.info("Injected \(coreFiles.count) core memory files into context")
     } catch {
-        logger.debug("Could not fetch core memories: \(error)")
+        logger.debug("Could not inject core memories: \(error)")
     }
 }
 

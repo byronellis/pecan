@@ -71,20 +71,29 @@ struct ProjectTeamContextFragment: PromptFragment, Sendable {
     }
 }
 
-// MARK: - CoreMemoriesFragment (priority 200)
-// Note: Core memories are injected as a separate system message via injectCoreMemories()
-// because they require TaskClient which needs the response loop running. This fragment
-// acts as a placeholder that renders nil — the actual injection happens asynchronously.
+// MARK: - MemoryFragment (priority 200)
 
-struct CoreMemoriesFragment: PromptFragment, Sendable {
-    let id = "builtin.core_memories"
-    let name = "Core Memories"
+struct MemoryFragment: PromptFragment, Sendable {
+    let id = "builtin.memory"
+    let name = "Memory"
     let priority = 200
 
     func render(context: PromptContext) async -> String? {
-        // Actual core memories are injected via injectCoreMemories() in a detached Task
-        // after registration, since TaskClient requires the response loop to be running.
-        nil
+        """
+        ## Memory
+        You have a persistent memory filesystem mounted at `/memory/`. \
+        Files here are plain Markdown and survive across sessions.
+
+        **Reading memories**: Use `read_file` or `bash` (`ls /memory/`, `cat /memory/foo.md`).
+        **Writing memories**: Use `write_file` or `bash` to create/update `.md` files.
+        **Core memories** (auto-injected into your context at startup): name the file `core_<name>.md`.
+
+        Keep memory files focused and well-named. Examples:
+        - `/memory/core_preferences.md` — user preferences, always injected
+        - `/memory/core_project_context.md` — key project facts, always injected
+        - `/memory/notes.md` — scratch notes for the current session
+        - `/memory/learnings.md` — things you've discovered about the codebase
+        """
     }
 }
 
