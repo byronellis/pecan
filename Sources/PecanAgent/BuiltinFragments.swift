@@ -47,7 +47,7 @@ struct ProjectTeamContextFragment: PromptFragment, Sendable {
             if !project.directory.isEmpty {
                 lines.append("Project directory is mounted at `\(project.mount)` (host: \(project.directory)).")
             }
-            lines.append("Use `scope: \"project\"` in task/memory tools to work with project-level data.")
+            lines.append("Project memories are at `/memory/project/`.")
         }
 
         if let team = context.team {
@@ -58,13 +58,7 @@ struct ProjectTeamContextFragment: PromptFragment, Sendable {
             if !team.mount.isEmpty {
                 lines.append("Team shared workspace is mounted at `\(team.mount)`.")
             }
-            lines.append("Use `scope: \"team\"` in task/memory tools to work with team-level data.")
-        }
-
-        if let project = context.project, let team = context.team {
-            lines.append("")
-            lines.append("Task and memory listings merge results from all scopes (agent, team, project) by default. Each result includes a `scope` field indicating its origin.")
-            _ = project; _ = team  // silence unused warnings
+            lines.append("Team memories are at `/memory/team/`.")
         }
 
         return lines.isEmpty ? nil : lines.joined(separator: "\n")

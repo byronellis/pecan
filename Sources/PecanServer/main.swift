@@ -272,10 +272,6 @@ actor SessionManager {
         if action == "list" && (scope.isEmpty || scope == "agent") {
             return try handleMergedTaskList(sessionID: sessionID, payload: payload)
         }
-        if action == "memory_list" && (scope.isEmpty || scope == "agent") {
-            return try handleMergedMemoryList(sessionID: sessionID, payload: payload)
-        }
-
         // Resolve store by scope
         let resolvedScope = scope.isEmpty ? "agent" : scope
         guard let store = storeForScope(sessionID: sessionID, scope: resolvedScope) else {
@@ -341,86 +337,6 @@ actor SessionManager {
             try store.setFocused(taskID: taskID)
             let focused = try store.getFocusedTask()
             try await sendTaskUpdateToUI(sessionID: sessionID, focusedTitle: focused?.title ?? "")
-            return "{\"ok\":true}"
-
-        // MARK: Memory actions
-
-        case "memory_create":
-            guard let content = payload["content"] as? String, !content.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing content"])
-            }
-            let tags: [String]
-            if let tagArr = payload["tags"] as? [String] {
-                tags = tagArr
-            } else if let tagStr = payload["tags"] as? String, !tagStr.isEmpty {
-                tags = tagStr.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            } else {
-                tags = []
-            }
-            let memory = try store.createMemory(content: content, tags: tags)
-            return try memoryToJSON(memory, tags: tags)
-
-        case "memory_get":
-            guard let memID = idFromPayload(payload, key: "memory_id") else {
-                throw NSError(domain: "TaskCommand", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing memory_id"])
-            }
-            guard let (memory, tags) = try store.getMemory(id: memID) else {
-                throw NSError(domain: "TaskCommand", code: 4, userInfo: [NSLocalizedDescriptionKey: "Memory #\(memID) not found"])
-            }
-            return try memoryToJSON(memory, tags: tags)
-
-        case "memory_list":
-            let tag = payload["tag"] as? String
-            let memories = try store.listMemories(tag: tag)
-            let dicts = memories.map { memoryToDict($0.0, tags: $0.1) }
-            let data = try JSONSerialization.data(withJSONObject: dicts)
-            return String(data: data, encoding: .utf8) ?? "[]"
-
-        case "memory_search":
-            guard let query = payload["query"] as? String, !query.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing query"])
-            }
-            let memories = try store.searchMemories(query: query)
-            let dicts = memories.map { memoryToDict($0.0, tags: $0.1) }
-            let data = try JSONSerialization.data(withJSONObject: dicts)
-            return String(data: data, encoding: .utf8) ?? "[]"
-
-        case "memory_update":
-            guard let memID = idFromPayload(payload, key: "memory_id") else {
-                throw NSError(domain: "TaskCommand", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing memory_id"])
-            }
-            guard let content = payload["content"] as? String else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing content"])
-            }
-            let updated = try store.updateMemory(id: memID, content: content)
-            let (_, tags) = try store.getMemory(id: memID) ?? (updated, [])
-            return try memoryToJSON(updated, tags: tags)
-
-        case "memory_delete":
-            guard let memID = idFromPayload(payload, key: "memory_id") else {
-                throw NSError(domain: "TaskCommand", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing memory_id"])
-            }
-            try store.deleteMemory(id: memID)
-            return "{\"ok\":true}"
-
-        case "memory_tag":
-            guard let memID = idFromPayload(payload, key: "memory_id") else {
-                throw NSError(domain: "TaskCommand", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing memory_id"])
-            }
-            guard let tag = payload["tag"] as? String, !tag.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing tag"])
-            }
-            try store.addMemoryTag(memoryId: memID, tag: tag)
-            return "{\"ok\":true}"
-
-        case "memory_untag":
-            guard let memID = idFromPayload(payload, key: "memory_id") else {
-                throw NSError(domain: "TaskCommand", code: 3, userInfo: [NSLocalizedDescriptionKey: "Missing memory_id"])
-            }
-            guard let tag = payload["tag"] as? String, !tag.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing tag"])
-            }
-            try store.removeMemoryTag(memoryId: memID, tag: tag)
             return "{\"ok\":true}"
 
         // MARK: Trigger actions (session-only)
@@ -500,40 +416,6 @@ actor SessionManager {
     }
 
     /// Merged memory list: collects memories from agent, team, and project scopes.
-    private func handleMergedMemoryList(sessionID: String, payload: [String: Any]) throws -> String {
-        var allMemories: [[String: Any]] = []
-
-        if let store = sessionStores[sessionID] {
-            let memories = try store.listMemories(tag: payload["tag"] as? String)
-            allMemories.append(contentsOf: memories.map {
-                var dict = memoryToDict($0.0, tags: $0.1)
-                dict["scope"] = "agent"
-                return dict
-            })
-        }
-
-        if let store = getTeamStore(sessionID: sessionID) {
-            let memories = try store.listMemories(tag: payload["tag"] as? String)
-            allMemories.append(contentsOf: memories.map {
-                var dict = memoryToDict($0.0, tags: $0.1)
-                dict["scope"] = "team"
-                return dict
-            })
-        }
-
-        if let store = getProjectStore(sessionID: sessionID) {
-            let memories = try store.listMemories(tag: payload["tag"] as? String)
-            allMemories.append(contentsOf: memories.map {
-                var dict = memoryToDict($0.0, tags: $0.1)
-                dict["scope"] = "project"
-                return dict
-            })
-        }
-
-        let data = try JSONSerialization.data(withJSONObject: allMemories)
-        return String(data: data, encoding: .utf8) ?? "[]"
-    }
-
     private func taskIDFromPayload(_ payload: [String: Any]) -> Int64? {
         if let id = payload["task_id"] as? Int64 { return id }
         if let id = payload["task_id"] as? Int { return Int64(id) }
@@ -570,22 +452,6 @@ actor SessionManager {
         if let id = payload[key] as? Int { return Int64(id) }
         if let id = payload[key] as? Double { return Int64(id) }
         return nil
-    }
-
-    private func memoryToDict(_ memory: MemoryRecord, tags: [String]) -> [String: Any] {
-        return [
-            "id": Int(memory.id ?? 0),
-            "content": memory.content,
-            "tags": tags,
-            "created_at": memory.createdAt,
-            "updated_at": memory.updatedAt
-        ]
-    }
-
-    private func memoryToJSON(_ memory: MemoryRecord, tags: [String]) throws -> String {
-        let dict = memoryToDict(memory, tags: tags)
-        let data = try JSONSerialization.data(withJSONObject: dict)
-        return String(data: data, encoding: .utf8) ?? "{}"
     }
 
     private func triggerToDict(_ trigger: TriggerRecord) -> [String: Any] {
