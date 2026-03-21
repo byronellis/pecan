@@ -147,9 +147,13 @@ actor ContainerSpawner {
                     logger.debug("Mount: \(mount.source) -> \(mount.destination) (\(mount.readOnly ? "ro" : "rw"))")
                 }
 
-                config.process.arguments = ["/opt/pecan/pecan-agent", sessionID, "/tmp/grpc.sock"]
-                config.process.workingDirectory = "/home/\(agentName)"
-                config.process.environmentVariables.append("HOME=/home/\(agentName)")
+                // Patch /etc/passwd so getpwuid(0) returns the agent's home dir,
+                // create the home directory, then exec the agent.
+                let home = "/home/\(agentName)"
+                let initCmd = "sed -i 's|^root:.*|root:x:0:0:root:\(home):/bin/ash|' /etc/passwd && mkdir -p \(home) && cd \(home) && exec /opt/pecan/pecan-agent '\(sessionID)' /tmp/grpc.sock"
+                config.process.arguments = ["/bin/sh", "-c", initCmd]
+                config.process.workingDirectory = "/"
+                config.process.environmentVariables.append("HOME=\(home)")
                 config.process.environmentVariables.append("USER=\(agentName)")
 
                 logger.debug("Container config for \(sessionID): cpus=\(config.cpus), memory=\(config.memoryInBytes), args=\(config.process.arguments)")
