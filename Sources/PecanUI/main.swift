@@ -1381,6 +1381,12 @@ func main() async throws {
                                     Share a host directory with the agent
                   \(ansiCyan)/unshare\(ansiReset) \(ansiDim)<path>\(ansiReset)  Remove a shared directory
                   \(ansiCyan)/changeset\(ansiReset)        Show agent's current overlay diff (/cs)
+                  \(ansiCyan)/changeset:promote\(ansiReset) Apply changes to project directory
+                  \(ansiCyan)/changeset:discard\(ansiReset) Wipe all changes from overlay
+                  \(ansiCyan)/changeset:submit\(ansiReset) \(ansiDim)[note]\(ansiReset)  Submit to merge queue
+                  \(ansiCyan)/mergequeue\(ansiReset)       List merge queue (/mq)
+                  \(ansiCyan)/mq:approve\(ansiReset) \(ansiDim)<id>\(ansiReset)  Approve and promote changeset
+                  \(ansiCyan)/mq:reject\(ansiReset) \(ansiDim)<id>\(ansiReset)   Reject changeset
                   \(ansiCyan)/quit\(ansiReset)             Exit Pecan
 
                 \(ansiBold)Tasks\(ansiReset) \(ansiDim)(/t = /task, /ts = /tasks)\(ansiReset)

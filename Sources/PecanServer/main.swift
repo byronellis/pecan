@@ -888,7 +888,7 @@ extension ClientServiceProvider {
         guard firstWord.hasPrefix("/") else { return false }
         let commandPart = String(firstWord.dropFirst())
         let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
-        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs"]
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq"]
         return knownBases.contains(base)
     }
 
@@ -1300,6 +1300,8 @@ extension ClientServiceProvider {
             try await handleTaskCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
         case "changeset", "cs":
             try await handleChangesetCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
+        case "mergequeue", "mq":
+            try await handleMergeQueueCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
         default:
             try await sendOutput("Unknown command '/\(cmd.base)'.")
         }
@@ -1381,12 +1383,171 @@ extension ClientServiceProvider {
             let status = (try? String(contentsOfFile: statusPath, encoding: .utf8)) ?? "No status available."
             try await sendOutput(status)
 
+        case "promote":
+            guard let dirs = await FSServerManager.shared.overlayDirs(sessionID: sessionID) else {
+                try await sendOutput("No overlay filesystem for this session.")
+                return
+            }
+            let promoted = try promoteOverlay(upperDir: dirs.upper, lowerDir: dirs.lower)
+            if promoted == 0 {
+                try await sendOutput("Nothing to promote — overlay is clean.")
+            } else {
+                try await FSServerManager.shared.discardOverlay(sessionID: sessionID)
+                try await sendOutput("Promoted \(promoted) change(s) to project directory.")
+            }
+
+        case "discard":
+            guard await FSServerManager.shared.overlayDirs(sessionID: sessionID) != nil else {
+                try await sendOutput("No overlay filesystem for this session.")
+                return
+            }
+            let changesPath = "\(pecanDir)/changes"
+            let changes = (try? String(contentsOfFile: changesPath, encoding: .utf8)) ?? ""
+            let count = changes.isEmpty ? 0 : changes.components(separatedBy: "\n").filter { !$0.isEmpty }.count
+            try await FSServerManager.shared.discardOverlay(sessionID: sessionID)
+            try await sendOutput("Discarded \(count) change(s). Overlay is now clean.")
+
+        case "submit":
+            guard await FSServerManager.shared.overlayDirs(sessionID: sessionID) != nil else {
+                try await sendOutput("No overlay filesystem for this session.")
+                return
+            }
+            let changesPath = "\(pecanDir)/changes"
+            let changes = (try? String(contentsOfFile: changesPath, encoding: .utf8)) ?? ""
+            let count = changes.isEmpty ? 0 : changes.components(separatedBy: "\n").filter { !$0.isEmpty }.count
+            guard count > 0 else {
+                try await sendOutput("Nothing to submit — overlay is clean.")
+                return
+            }
+            let note = cmd.args.isEmpty ? "" : cmd.args
+            let store = await SessionManager.shared.getStore(sessionID: sessionID)
+            let agentName = (try? store?.name) ?? sessionID
+            let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID)
+            let projectName = projectStore?.name ?? ""
+            let entry = try await MergeQueueStore.shared.submit(
+                sessionID: sessionID, agentName: agentName,
+                projectName: projectName, note: note)
+            try await sendOutput("Submitted changeset #\(entry.id) (\(count) change(s)) to merge queue.")
+
         default:
             try await sendOutput("""
                 Usage:
-                  /changeset       Show changes list and unified diff
-                  /changeset:diff  Same as above
-                  /changeset:status JSON summary of changes
+                  /changeset            Show changes list and unified diff
+                  /changeset:diff       Same as above
+                  /changeset:status     JSON summary of changes
+                  /changeset:promote    Apply changes to project directory directly
+                  /changeset:discard    Wipe all changes from overlay
+                  /changeset:submit [note]  Submit to merge queue for review
+                """)
+        }
+    }
+
+    /// Copy upper layer files to lower layer (promote). Returns count of promoted items.
+    private static func promoteOverlay(upperDir: String, lowerDir: String) throws -> Int {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(atPath: upperDir) else { return 0 }
+        var count = 0
+        while let rel = enumerator.nextObject() as? String {
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: "\(upperDir)/\(rel)", isDirectory: &isDir)
+            if isDir.boolValue { continue }
+
+            let fileName = (rel as NSString).lastPathComponent
+            if fileName.hasPrefix(".wh.") {
+                // Whiteout — delete corresponding lower file
+                let dir = (rel as NSString).deletingLastPathComponent
+                let target = String(fileName.dropFirst(4))
+                let lowerTarget = dir.isEmpty ? "\(lowerDir)/\(target)" : "\(lowerDir)/\(dir)/\(target)"
+                if fm.fileExists(atPath: lowerTarget) {
+                    try fm.removeItem(atPath: lowerTarget)
+                    count += 1
+                }
+            } else {
+                // Regular file — copy to lower
+                let dstPath = "\(lowerDir)/\(rel)"
+                let dstDir = (dstPath as NSString).deletingLastPathComponent
+                try fm.createDirectory(atPath: dstDir, withIntermediateDirectories: true)
+                if fm.fileExists(atPath: dstPath) { try fm.removeItem(atPath: dstPath) }
+                try fm.copyItem(atPath: "\(upperDir)/\(rel)", toPath: dstPath)
+                count += 1
+            }
+        }
+        return count
+    }
+
+    static func handleMergeQueueCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
+        switch cmd.subcmd {
+        case nil, "list":
+            let statusFilter = cmd.args.isEmpty ? nil : cmd.args
+            let entries = try await MergeQueueStore.shared.list(status: statusFilter)
+            if entries.isEmpty {
+                try await sendOutput("Merge queue is empty\(statusFilter.map { " (status: \($0))" } ?? "").")
+                return
+            }
+            var out = "\u{1b}[1mMerge Queue\u{1b}[0m\r\n\r\n"
+            for e in entries {
+                let statusColor: String
+                switch e.status {
+                case "pending":  statusColor = "\u{1b}[33m"
+                case "approved": statusColor = "\u{1b}[32m"
+                case "rejected": statusColor = "\u{1b}[31m"
+                default:         statusColor = "\u{1b}[0m"
+                }
+                let project = e.projectName.isEmpty ? "" : " [\(e.projectName)]"
+                let note = e.note.isEmpty ? "" : " — \(e.note)"
+                out += "  \u{1b}[1m#\(e.id)\u{1b}[0m \(statusColor)\(e.status)\u{1b}[0m  \(e.agentName)\(project)\(note)\r\n"
+                out += "       submitted \(e.submittedAt)\r\n"
+            }
+            out += "\r\nUse /mq:approve <id> or /mq:reject <id>"
+            try await sendOutput(out)
+
+        case "approve":
+            guard let id = Int64(cmd.args.trimmingCharacters(in: .whitespaces)) else {
+                try await sendOutput("Usage: /mq:approve <id>")
+                return
+            }
+            guard let entry = try await MergeQueueStore.shared.get(id: id) else {
+                try await sendOutput("No merge queue entry #\(id).")
+                return
+            }
+            guard entry.status == "pending" else {
+                try await sendOutput("Entry #\(id) is already \(entry.status).")
+                return
+            }
+            // Promote the overlay
+            guard let dirs = await FSServerManager.shared.overlayDirs(sessionID: entry.sessionID) else {
+                try await sendOutput("Session \(entry.sessionID) has no active overlay — cannot promote.")
+                return
+            }
+            let promoted = try promoteOverlay(upperDir: dirs.upper, lowerDir: dirs.lower)
+            try await FSServerManager.shared.discardOverlay(sessionID: entry.sessionID)
+            try await MergeQueueStore.shared.resolve(id: id, status: "approved")
+            try await sendOutput("Approved #\(id): promoted \(promoted) change(s) to project directory.")
+
+        case "reject":
+            guard let id = Int64(cmd.args.trimmingCharacters(in: .whitespaces)) else {
+                try await sendOutput("Usage: /mq:reject <id>")
+                return
+            }
+            guard let entry = try await MergeQueueStore.shared.get(id: id) else {
+                try await sendOutput("No merge queue entry #\(id).")
+                return
+            }
+            guard entry.status == "pending" else {
+                try await sendOutput("Entry #\(id) is already \(entry.status).")
+                return
+            }
+            try await MergeQueueStore.shared.resolve(id: id, status: "rejected")
+            try await sendOutput("Rejected #\(id). The agent's overlay is unchanged.")
+
+        default:
+            try await sendOutput("""
+                Usage:
+                  /mergequeue           List all queue entries
+                  /mq                   Same
+                  /mq:list [status]     List filtered by status (pending/approved/rejected)
+                  /mq:approve <id>      Approve and promote changeset to project
+                  /mq:reject <id>       Reject changeset (overlay unchanged)
                 """)
         }
     }

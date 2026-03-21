@@ -10,9 +10,16 @@ public actor FSServerManager {
         let mountPath: String
     }
 
+    private struct OverlayEntry {
+        let process: Process
+        let mountPath: String
+        let lowerDir: String
+        let upperDir: String
+    }
+
     private var mounts: [String: MountEntry] = [:]
     private var skillsMount: MountEntry?
-    private var overlayMounts: [String: MountEntry] = [:]
+    private var overlayMounts: [String: OverlayEntry] = [:]
 
     private func fsBinaryPath() -> String? {
         let currentPath = FileManager.default.currentDirectoryPath
@@ -315,7 +322,7 @@ public actor FSServerManager {
 
         try proc.run()
         logger.info("Launched pecan-fs-server (overlay) pid \(proc.processIdentifier) for \(sessionID) at \(mountPath)")
-        overlayMounts[sessionID] = MountEntry(process: proc, mountPath: mountPath)
+        overlayMounts[sessionID] = OverlayEntry(process: proc, mountPath: mountPath, lowerDir: lowerDir, upperDir: upperDir)
 
         try await waitForMount(mountPath: mountPath)
         return mountPath
@@ -333,5 +340,22 @@ public actor FSServerManager {
             entry.process.terminate()
             entry.process.waitUntilExit()
         }
+    }
+
+    /// Returns (lowerDir, upperDir) for the session's overlay, or nil if not mounted.
+    public func overlayDirs(sessionID: String) -> (lower: String, upper: String)? {
+        guard let entry = overlayMounts[sessionID] else { return nil }
+        return (entry.lowerDir, entry.upperDir)
+    }
+
+    /// Wipes the upper layer for a session (discard). The overlay FUSE keeps running.
+    public func discardOverlay(sessionID: String) throws {
+        guard let entry = overlayMounts[sessionID] else { return }
+        let fm = FileManager.default
+        let items = try fm.contentsOfDirectory(atPath: entry.upperDir)
+        for item in items {
+            try fm.removeItem(atPath: "\(entry.upperDir)/\(item)")
+        }
+        logger.info("Discarded overlay upper layer for session \(sessionID)")
     }
 }
