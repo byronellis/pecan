@@ -1793,11 +1793,17 @@ func main() async throws {
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
     let providers = [ClientServiceProvider(), AgentServiceProvider(config: config)] as [CallHandlerProvider]
 
-    // TCP server for UI clients
+    // TCP server for UI clients — bind port 0 so the OS picks a free port
     let tcpServer = try await Server.insecure(group: group)
         .withServiceProviders(providers)
-        .bind(host: "0.0.0.0", port: 3000)
+        .bind(host: "127.0.0.1", port: 0)
         .get()
+
+    let boundPort = tcpServer.channel.localAddress?.port ?? 0
+    guard boundPort > 0 else {
+        logger.critical("Failed to determine bound port")
+        exit(1)
+    }
 
     // Unix socket server for containerized agents (relayed via vsock)
     let runDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".run")
@@ -1811,7 +1817,15 @@ func main() async throws {
         .bind(unixDomainSocketPath: socketPath)
         .get()
 
-    logger.info("Pecan Server started on port \(tcpServer.channel.localAddress?.port ?? 3000) and Unix socket \(socketPath) with default model: \(config.defaultModel ?? "unknown")")
+    // Write server status file so clients can discover the port and PID
+    let status = ServerStatus(
+        pid: ProcessInfo.processInfo.processIdentifier,
+        port: boundPort,
+        grpcSocketPath: socketPath
+    )
+    try status.write()
+
+    logger.info("Pecan Server started on port \(boundPort) and Unix socket \(socketPath) with default model: \(config.defaultModel ?? "unknown")")
 
     // Background trigger timer: check for due triggers every 10 seconds
     Task {
@@ -1827,6 +1841,7 @@ func main() async throws {
     // Handle SIGINT/SIGTERM for clean shutdown
     for sig in [SIGINT, SIGTERM] {
         signal(sig) { _ in
+            ServerStatus.remove()
             Task {
                 await SpawnerFactory.shared.shutdownLauncher()
             }

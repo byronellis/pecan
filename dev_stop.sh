@@ -1,15 +1,23 @@
 #!/bin/bash
-if [ -f .run/server_loop.pid ]; then
-    kill $(cat .run/server_loop.pid) 2>/dev/null
-    rm .run/server_loop.pid
-fi
-if [ -f .run/server.pid ]; then
-    kill $(cat .run/server.pid) 2>/dev/null
-    rm .run/server.pid
+
+# Stop the server using the PID from the status file if available
+if [ -f .run/server.json ]; then
+    SERVER_PID=$(python3 -c "import json,sys; print(json.load(open('.run/server.json'))['pid'])" 2>/dev/null)
+    if [ -n "$SERVER_PID" ]; then
+        kill "$SERVER_PID" 2>/dev/null && echo "Stopped pecan-server (pid $SERVER_PID)"
+    fi
+    rm -f .run/server.json
+else
+    # Fallback: kill by name
+    pkill -f '.build/debug/pecan-server' 2>/dev/null
+    pkill -f '.build/release/pecan-server' 2>/dev/null
 fi
 
 # Kill any dangling pecan-agent or pecan-vm-launcher processes
 pkill -f pecan-agent 2>/dev/null
 pkill -f pecan-vm-launcher 2>/dev/null
+
+# Clean up sockets
+rm -f .run/launcher.sock .run/grpc.sock
 
 echo "Server, launcher, and agents stopped."

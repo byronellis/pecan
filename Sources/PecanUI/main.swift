@@ -490,7 +490,7 @@ actor TerminalManager {
         return breadcrumb + String(repeating: " ", count: padding) + right
     }
 
-    /// Render the 3-line chrome: separator + prompt + status bar
+    /// Render the chrome: separator + prompt (may wrap) + status bar
     func drawChrome() {
         let width = terminalWidth()
 
@@ -498,19 +498,36 @@ actor TerminalManager {
         let separator = "\(ansiDim)\(String(repeating: "─", count: width))\(ansiReset)"
         print(separator + "\r", terminator: "\n")
 
-        // Line 2: prompt with input buffer
+        // Line 2+: prompt with input buffer — may wrap across multiple visual rows
         print("\(ansiCyan)\(promptChar)\(ansiReset) \(currentInputBuffer)\r", terminator: "\n")
 
-        // Line 3: status bar
+        // Last line: status bar
         print(buildStatusBar(), terminator: "")
 
-        // Move cursor back up to prompt line and position it
-        let cursorCol = 2 + cursorPosition // "❯ " is 2 chars, then cursorPosition into buffer
-        print("\u{1B}[1A\r\u{1B}[\(cursorCol)C", terminator: "")
+        // Compute how many visual rows the prompt occupies.
+        // Visible prompt width = 2 ("❯ ") + input buffer length.
+        let promptVisibleWidth = 2 + currentInputBuffer.count
+        let promptLines = max(1, (promptVisibleWidth + width - 1) / width)
+
+        // Find which visual row and column the cursor is on within the prompt.
+        let charOffset = 2 + cursorPosition
+        let cursorRow = charOffset / width   // 0-indexed row within prompt area
+        let cursorCol = charOffset % width   // 0-indexed column
+
+        // Move up from status bar to the cursor's row, then position column.
+        let linesUp = promptLines - cursorRow  // always >= 1
+        print("\r\u{1B}[\(linesUp)A", terminator: "")
+        if cursorCol > 0 {
+            print("\u{1B}[\(cursorCol)C", terminator: "")
+        }
         fflush(stdout)
 
         chromeVisible = true
-        cursorChromeLine = 2
+        // cursorChromeLine encodes "how many rows above the separator the cursor is + 1"
+        // so that clearChrome's (cursorChromeLine - 1) correctly moves back to the separator.
+        // sep=row1, prompt rows=2..(promptLines+1), status=promptLines+2
+        // cursor is at: 1 (sep) + cursorRow + 1 (1-indexed) = cursorRow + 2
+        cursorChromeLine = cursorRow + 2
     }
 
     /// Clear the chrome from the terminal
@@ -1201,11 +1218,26 @@ func main() async throws {
         // Suppress warning if not setup yet
     }
     
+    // Discover server port from status file
+    let serverPort: Int
+    do {
+        let status = try ServerStatus.read()
+        guard status.isAlive else {
+            print("Error: server status file found but process \(status.pid) is not running. Start the server first.\r", terminator: "\n")
+            exit(1)
+        }
+        serverPort = status.port
+    } catch {
+        print("Error: could not read server status file (.run/server.json): \(error)\r", terminator: "\n")
+        print("Make sure the server is running (./dev_start.sh).\r", terminator: "\n")
+        exit(1)
+    }
+
     // Setup gRPC Client
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 
     let channel = try GRPCChannelPool.with(
-        target: .host("127.0.0.1", port: 3000),
+        target: .host("127.0.0.1", port: serverPort),
         transportSecurity: .plaintext,
         eventLoopGroup: group
     ) { config in
@@ -1224,15 +1256,15 @@ func main() async throws {
     }
 
     let client = Pecan_ClientServiceAsyncClient(channel: channel)
-    
+
     // Open Bidirectional Stream
     let call = client.makeStreamEventsCall()
-    
+
     // UI Setup
     clearScreen()
     moveTo(1, 1)
     print("🥜 Pecan Interactive UI".bold + "\r", terminator: "\n")
-    print("Connecting to server at 127.0.0.1:3000...\r\n", terminator: "\n")
+    print("Connecting to server at 127.0.0.1:\(serverPort)...\r\n", terminator: "\n")
     
     let sessionState = SessionState()
 
