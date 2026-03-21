@@ -3,6 +3,14 @@ import Lua
 
 // MARK: - JSON Argument Parsing Helpers
 
+/// Expand ~ using the HOME environment variable rather than getpwuid(),
+/// which on Linux ignores HOME and resolves uid 0 to /root.
+private func resolvePath(_ path: String) -> String {
+    guard path == "~" || path.hasPrefix("~/") else { return path }
+    let home = ProcessInfo.processInfo.environment["HOME"] ?? "~"
+    return path == "~" ? home : home + path.dropFirst(1)
+}
+
 private func parseArguments(_ json: String) throws -> [String: Any] {
     guard let data = json.data(using: .utf8),
           let dict = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
@@ -48,7 +56,7 @@ public struct ReadFileTool: PecanTool, Sendable {
             throw ToolError.invalidArguments("Missing required parameter: path")
         }
 
-        let resolvedPath = (path as NSString).expandingTildeInPath
+        let resolvedPath = resolvePath(path)
         guard FileManager.default.fileExists(atPath: resolvedPath) else {
             throw ToolError.fileNotFound("File not found: \(path)")
         }
@@ -108,7 +116,7 @@ public struct WriteFileTool: PecanTool, Sendable {
             throw ToolError.invalidArguments("Missing required parameter: content")
         }
 
-        let resolvedPath = (path as NSString).expandingTildeInPath
+        let resolvedPath = resolvePath(path)
         let dir = (resolvedPath as NSString).deletingLastPathComponent
         try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
 
@@ -148,7 +156,7 @@ public struct EditFileTool: PecanTool, Sendable {
             throw ToolError.invalidArguments("Missing required parameter: new_string")
         }
 
-        let resolvedPath = (path as NSString).expandingTildeInPath
+        let resolvedPath = resolvePath(path)
         guard FileManager.default.fileExists(atPath: resolvedPath) else {
             throw ToolError.fileNotFound("File not found: \(path)")
         }
