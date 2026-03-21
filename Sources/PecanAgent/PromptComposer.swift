@@ -6,7 +6,7 @@ public actor PromptComposer {
     public static let shared = PromptComposer()
 
     private var fragments: [String: any PromptFragment] = [:]
-    private var activeToolTags: Set<String> = ["core", "tasks", "web", "triggers", "meta", "skills"]
+    private var activeToolTags: Set<String> = ["core", "tasks", "web", "triggers", "skills"]
     private var focusedTask: PromptContext.TaskInfo? = nil
     private var projectInfo: PromptContext.ProjectInfo? = nil
     private var teamInfo: PromptContext.TeamInfo? = nil

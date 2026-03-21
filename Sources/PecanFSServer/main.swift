@@ -6,7 +6,10 @@ import Darwin
 #endif
 
 // MARK: - Global filesystem instance
-nonisolated(unsafe) var _fs: MemoryFilesystem?
+nonisolated(unsafe) var _fs: (any PecanFuseFS)?
+
+// MARK: - MemoryFilesystem protocol conformance
+extension MemoryFilesystem: PecanFuseFS {}
 
 // MARK: - FUSE callbacks
 
@@ -67,20 +70,32 @@ func argValue(_ flag: String) -> String? {
     return args[idx + 1]
 }
 
+let mode = argValue("--mode") ?? "memory"
+
 guard args.count >= 2, !args[1].hasPrefix("--") else {
-    fputs("Usage: pecan-fs-server <mountpoint> --agent-db <path> [--project-db <path>] [--team-db <path>]\n", stderr)
-    exit(1)
-}
-guard let agentDBPath = argValue("--agent-db") else {
-    fputs("Error: --agent-db <path> is required\n", stderr)
+    fputs("Usage: pecan-fs-server <mountpoint> [--mode memory|skills] [--agent-db <path>] [--project-db <path>] [--team-db <path>] [--skills-dir <path>]\n", stderr)
     exit(1)
 }
 
-_fs = MemoryFilesystem(
-    agentDBPath: agentDBPath,
-    projectDBPath: argValue("--project-db"),
-    teamDBPath: argValue("--team-db")
-)
+switch mode {
+case "skills":
+    guard let skillsDir = argValue("--skills-dir") else {
+        fputs("Error: --skills-dir <path> is required for --mode skills\n", stderr)
+        exit(1)
+    }
+    _fs = SkillsFilesystem(skillsDir: skillsDir)
+
+default: // "memory"
+    guard let agentDBPath = argValue("--agent-db") else {
+        fputs("Error: --agent-db <path> is required for --mode memory\n", stderr)
+        exit(1)
+    }
+    _fs = MemoryFilesystem(
+        agentDBPath: agentDBPath,
+        projectDBPath: argValue("--project-db"),
+        teamDBPath: argValue("--team-db")
+    )
+}
 
 pecan_cb_getattr  = cb_getattr
 pecan_cb_readdir  = cb_readdir
@@ -94,7 +109,7 @@ pecan_cb_release  = cb_release
 // mkdir/rmdir intentionally not wired — directories are virtual
 
 // Build FUSE argc/argv: strip our flags, keep mountpoint + any -f/-d
-let ourFlags: Set<String> = ["--agent-db", "--project-db", "--team-db"]
+let ourFlags: Set<String> = ["--agent-db", "--project-db", "--team-db", "--mode", "--skills-dir"]
 var fuseArgs: [String] = [args[0]]
 var skip = false
 for arg in args.dropFirst() {

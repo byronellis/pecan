@@ -714,7 +714,7 @@ public struct WebSearchTool: PecanTool, Sendable {
 public struct HttpRequestTool: PecanTool, Sendable {
     public let name = "http_request"
     public let description = "Make an HTTP request (POST, PUT, PATCH, DELETE). Requires user approval before execution."
-    public let tags: Set<String> = ["web"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -996,7 +996,7 @@ public struct ActivateSkillTool: PecanTool, Sendable {
 
 public struct CreateLuaToolTool: PecanTool, Sendable {
     public let name = "create_lua_tool"
-    public let tags: Set<String> = ["meta"]
+    public let tags: Set<String> = ["invoke_only"]
     public let description = """
         Dynamically create and register a new tool by providing a Lua script and JSON schema. \
         The new tool becomes available immediately for subsequent tool calls. \

@@ -594,6 +594,9 @@ actor SessionManager {
                teamDBPath: getTeamStore(sessionID: sessionID)?.dbPath) {
             shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
         }
+        if let skillsMount = await FSServerManager.shared.skillsMountPath() {
+            shareMounts.append(MountSpec(source: skillsMount, destination: "/skills", readOnly: true))
+        }
 
         // Clear stale agent stream so the new agent can register
         agentStreams.removeValue(forKey: sessionID)
@@ -736,6 +739,9 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                         projectDBPath: await SessionManager.shared.getProjectStore(sessionID: sessionID)?.dbPath,
                         teamDBPath: await SessionManager.shared.getTeamStore(sessionID: sessionID)?.dbPath) {
                         shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
+                    }
+                    if let skillsMount = await FSServerManager.shared.skillsMountPath() {
+                        shareMounts.append(MountSpec(source: skillsMount, destination: "/skills", readOnly: true))
                     }
 
                     // Spawn the agent using the Pluggable VM architecture
@@ -1711,6 +1717,14 @@ func main() async throws {
     try status.write()
 
     logger.info("Pecan Server started on port \(boundPort) and Unix socket \(socketPath) with default model: \(config.defaultModel ?? "unknown")")
+
+    // Mount global skills FUSE filesystem
+    let homeDir = FileManager.default.homeDirectoryForCurrentUser
+    let skillsDir = homeDir.appendingPathComponent(".pecan/skills").path
+    try? FileManager.default.createDirectory(atPath: skillsDir, withIntermediateDirectories: true)
+    if let skillsMount = try? await FSServerManager.shared.mountSkills(skillsDir: skillsDir) {
+        logger.info("Skills filesystem mounted at \(skillsMount)")
+    }
 
     // Background trigger timer: check for due triggers every 10 seconds
     Task {

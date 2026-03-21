@@ -67,6 +67,25 @@ func sendTypedProgress(
 
 func main() async throws {
     let args = CommandLine.arguments
+
+    // Invoke subcommand: pecan-agent invoke <tool_name> [<json_args>]
+    if args.count >= 3 && args[1] == "invoke" {
+        let toolName = args[2]
+        let argsJSON = args.count >= 4 ? args[3] : "{}"
+        await ToolManager.shared.registerBuiltinTools()
+        await ToolManager.shared.loadTools()
+        await SkillManager.shared.discoverSkills()
+        await SkillManager.shared.registerLuaTools()
+        do {
+            let result = try await ToolManager.shared.executeTool(name: toolName, argumentsJSON: argsJSON)
+            print(result)
+        } catch {
+            fputs("Error: \(error.localizedDescription)\n", stderr)
+            exit(1)
+        }
+        exit(0)
+    }
+
     guard args.count > 1 else {
         logger.error("Usage: pecan-agent <session_id> [host_address]")
         exit(1)
