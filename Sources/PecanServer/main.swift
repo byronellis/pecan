@@ -578,7 +578,13 @@ actor SessionManager {
 
         if let projectStore = getProjectStore(sessionID: sessionID) {
             if let dir = projectStore.directory {
-                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+                if let overlayMount = try? await FSServerManager.shared.mountOverlay(
+                    sessionID: sessionID,
+                    lowerDir: dir) {
+                    shareMounts.append(MountSpec(source: overlayMount, destination: "/project", readOnly: false))
+                } else {
+                    shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+                }
             }
         }
         if let teamStore = getTeamStore(sessionID: sessionID) {
@@ -696,9 +702,15 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             let projectStore = try ProjectStore(name: projectName)
                             await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: projectName, store: projectStore)
 
-                            // Add project directory mount
+                            // Add project directory mount (via COW overlay)
                             if let dir = projectStore.directory {
-                                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+                                if let overlayMount = try? await FSServerManager.shared.mountOverlay(
+                                    sessionID: sessionID,
+                                    lowerDir: dir) {
+                                    shareMounts.append(MountSpec(source: overlayMount, destination: "/project", readOnly: false))
+                                } else {
+                                    shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+                                }
                             }
 
                             // If no team specified, use default team

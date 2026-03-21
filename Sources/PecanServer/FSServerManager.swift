@@ -12,6 +12,7 @@ public actor FSServerManager {
 
     private var mounts: [String: MountEntry] = [:]
     private var skillsMount: MountEntry?
+    private var overlayMounts: [String: MountEntry] = [:]
 
     private func fsBinaryPath() -> String? {
         let currentPath = FileManager.default.currentDirectoryPath
@@ -262,6 +263,67 @@ public actor FSServerManager {
         guard let entry = skillsMount else { return }
         skillsMount = nil
         logger.info("Unmounting skills FUSE")
+        let umount = Process()
+        umount.executableURL = URL(fileURLWithPath: "/sbin/umount")
+        umount.arguments = [entry.mountPath]
+        try? umount.run()
+        umount.waitUntilExit()
+        if entry.process.isRunning {
+            entry.process.terminate()
+            entry.process.waitUntilExit()
+        }
+    }
+
+    /// Mount a per-session COW overlay FUSE filesystem.
+    /// The lower layer is the project directory (read-only source).
+    /// The upper layer is a per-session writable scratch at .run/overlay/<sessionID>/.
+    /// Returns the host mount path for inclusion in container share mounts.
+    public func mountOverlay(sessionID: String, lowerDir: String) async throws -> String {
+        if let existing = overlayMounts[sessionID] { return existing.mountPath }
+
+        guard let binaryPath = fsBinaryPath() else { throw FSManagerError.binaryNotFound }
+
+        let currentPath = FileManager.default.currentDirectoryPath
+        let upperDir = "\(currentPath)/.run/overlay/\(sessionID)"
+        let mountPath = "\(currentPath)/.run/fuse/overlay/\(sessionID)"
+        try FileManager.default.createDirectory(atPath: upperDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(atPath: mountPath, withIntermediateDirectories: true)
+
+        let procArgs = [
+            mountPath,
+            "--mode", "overlay",
+            "--lower-dir", lowerDir,
+            "--upper-dir", upperDir,
+            "--session-id", sessionID
+        ]
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binaryPath)
+        proc.arguments = procArgs
+        proc.currentDirectoryURL = URL(fileURLWithPath: currentPath)
+        proc.standardOutput = FileHandle.standardOutput
+        proc.standardError = FileHandle.standardError
+
+        var env = ProcessInfo.processInfo.environment
+        let existingLib = env["DYLD_LIBRARY_PATH"] ?? ""
+        env["DYLD_LIBRARY_PATH"] = existingLib.isEmpty ? "/usr/local/lib" : "/usr/local/lib:\(existingLib)"
+        proc.environment = env
+
+        proc.terminationHandler = { p in
+            logger.warning("pecan-fs-server (overlay/\(sessionID)) exited (status \(p.terminationStatus))")
+        }
+
+        try proc.run()
+        logger.info("Launched pecan-fs-server (overlay) pid \(proc.processIdentifier) for \(sessionID) at \(mountPath)")
+        overlayMounts[sessionID] = MountEntry(process: proc, mountPath: mountPath)
+
+        try await waitForMount(mountPath: mountPath)
+        return mountPath
+    }
+
+    public func unmountOverlay(sessionID: String) {
+        guard let entry = overlayMounts.removeValue(forKey: sessionID) else { return }
+        logger.info("Unmounting overlay for session \(sessionID)")
         let umount = Process()
         umount.executableURL = URL(fileURLWithPath: "/sbin/umount")
         umount.arguments = [entry.mountPath]

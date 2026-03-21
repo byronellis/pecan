@@ -61,6 +61,16 @@ func cb_release(_ path: UnsafePointer<CChar>?) -> Int32 {
     return fs.release(String(cString: path))
 }
 
+func cb_mkdir(_ path: UnsafePointer<CChar>?, _ mode: mode_t) -> Int32 {
+    guard let fs = _fs, let path else { return -ENOENT }
+    return fs.mkdir(String(cString: path), mode: mode)
+}
+
+func cb_rmdir(_ path: UnsafePointer<CChar>?) -> Int32 {
+    guard let fs = _fs, let path else { return -ENOENT }
+    return fs.rmdir(String(cString: path))
+}
+
 // MARK: - Entry point
 
 let args = CommandLine.arguments
@@ -85,6 +95,15 @@ case "skills":
     }
     _fs = SkillsFilesystem(skillsDir: skillsDir)
 
+case "overlay":
+    guard let lowerDir = argValue("--lower-dir"),
+          let upperDir = argValue("--upper-dir") else {
+        fputs("Error: overlay mode requires --lower-dir and --upper-dir\n", stderr)
+        exit(1)
+    }
+    let sid = argValue("--session-id") ?? "unknown"
+    _fs = OverlayFilesystem(lowerDir: lowerDir, upperDir: upperDir, sessionID: sid)
+
 default: // "memory"
     guard let agentDBPath = argValue("--agent-db") else {
         fputs("Error: --agent-db <path> is required for --mode memory\n", stderr)
@@ -106,10 +125,15 @@ pecan_cb_unlink   = cb_unlink
 pecan_cb_truncate = cb_truncate
 pecan_cb_rename   = cb_rename
 pecan_cb_release  = cb_release
-// mkdir/rmdir intentionally not wired — directories are virtual
+// Wire mkdir/rmdir for overlay mode; other modes leave them unwired (directories are virtual)
+if mode == "overlay" {
+    pecan_cb_mkdir = cb_mkdir
+    pecan_cb_rmdir = cb_rmdir
+}
 
 // Build FUSE argc/argv: strip our flags, keep mountpoint + any -f/-d
-let ourFlags: Set<String> = ["--agent-db", "--project-db", "--team-db", "--mode", "--skills-dir"]
+let ourFlags: Set<String> = ["--agent-db", "--project-db", "--team-db", "--mode", "--skills-dir",
+                              "--lower-dir", "--upper-dir", "--session-id"]
 var fuseArgs: [String] = [args[0]]
 var skip = false
 for arg in args.dropFirst() {

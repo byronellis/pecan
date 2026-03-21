@@ -16,6 +16,8 @@ protocol PecanFuseFS: AnyObject {
     func truncate(_ path: String, size: off_t) -> Int32
     func unlink(_ path: String) -> Int32
     func rename(from: String, to: String) -> Int32
+    func mkdir(_ path: String, mode: mode_t) -> Int32
+    func rmdir(_ path: String) -> Int32
     func release(_ path: String) -> Int32
 }
 
@@ -25,5 +27,7 @@ extension PecanFuseFS {
     func truncate(_ path: String, size: off_t) -> Int32 { -EROFS }
     func unlink(_ path: String) -> Int32 { -EROFS }
     func rename(from: String, to: String) -> Int32 { -EROFS }
+    func mkdir(_ path: String, mode: mode_t) -> Int32 { -EROFS }
+    func rmdir(_ path: String) -> Int32 { -EROFS }
     func release(_ path: String) -> Int32 { 0 }
 }
