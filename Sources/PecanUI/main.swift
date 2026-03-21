@@ -1380,6 +1380,7 @@ func main() async throws {
                   \(ansiCyan)/share\(ansiReset) \(ansiDim)[-rw] <path>[:<guest>]\(ansiReset)
                                     Share a host directory with the agent
                   \(ansiCyan)/unshare\(ansiReset) \(ansiDim)<path>\(ansiReset)  Remove a shared directory
+                  \(ansiCyan)/changeset\(ansiReset)        Show agent's current overlay diff (/cs)
                   \(ansiCyan)/quit\(ansiReset)             Exit Pecan
 
                 \(ansiBold)Tasks\(ansiReset) \(ansiDim)(/t = /task, /ts = /tasks)\(ansiReset)

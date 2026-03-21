@@ -888,7 +888,7 @@ extension ClientServiceProvider {
         guard firstWord.hasPrefix("/") else { return false }
         let commandPart = String(firstWord.dropFirst())
         let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
-        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams"]
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs"]
         return knownBases.contains(base)
     }
 
@@ -1298,8 +1298,96 @@ extension ClientServiceProvider {
             try await handleTeamCommand(sessionID: sessionID, cmd: effective, sendOutput: sendOutput)
         case "task", "tasks":
             try await handleTaskCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
+        case "changeset", "cs":
+            try await handleChangesetCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
         default:
             try await sendOutput("Unknown command '/\(cmd.base)'.")
+        }
+    }
+
+    static func handleChangesetCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
+        let currentPath = FileManager.default.currentDirectoryPath
+        let mountPath = "\(currentPath)/.run/fuse/overlay/\(sessionID)"
+
+        guard FileManager.default.fileExists(atPath: mountPath) else {
+            try await sendOutput("No overlay filesystem for this session. Is a project mounted?")
+            return
+        }
+
+        let pecanDir = "\(mountPath)/.pecan"
+
+        switch cmd.subcmd {
+        case "diff", nil:
+            // Default: show changes summary + diff
+            let changesPath = "\(pecanDir)/changes"
+            let diffPath = "\(pecanDir)/diff"
+            let statusPath = "\(pecanDir)/status"
+
+            let changes = (try? String(contentsOfFile: changesPath, encoding: .utf8)) ?? ""
+            let diff = (try? String(contentsOfFile: diffPath, encoding: .utf8)) ?? ""
+            let statusJSON = (try? String(contentsOfFile: statusPath, encoding: .utf8)) ?? "{}"
+
+            // Parse status JSON for summary line
+            let statusData = statusJSON.data(using: .utf8) ?? Data()
+            let statusDict = (try? JSONSerialization.jsonObject(with: statusData) as? [String: Any]) ?? [:]
+            let modified = statusDict["modified"] as? Int ?? 0
+            let added = statusDict["added"] as? Int ?? 0
+            let deleted = statusDict["deleted"] as? Int ?? 0
+
+            if modified + added + deleted == 0 {
+                try await sendOutput("No changes in current overlay.")
+                return
+            }
+
+            // Header
+            var out = "\u{1b}[1mChangeset\u{1b}[0m  \u{1b}[32m+\(added)\u{1b}[0m \u{1b}[33m~\(modified)\u{1b}[0m \u{1b}[31m-\(deleted)\u{1b}[0m\r\n\r\n"
+
+            // Changes list
+            if !changes.isEmpty {
+                for line in changes.components(separatedBy: "\n") where !line.isEmpty {
+                    let prefix = String(line.prefix(1))
+                    let path = String(line.dropFirst(2))
+                    switch prefix {
+                    case "A": out += "  \u{1b}[32m+ \(path)\u{1b}[0m\r\n"
+                    case "M": out += "  \u{1b}[33m~ \(path)\u{1b}[0m\r\n"
+                    case "D": out += "  \u{1b}[31m- \(path)\u{1b}[0m\r\n"
+                    default:  out += "  \(line)\r\n"
+                    }
+                }
+            }
+
+            // Diff (colored)
+            if !diff.isEmpty {
+                out += "\r\n"
+                for line in diff.components(separatedBy: "\n") {
+                    if line.hasPrefix("+++") || line.hasPrefix("---") {
+                        out += "\u{1b}[1m\(line)\u{1b}[0m\r\n"
+                    } else if line.hasPrefix("@@") {
+                        out += "\u{1b}[36m\(line)\u{1b}[0m\r\n"
+                    } else if line.hasPrefix("+") {
+                        out += "\u{1b}[32m\(line)\u{1b}[0m\r\n"
+                    } else if line.hasPrefix("-") {
+                        out += "\u{1b}[31m\(line)\u{1b}[0m\r\n"
+                    } else {
+                        out += "\(line)\r\n"
+                    }
+                }
+            }
+
+            try await sendOutput(out)
+
+        case "status":
+            let statusPath = "\(pecanDir)/status"
+            let status = (try? String(contentsOfFile: statusPath, encoding: .utf8)) ?? "No status available."
+            try await sendOutput(status)
+
+        default:
+            try await sendOutput("""
+                Usage:
+                  /changeset       Show changes list and unified diff
+                  /changeset:diff  Same as above
+                  /changeset:status JSON summary of changes
+                """)
         }
     }
 }
