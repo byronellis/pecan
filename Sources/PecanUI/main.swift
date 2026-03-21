@@ -362,7 +362,7 @@ actor TerminalManager {
             // Throbber line (placeholder)
             print("\r", terminator: "\n")
             // Status bar
-            print(buildStatusBar(), terminator: "")
+            print(buildStatusBar(width: width), terminator: "")
             chromeVisible = true
             cursorChromeLine = 3
         }
@@ -418,8 +418,7 @@ actor TerminalManager {
     /// Build the powerline status bar breadcrumb:
     /// pecan > project > team > agent > task  [N agents]
     /// Default project and team are hidden to reduce clutter.
-    private func buildStatusBar() -> String {
-        let width = terminalWidth()
+    private func buildStatusBar(width: Int) -> String {
         let activeAgent = agents.first(where: { $0.isActive })
         let activeName = activeAgent?.name ?? "no agent"
         let count = agents.count
@@ -502,7 +501,7 @@ actor TerminalManager {
         print("\(ansiCyan)\(promptChar)\(ansiReset) \(currentInputBuffer)\r", terminator: "\n")
 
         // Last line: status bar
-        print(buildStatusBar(), terminator: "")
+        print(buildStatusBar(width: width), terminator: "")
 
         // Compute how many visual rows the prompt occupies.
         // Visible prompt width = 2 ("❯ ") + input buffer length.
@@ -523,10 +522,7 @@ actor TerminalManager {
         fflush(stdout)
 
         chromeVisible = true
-        // cursorChromeLine encodes "how many rows above the separator the cursor is + 1"
-        // so that clearChrome's (cursorChromeLine - 1) correctly moves back to the separator.
-        // sep=row1, prompt rows=2..(promptLines+1), status=promptLines+2
-        // cursor is at: 1 (sep) + cursorRow + 1 (1-indexed) = cursorRow + 2
+        // 1-indexed chrome row of cursor; clearChrome uses (cursorChromeLine - 1) to move back to sep.
         cursorChromeLine = cursorRow + 2
     }
 

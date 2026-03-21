@@ -152,7 +152,7 @@ actor ContainerSpawner {
                 let home = "/home/\(agentName)"
                 let initCmd = "sed -i 's|^root:.*|root:x:0:0:root:\(home):/bin/ash|' /etc/passwd && mkdir -p \(home) && cd \(home) && exec /opt/pecan/pecan-agent '\(sessionID)' /tmp/grpc.sock"
                 config.process.arguments = ["/bin/sh", "-c", initCmd]
-                config.process.workingDirectory = "/"
+                config.process.workingDirectory = "/" // shell cds into home before exec
                 config.process.environmentVariables.append("HOME=\(home)")
                 config.process.environmentVariables.append("USER=\(agentName)")
 

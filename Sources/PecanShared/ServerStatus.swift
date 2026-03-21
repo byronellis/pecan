@@ -15,36 +15,29 @@ public struct ServerStatus: Codable {
         self.startedAt = startedAt
     }
 
-    // MARK: - File location
-
-    /// Returns the status file path for the given working directory (defaults to CWD).
-    public static func statusFilePath(in directory: String? = nil) -> String {
-        let base = directory ?? FileManager.default.currentDirectoryPath
-        return "\(base)/.run/server.json"
+    public static var statusFilePath: String {
+        "\(FileManager.default.currentDirectoryPath)/.run/server.json"
     }
 
     // MARK: - Persistence
 
-    public func write(to directory: String? = nil) throws {
-        let path = Self.statusFilePath(in: directory)
+    public func write() throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = .prettyPrinted
         let data = try encoder.encode(self)
-        try data.write(to: URL(fileURLWithPath: path), options: .atomic)
+        try data.write(to: URL(fileURLWithPath: Self.statusFilePath), options: .atomic)
     }
 
-    public static func read(from directory: String? = nil) throws -> ServerStatus {
-        let path = statusFilePath(in: directory)
-        let data = try Data(contentsOf: URL(fileURLWithPath: path))
+    public static func read() throws -> ServerStatus {
+        let data = try Data(contentsOf: URL(fileURLWithPath: statusFilePath))
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return try decoder.decode(ServerStatus.self, from: data)
     }
 
-    public static func remove(from directory: String? = nil) {
-        let path = statusFilePath(in: directory)
-        try? FileManager.default.removeItem(atPath: path)
+    public static func remove() {
+        try? FileManager.default.removeItem(atPath: statusFilePath)
     }
 
     /// Returns true if the PID in the status file belongs to a running process.

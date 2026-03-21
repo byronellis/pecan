@@ -2,7 +2,7 @@
 
 # Stop the server using the PID from the status file if available
 if [ -f .run/server.json ]; then
-    SERVER_PID=$(python3 -c "import json,sys; print(json.load(open('.run/server.json'))['pid'])" 2>/dev/null)
+    SERVER_PID=$(grep -o '"pid"[[:space:]]*:[[:space:]]*[0-9]*' .run/server.json | grep -o '[0-9]*$')
     if [ -n "$SERVER_PID" ]; then
         kill "$SERVER_PID" 2>/dev/null && echo "Stopped pecan-server (pid $SERVER_PID)"
     fi
