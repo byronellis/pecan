@@ -55,6 +55,16 @@ func cb_rename(_ from: UnsafePointer<CChar>?, _ to: UnsafePointer<CChar>?) -> In
     return fs.rename(from: String(cString: from), to: String(cString: to))
 }
 
+func cb_mkdir(_ path: UnsafePointer<CChar>?, _ mode: mode_t) -> Int32 {
+    guard let fs = _fs, let path else { return -EINVAL }
+    return fs.mkdir(String(cString: path))
+}
+
+func cb_rmdir(_ path: UnsafePointer<CChar>?) -> Int32 {
+    guard let fs = _fs, let path else { return -ENOENT }
+    return fs.rmdir(String(cString: path))
+}
+
 // MARK: - Entry point
 
 let args = CommandLine.arguments
@@ -82,6 +92,8 @@ pecan_cb_create   = cb_create
 pecan_cb_unlink   = cb_unlink
 pecan_cb_truncate = cb_truncate
 pecan_cb_rename   = cb_rename
+pecan_cb_mkdir    = cb_mkdir
+pecan_cb_rmdir    = cb_rmdir
 
 // Build argc/argv for FUSE (strip our own --persist args, keep mountpoint + any -f/-d)
 var fuseArgs: [String] = [args[0]]

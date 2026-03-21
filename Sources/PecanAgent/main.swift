@@ -26,16 +26,16 @@ actor StreamWriter {
 /// Read core memory files from /memory/core_*.md and inject as a system message.
 /// Must be called from a detached Task so it doesn't block the response loop.
 func injectCoreMemories(_ writer: StreamWriter) async {
-    let memoryDir = "/memory"
-    guard let files = try? FileManager.default.contentsOfDirectory(atPath: memoryDir) else { return }
-    let coreFiles = files.filter { $0.hasPrefix("core_") && $0.hasSuffix(".md") }.sorted()
+    let coreDir = "/memory/core"
+    guard let files = try? FileManager.default.contentsOfDirectory(atPath: coreDir) else { return }
+    let coreFiles = files.filter { $0.hasSuffix(".md") }.sorted()
     guard !coreFiles.isEmpty else { return }
 
     var section = "## Core Memories\n"
     for file in coreFiles {
-        let path = "\(memoryDir)/\(file)"
+        let path = "\(coreDir)/\(file)"
         if let content = try? String(contentsOfFile: path, encoding: .utf8), !content.isEmpty {
-            let name = String(file.dropFirst(5).dropLast(3))  // strip "core_" prefix and ".md" suffix
+            let name = String(file.dropLast(3))  // strip ".md"
             section += "\n### \(name)\n\(content)"
         }
     }

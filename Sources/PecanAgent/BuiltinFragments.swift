@@ -84,14 +84,14 @@ struct MemoryFragment: PromptFragment, Sendable {
         You have a persistent memory filesystem mounted at `/memory/`. \
         Files here are plain Markdown and survive across sessions.
 
-        **Reading memories**: Use `read_file` or `bash` (`ls /memory/`, `cat /memory/foo.md`).
+        **Reading memories**: `ls /memory/`, `cat /memory/notes.md`, etc.
         **Writing memories**: Use `write_file` or `bash` to create/update `.md` files.
-        **Core memories** (auto-injected into your context at startup): name the file `core_<name>.md`.
+        **Core memories** (auto-injected into your context at startup): place files in `/memory/core/`.
 
         Keep memory files focused and well-named. Examples:
-        - `/memory/core_preferences.md` — user preferences, always injected
-        - `/memory/core_project_context.md` — key project facts, always injected
-        - `/memory/notes.md` — scratch notes for the current session
+        - `/memory/core/preferences.md` — user preferences, always injected
+        - `/memory/core/project_context.md` — key project facts, always injected
+        - `/memory/notes.md` — scratch notes
         - `/memory/learnings.md` — things you've discovered about the codebase
         """
     }

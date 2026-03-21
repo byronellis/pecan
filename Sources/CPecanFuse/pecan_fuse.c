@@ -13,6 +13,8 @@ PecanCreateFn   pecan_cb_create   = NULL;
 PecanUnlinkFn   pecan_cb_unlink   = NULL;
 PecanTruncateFn pecan_cb_truncate = NULL;
 PecanRenameFn   pecan_cb_rename   = NULL;
+PecanMkdirFn    pecan_cb_mkdir    = NULL;
+PecanRmdirFn    pecan_cb_rmdir    = NULL;
 
 // --- FUSE operation trampolines ---
 
@@ -67,6 +69,16 @@ static int impl_rename(const char *from, const char *to) {
     return -EACCES;
 }
 
+static int impl_mkdir(const char *path, mode_t mode) {
+    if (pecan_cb_mkdir) return pecan_cb_mkdir(path, mode);
+    return -EACCES;
+}
+
+static int impl_rmdir(const char *path) {
+    if (pecan_cb_rmdir) return pecan_cb_rmdir(path);
+    return -EACCES;
+}
+
 static struct fuse_operations pecan_ops = {
     .getattr  = impl_getattr,
     .readdir  = impl_readdir,
@@ -77,6 +89,8 @@ static struct fuse_operations pecan_ops = {
     .unlink   = impl_unlink,
     .truncate = impl_truncate,
     .rename   = impl_rename,
+    .mkdir    = impl_mkdir,
+    .rmdir    = impl_rmdir,
 };
 
 int pecan_fuse_main(int argc, char **argv) {
