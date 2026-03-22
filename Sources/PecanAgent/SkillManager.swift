@@ -23,7 +23,8 @@ public actor SkillManager {
         let homeDir = fm.homeDirectoryForCurrentUser.path
 
         let searchPaths = [
-            "\(homeDir)/.pecan/skills",
+            "/skills",                        // container mount (server copies ~/.pecan/skills here)
+            "\(homeDir)/.pecan/skills",       // fallback for local process spawner
             "\(homeDir)/.agents/skills",
         ]
 

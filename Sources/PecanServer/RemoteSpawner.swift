@@ -13,26 +13,14 @@ public actor RemoteSpawner: AgentSpawner {
 
     public func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec]) async throws {
         let currentPath = FileManager.default.currentDirectoryPath
-        let homeDir = FileManager.default.homeDirectoryForCurrentUser.path
         let grpcSocketPath = "\(currentPath)/.run/grpc.sock"
 
         // Build the full mounts list
-        let fm = FileManager.default
         var mounts: [Pecan_LauncherMountSpec] = [
             .with { $0.source = workspacePath; $0.destination = "/home/\(agentName)"; $0.readOnly = false },
             .with { $0.source = "\(currentPath)/.build/aarch64-swift-linux-musl/release"; $0.destination = "/opt/pecan"; $0.readOnly = true },
-            .with { $0.source = "\(homeDir)/.pecan/tools"; $0.destination = "/home/\(agentName)/.pecan/tools"; $0.readOnly = true },
         ]
 
-        // Mount skills directories if they exist on the host
-        let skillsPath = "\(homeDir)/.pecan/skills"
-        if fm.fileExists(atPath: skillsPath) {
-            mounts.append(.with { $0.source = skillsPath; $0.destination = "/home/\(agentName)/.pecan/skills"; $0.readOnly = true })
-        }
-        let agentsSkillsPath = "\(homeDir)/.agents/skills"
-        if fm.fileExists(atPath: agentsSkillsPath) {
-            mounts.append(.with { $0.source = agentsSkillsPath; $0.destination = "/home/\(agentName)/.agents/skills"; $0.readOnly = true })
-        }
         // Convert MountSpec shares to protobuf
         for share in shares {
             mounts.append(.with { $0.source = share.source; $0.destination = share.destination; $0.readOnly = share.readOnly })

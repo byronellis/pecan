@@ -101,6 +101,7 @@ final class SessionStore: ScopedStore, Sendable {
     let sessionID: String
     let sessionDir: URL
     let workspacePath: URL
+    let memoryDir: URL
     var dbPath: String { sessionDir.appendingPathComponent("session.db").path }
     let dbQueue: DatabaseQueue
 
@@ -110,9 +111,11 @@ final class SessionStore: ScopedStore, Sendable {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         self.sessionDir = homeDir.appendingPathComponent(".pecan/sessions/\(sessionID)")
         self.workspacePath = sessionDir.appendingPathComponent("workspace")
+        self.memoryDir = sessionDir.appendingPathComponent("memory")
 
         let fm = FileManager.default
         try fm.createDirectory(at: workspacePath, withIntermediateDirectories: true)
+        try fm.createDirectory(at: memoryDir, withIntermediateDirectories: true)
 
         let dbPath = sessionDir.appendingPathComponent("session.db").path
         self.dbQueue = try DatabaseQueue(path: dbPath)
@@ -127,6 +130,7 @@ final class SessionStore: ScopedStore, Sendable {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         self.sessionDir = homeDir.appendingPathComponent(".pecan/sessions/\(sessionID)")
         self.workspacePath = sessionDir.appendingPathComponent("workspace")
+        self.memoryDir = sessionDir.appendingPathComponent("memory")
 
         let dbPath = sessionDir.appendingPathComponent("session.db").path
         guard FileManager.default.fileExists(atPath: dbPath) else {

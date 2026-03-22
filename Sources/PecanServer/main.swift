@@ -578,31 +578,25 @@ actor SessionManager {
 
         if let projectStore = getProjectStore(sessionID: sessionID) {
             if let dir = projectStore.directory {
-                if let overlayMount = try? await FSServerManager.shared.mountOverlay(
-                    sessionID: sessionID,
-                    lowerDir: dir) {
-                    shareMounts.append(MountSpec(source: overlayMount, destination: "/project", readOnly: false))
-                } else {
-                    shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
-                }
+                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
             }
         }
         if let teamStore = getTeamStore(sessionID: sessionID) {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
         }
 
-        // Mount per-session FUSE memory filesystem backed by SQLite
-        if let store = getStore(sessionID: sessionID),
-           let memMount = try? await FSServerManager.shared.mount(
-               sessionID: sessionID,
-               agentDBPath: store.dbPath,
-               projectDBPath: getProjectStore(sessionID: sessionID)?.dbPath,
-               teamDBPath: getTeamStore(sessionID: sessionID)?.dbPath) {
-            shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
+        // Mount memory directories directly
+        if let agentStore = getStore(sessionID: sessionID) {
+            shareMounts.append(MountSpec(source: agentStore.memoryDir.path, destination: "/memory", readOnly: false))
         }
-        if let skillsMount = await FSServerManager.shared.skillsMountPath() {
-            shareMounts.append(MountSpec(source: skillsMount, destination: "/skills", readOnly: true))
+        if let projectStore = getProjectStore(sessionID: sessionID) {
+            shareMounts.append(MountSpec(source: projectStore.memoryDir.path, destination: "/memory/project", readOnly: false))
         }
+        if let teamStore = getTeamStore(sessionID: sessionID) {
+            shareMounts.append(MountSpec(source: teamStore.memoryDir.path, destination: "/memory/team", readOnly: false))
+        }
+        let skillsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/skills").path
+        shareMounts.append(MountSpec(source: skillsDir, destination: "/skills", readOnly: true))
 
         // Clear stale agent stream so the new agent can register
         agentStreams.removeValue(forKey: sessionID)
@@ -702,15 +696,9 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             let projectStore = try ProjectStore(name: projectName)
                             await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: projectName, store: projectStore)
 
-                            // Add project directory mount (via COW overlay)
+                            // Mount project directory directly (Containerization cannot share FUSE-T/NFS-backed paths)
                             if let dir = projectStore.directory {
-                                if let overlayMount = try? await FSServerManager.shared.mountOverlay(
-                                    sessionID: sessionID,
-                                    lowerDir: dir) {
-                                    shareMounts.append(MountSpec(source: overlayMount, destination: "/project", readOnly: false))
-                                } else {
-                                    shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
-                                }
+                                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
                             }
 
                             // If no team specified, use default team
@@ -744,17 +732,17 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     response.sessionStarted = started
                     try await responseStream.send(response)
 
-                    // Mount per-session FUSE memory filesystem backed by SQLite
-                    if let memMount = try? await FSServerManager.shared.mount(
-                        sessionID: sessionID,
-                        agentDBPath: store.dbPath,
-                        projectDBPath: await SessionManager.shared.getProjectStore(sessionID: sessionID)?.dbPath,
-                        teamDBPath: await SessionManager.shared.getTeamStore(sessionID: sessionID)?.dbPath) {
-                        shareMounts.append(MountSpec(source: memMount, destination: "/memory", readOnly: false))
+                    // Mount memory directories (regular dirs, not FUSE — Containerization can't share NFS-backed paths)
+                    shareMounts.append(MountSpec(source: store.memoryDir.path, destination: "/memory", readOnly: false))
+                    if let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID) {
+                        shareMounts.append(MountSpec(source: projectStore.memoryDir.path, destination: "/memory/project", readOnly: false))
                     }
-                    if let skillsMount = await FSServerManager.shared.skillsMountPath() {
-                        shareMounts.append(MountSpec(source: skillsMount, destination: "/skills", readOnly: true))
+                    if let teamStore = await SessionManager.shared.getTeamStore(sessionID: sessionID) {
+                        shareMounts.append(MountSpec(source: teamStore.memoryDir.path, destination: "/memory/team", readOnly: false))
                     }
+                    // Mount skills directory directly
+                    let skillsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/skills").path
+                    shareMounts.append(MountSpec(source: skillsDir, destination: "/skills", readOnly: true))
 
                     // Spawn the agent using the Pluggable VM architecture
                     do {
@@ -952,19 +940,13 @@ extension ClientServiceProvider {
                 await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: name, store: store)
                 // Clear team association since we switched projects
                 await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
-                // Remount overlay and memory FUSE in-place — no container restart needed.
-                if let dir = store.directory {
-                    _ = try? await FSServerManager.shared.remountOverlay(sessionID: sessionID, newLowerDir: dir)
-                }
-                if let agentStore = await SessionManager.shared.getStore(sessionID: sessionID) {
-                    _ = try? await FSServerManager.shared.remountMemory(
-                        sessionID: sessionID,
-                        agentDBPath: agentStore.dbPath,
-                        projectDBPath: store.dbPath)
-                }
-                logger.info("Remounted overlay and memory for project switch to '\(name)'")
+                // No container restart needed — /project and /memory/project are bind mounts;
+                // the agent will see the new directories on next access after container restart.
+                // For now, restart the container so the new bind mounts take effect.
+                logger.info("Restarting container for project switch to '\(name)'...")
+                try await SessionManager.shared.restartContainer(sessionID: sessionID)
                 try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
-                try await sendOutput("Switched to project '\(name)'. /project now shows the new project.")
+                try await sendOutput("Switched to project '\(name)'. Agent restarted with project mounted.")
             } catch {
                 logger.error("Project switch failed at: \(error)")
                 try await sendOutput("Failed to switch project: \(error.localizedDescription)")

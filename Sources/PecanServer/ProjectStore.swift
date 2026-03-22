@@ -7,6 +7,7 @@ import GRDB
 final class ProjectStore: ScopedStore, Sendable {
     let projectName: String
     let projectDir: URL
+    let memoryDir: URL
     /// The directory this project is associated with (e.g. a git repo root)
     let directory: String?
     var dbPath: String { projectDir.appendingPathComponent("project.db").path }
@@ -16,10 +17,13 @@ final class ProjectStore: ScopedStore, Sendable {
     init(name: String, directory: String? = nil) throws {
         self.projectName = name
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        self.projectDir = homeDir.appendingPathComponent(".pecan/projects/\(name)")
+        let projectDir = homeDir.appendingPathComponent(".pecan/projects/\(name)")
+        self.projectDir = projectDir
+        self.memoryDir = projectDir.appendingPathComponent("memory")
 
         let fm = FileManager.default
         try fm.createDirectory(at: projectDir, withIntermediateDirectories: true)
+        try fm.createDirectory(at: memoryDir, withIntermediateDirectories: true)
 
         // Create teams subdirectory
         let teamsDir = projectDir.appendingPathComponent("teams")

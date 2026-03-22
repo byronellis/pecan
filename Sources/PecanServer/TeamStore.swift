@@ -8,6 +8,7 @@ final class TeamStore: ScopedStore, Sendable {
     let projectName: String
     let teamDir: URL
     let workspacePath: URL
+    let memoryDir: URL
     var dbPath: String { teamDir.appendingPathComponent("team.db").path }
     let dbQueue: DatabaseQueue
 
@@ -16,11 +17,14 @@ final class TeamStore: ScopedStore, Sendable {
         self.teamName = teamName
         self.projectName = projectName
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
-        self.teamDir = homeDir.appendingPathComponent(".pecan/projects/\(projectName)/teams/\(teamName)")
+        let teamDir = homeDir.appendingPathComponent(".pecan/projects/\(projectName)/teams/\(teamName)")
+        self.teamDir = teamDir
         self.workspacePath = teamDir.appendingPathComponent("workspace")
+        self.memoryDir = teamDir.appendingPathComponent("memory")
 
         let fm = FileManager.default
         try fm.createDirectory(at: workspacePath, withIntermediateDirectories: true)
+        try fm.createDirectory(at: memoryDir, withIntermediateDirectories: true)
 
         let dbPath = teamDir.appendingPathComponent("team.db").path
         let isNew = !fm.fileExists(atPath: dbPath)
