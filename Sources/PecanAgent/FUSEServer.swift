@@ -293,7 +293,7 @@ actor FUSEServer {
 
             case .statfs:
                 // Return a minimal statfs response (all zeros is acceptable)
-                var statfsOut = Data(count: 80) // fuse_statfs_out size
+                let statfsOut = Data(count: 80) // fuse_statfs_out size
                 writeResponse(buildResponse(unique: hdr.unique, body: statfsOut))
 
             case .mknod:

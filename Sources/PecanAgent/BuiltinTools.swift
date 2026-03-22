@@ -825,7 +825,7 @@ public struct AppendFileTool: PecanTool, Sendable {
         if !FileManager.default.fileExists(atPath: resolved) {
             let dir = (resolved as NSString).deletingLastPathComponent
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-            FileManager.default.createFile(atPath: resolved, contents: nil)
+            _ = FileManager.default.createFile(atPath: resolved, contents: nil)
         }
         guard let fh = FileHandle(forWritingAtPath: resolved) else {
             throw ToolError.executionFailed("Cannot open \(path) for writing")

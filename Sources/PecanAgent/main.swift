@@ -105,22 +105,49 @@ func main() async throws {
     await PromptComposer.shared.loadUserFragments()
 
 #if os(Linux)
-    // Mount COW overlay at /project if lower dir exists
+    // Create FUSE filesystem actors — mount all at startup before the gRPC event loop
+    let memFS = MemoryFUSEFilesystem()
+    let skillsFS = SkillsFUSEFilesystem(upperDir: "/tmp/skills-upper")
+
+    // Mount COW overlay at /project if lower dir exists; upper dir is bind-mounted from host
     let lowerProjectDir = "/project-lower"
+    let upperProjectDir = "/project-upper"
     if FileManager.default.fileExists(atPath: lowerProjectDir) {
         Task.detached {
             do {
-                let upperDir = "/tmp/overlay-upper"
-                try FileManager.default.createDirectory(atPath: upperDir, withIntermediateDirectories: true)
                 let fd = try fuseOpenDevice()
                 try fuseMountPoint("/project", fd: fd)
-                let fs = COWOverlayFilesystem(lower: lowerProjectDir, upper: upperDir)
+                let fs = COWOverlayFilesystem(lower: lowerProjectDir, upper: upperProjectDir)
                 let server = FUSEServer(fd: fd, fs: fs)
-                logger.info("Mounted COW overlay at /project (lower: \(lowerProjectDir))")
+                logger.info("Mounted COW overlay at /project (lower: \(lowerProjectDir), upper: \(upperProjectDir))")
                 await server.run()
             } catch {
                 logger.error("Failed to mount project overlay: \(error)")
             }
+        }
+    }
+
+    Task.detached {
+        do {
+            let fd = try fuseOpenDevice()
+            try fuseMountPoint("/memory", fd: fd)
+            let server = FUSEServer(fd: fd, fs: memFS)
+            logger.info("Mounted memory FUSE at /memory")
+            await server.run()
+        } catch {
+            logger.error("Failed to mount memory FUSE: \(error)")
+        }
+    }
+
+    Task.detached {
+        do {
+            let fd = try fuseOpenDevice()
+            try fuseMountPoint("/skills", fd: fd)
+            let server = FUSEServer(fd: fd, fs: skillsFS)
+            logger.info("Mounted skills FUSE at /skills")
+            await server.run()
+        } catch {
+            logger.error("Failed to mount skills FUSE: \(error)")
         }
     }
 #endif
@@ -173,11 +200,17 @@ func main() async throws {
     let call = client.makeConnectCall()
     let writer = StreamWriter(call.requestStream)
 
-    // Configure TaskClient and HttpClient with the send callback
+    // Configure gRPC clients with the send callback
     await TaskClient.shared.configure { msg in
         try await writer.send(msg)
     }
     await HttpClient.shared.configure { msg in
+        try await writer.send(msg)
+    }
+    await MemoryClient.shared.configure { msg in
+        try await writer.send(msg)
+    }
+    await SkillsClient.shared.configure { msg in
         try await writer.send(msg)
     }
 
@@ -219,6 +252,13 @@ func main() async throws {
                     "project": resp.projectName,
                     "team": resp.teamName,
                 ])
+
+#if os(Linux)
+                // Configure memory FUSE with project/team scope now that we know the context
+                await memFS.configure(hasProject: !resp.projectName.isEmpty, hasTeam: !resp.teamName.isEmpty)
+                // Populate skills FUSE lower layer from server in background
+                Task.detached { await skillsFS.configure() }
+#endif
 
                 // Immediately send a progress update that we are alive
                 var progMsg = Pecan_AgentEvent()
@@ -504,13 +544,49 @@ func main() async throws {
             case .toolResponse(let resp):
                 logger.info("Received tool_response from server for \(resp.requestID) - currently unused by local tool execution flow")
                 
+            case .execCommand(let cmd):
+                logger.info("Received exec command: \(cmd.command)")
+                Task.detached {
+                    let process = Process()
+                    process.executableURL = URL(fileURLWithPath: "/bin/sh")
+                    process.arguments = ["-c", cmd.command]
+                    let pipe = Pipe()
+                    process.standardOutput = pipe
+                    process.standardError = pipe
+                    var output = ""
+                    var exitCode: Int32 = 0
+                    do {
+                        try process.run()
+                        process.waitUntilExit()
+                        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                        output = String(data: data, encoding: .utf8) ?? ""
+                        exitCode = process.terminationStatus
+                    } catch {
+                        output = "Failed to run command: \(error)"
+                        exitCode = 1
+                    }
+                    var event = Pecan_AgentEvent()
+                    var resp = Pecan_ExecResponse()
+                    resp.requestID = cmd.requestID
+                    resp.output = output
+                    resp.exitCode = exitCode
+                    event.execResponse = resp
+                    try? await writer.send(event)
+                }
+
+            case .memoryResponse(let resp):
+                await MemoryClient.shared.handleResponse(resp)
+
+            case .skillsResponse(let resp):
+                await SkillsClient.shared.handleResponse(resp)
+
             case .shutdown(let req):
                 logger.warning("Received shutdown command: \(req.reason)")
                 await HookManager.shared.fire(event: "agent.shutdown", data: [
                     "reason": req.reason
                 ])
                 break
-                
+
             case nil:
                 break
             }

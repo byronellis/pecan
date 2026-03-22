@@ -29,6 +29,14 @@ protocol ScopedStore: Sendable {
     func addShare(hostPath: String, guestPath: String, mode: String) throws
     func removeShare(hostPath: String) throws
     func getShares() throws -> [ShareRecord]
+
+    // Memory FUSE operations
+    func listTags() throws -> [String]
+    func renderTag(tag: String) throws -> String
+    func applyMemoryDiff(tag: String, content: String) throws
+    func appendMemory(tag: String, content: String) throws
+    func unlinkTag(tag: String) throws
+    func renameTag(from: String, to: String) throws
 }
 
 // MARK: - ScopedStoreError
@@ -316,6 +324,122 @@ enum ScopedStoreCRUD {
     static func getShares(dbQueue: DatabaseQueue) throws -> [ShareRecord] {
         try dbQueue.read { db in
             try ShareRecord.fetchAll(db)
+        }
+    }
+
+    // MARK: Memory FUSE operations
+
+    /// Lists all distinct tags that have at least one memory entry.
+    static func listTags(dbQueue: DatabaseQueue) throws -> [String] {
+        try dbQueue.read { db in
+            try String.fetchAll(db, sql: "SELECT DISTINCT tag FROM memory_tags ORDER BY tag ASC")
+        }
+    }
+
+    /// Renders all memories for a tag as a <!-- memory:N --> block formatted string.
+    static func renderTag(dbQueue: DatabaseQueue, tag: String) throws -> String {
+        let memories = try dbQueue.read { db in
+            try MemoryRecord.fetchAll(db, sql: """
+                SELECT m.* FROM memories m
+                JOIN memory_tags mt ON mt.memoryId = m.id
+                WHERE mt.tag = ?
+                ORDER BY m.id ASC
+                """, arguments: [tag])
+        }
+        guard !memories.isEmpty else { return "" }
+        return memories.map { "<!-- memory:\($0.id!) -->\n\($0.content)" }.joined(separator: "\n\n")
+    }
+
+    /// Applies a full content replacement for a tag by parsing <!-- memory:N --> blocks.
+    /// - Blocks with existing IDs are updated.
+    /// - Existing IDs absent from the new content are deleted.
+    /// - Blocks without IDs (or with unknown IDs) are inserted as new entries.
+    static func applyMemoryDiff(dbQueue: DatabaseQueue, tag: String, content: String) throws {
+        struct Block { let id: Int64?; let content: String }
+        var blocks: [Block] = []
+        var currentID: Int64? = nil
+        var currentLines: [String] = []
+
+        for line in content.components(separatedBy: "\n") {
+            if line.hasPrefix("<!-- memory:") && line.hasSuffix(" -->") {
+                let text = currentLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+                if !text.isEmpty || currentID != nil {
+                    blocks.append(Block(id: currentID, content: text))
+                }
+                currentLines = []
+                let inner = line.dropFirst(12).dropLast(4) // strip "<!-- memory:" and " -->"
+                currentID = Int64(inner.trimmingCharacters(in: .whitespaces))
+            } else {
+                currentLines.append(line)
+            }
+        }
+        let lastText = currentLines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !lastText.isEmpty || currentID != nil {
+            blocks.append(Block(id: currentID, content: lastText))
+        }
+
+        let existing = try dbQueue.read { db in
+            try MemoryRecord.fetchAll(db, sql: """
+                SELECT m.* FROM memories m
+                JOIN memory_tags mt ON mt.memoryId = m.id
+                WHERE mt.tag = ?
+                ORDER BY m.id ASC
+                """, arguments: [tag])
+        }
+        let existingIDs = Set(existing.compactMap { $0.id })
+        let mentionedIDs = Set(blocks.compactMap { $0.id })
+        let now = ISO8601DateFormatter().string(from: Date())
+
+        try dbQueue.write { db in
+            // Delete memories not present in the new content
+            for id in existingIDs where !mentionedIDs.contains(id) {
+                try db.execute(sql: "DELETE FROM memory_tags WHERE memoryId = ?", arguments: [id])
+                try db.execute(sql: "DELETE FROM memories WHERE id = ?", arguments: [id])
+            }
+            // Update or insert
+            for block in blocks {
+                guard !block.content.isEmpty else { continue }
+                if let id = block.id, existingIDs.contains(id) {
+                    try db.execute(sql: "UPDATE memories SET content = ?, updatedAt = ? WHERE id = ?",
+                        arguments: [block.content, now, id])
+                } else {
+                    let record = MemoryRecord(id: nil, content: block.content, createdAt: now, updatedAt: now)
+                    try record.insert(db)
+                    try MemoryTagRecord(id: nil, memoryId: db.lastInsertedRowID, tag: tag).insert(db)
+                }
+            }
+        }
+    }
+
+    /// Appends a new memory entry with the given tag.
+    static func appendMemory(dbQueue: DatabaseQueue, tag: String, content: String) throws {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let now = ISO8601DateFormatter().string(from: Date())
+        try dbQueue.write { db in
+            let record = MemoryRecord(id: nil, content: trimmed, createdAt: now, updatedAt: now)
+            try record.insert(db)
+            try MemoryTagRecord(id: nil, memoryId: db.lastInsertedRowID, tag: tag).insert(db)
+        }
+    }
+
+    /// Deletes all memories for the given tag.
+    static func unlinkTag(dbQueue: DatabaseQueue, tag: String) throws {
+        let ids = try dbQueue.read { db in
+            try Int64.fetchAll(db, sql: "SELECT DISTINCT memoryId FROM memory_tags WHERE tag = ?", arguments: [tag])
+        }
+        try dbQueue.write { db in
+            for id in ids {
+                try db.execute(sql: "DELETE FROM memory_tags WHERE memoryId = ?", arguments: [id])
+                try db.execute(sql: "DELETE FROM memories WHERE id = ?", arguments: [id])
+            }
+        }
+    }
+
+    /// Updates all memory_tags rows for a given tag to a new tag name.
+    static func renameTag(dbQueue: DatabaseQueue, from oldTag: String, to newTag: String) throws {
+        try dbQueue.write { db in
+            try db.execute(sql: "UPDATE memory_tags SET tag = ? WHERE tag = ?", arguments: [newTag, oldTag])
         }
     }
 }

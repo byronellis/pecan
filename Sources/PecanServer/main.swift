@@ -27,6 +27,9 @@ actor SessionManager {
     // Agent idle/busy tracking for trigger delivery
     private var agentBusy: [String: Bool] = [:]
 
+    // Overlay upper dirs for changeset tracking: sessionID -> host-side upper dir path
+    private var overlayUpperDirs: [String: String] = [:]
+
     func registerUI(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>) {
         uiStreams[sessionID] = stream
     }
@@ -543,12 +546,33 @@ actor SessionManager {
         try store.completeTriggerDelivery(id: trigger.id!)
     }
 
+    func setOverlayUpperDir(sessionID: String, dir: String) {
+        overlayUpperDirs[sessionID] = dir
+    }
+
+    func overlayDirs(sessionID: String) -> (lower: String, upper: String)? {
+        guard let upper = overlayUpperDirs[sessionID],
+              let projectStore = getProjectStore(sessionID: sessionID),
+              let lower = projectStore.directory else { return nil }
+        return (lower: lower, upper: upper)
+    }
+
+    func discardOverlay(sessionID: String) throws {
+        guard let upper = overlayUpperDirs[sessionID] else { return }
+        let items = try FileManager.default.contentsOfDirectory(atPath: upper)
+        for item in items {
+            try FileManager.default.removeItem(atPath: "\(upper)/\(item)")
+        }
+        logger.info("Discarded overlay upper layer for session \(sessionID)")
+    }
+
     func removeSession(sessionID: String) async {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
         sessionStores.removeValue(forKey: sessionID)
         sessionProjects.removeValue(forKey: sessionID)
         sessionTeams.removeValue(forKey: sessionID)
+        overlayUpperDirs.removeValue(forKey: sessionID)
 
         do {
             try await SpawnerFactory.shared.terminate(sessionID: sessionID)
@@ -585,18 +609,13 @@ actor SessionManager {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
         }
 
-        // Mount memory directories directly
-        if let agentStore = getStore(sessionID: sessionID) {
-            shareMounts.append(MountSpec(source: agentStore.memoryDir.path, destination: "/memory", readOnly: false))
+        // Mount overlay upper dir so agent can write changesets to /project-upper
+        if let projectStore = getProjectStore(sessionID: sessionID), projectStore.directory != nil {
+            let upperDir = "/tmp/pecan-overlay/\(sessionID)"
+            try FileManager.default.createDirectory(atPath: upperDir, withIntermediateDirectories: true)
+            shareMounts.append(MountSpec(source: upperDir, destination: "/project-upper", readOnly: false))
+            setOverlayUpperDir(sessionID: sessionID, dir: upperDir)
         }
-        if let projectStore = getProjectStore(sessionID: sessionID) {
-            shareMounts.append(MountSpec(source: projectStore.memoryDir.path, destination: "/memory/project", readOnly: false))
-        }
-        if let teamStore = getTeamStore(sessionID: sessionID) {
-            shareMounts.append(MountSpec(source: teamStore.memoryDir.path, destination: "/memory/team", readOnly: false))
-        }
-        let skillsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/skills").path
-        shareMounts.append(MountSpec(source: skillsDir, destination: "/skills", readOnly: true))
 
         // Clear stale agent stream so the new agent can register
         agentStreams.removeValue(forKey: sessionID)
@@ -732,17 +751,14 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     response.sessionStarted = started
                     try await responseStream.send(response)
 
-                    // Mount memory directories (regular dirs, not FUSE — Containerization can't share NFS-backed paths)
-                    shareMounts.append(MountSpec(source: store.memoryDir.path, destination: "/memory", readOnly: false))
-                    if let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID) {
-                        shareMounts.append(MountSpec(source: projectStore.memoryDir.path, destination: "/memory/project", readOnly: false))
+                    // Mount overlay upper dir so agent can write changesets to /project-upper
+                    if let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID),
+                       projectStore.directory != nil {
+                        let upperDir = "/tmp/pecan-overlay/\(sessionID)"
+                        try FileManager.default.createDirectory(atPath: upperDir, withIntermediateDirectories: true)
+                        shareMounts.append(MountSpec(source: upperDir, destination: "/project-upper", readOnly: false))
+                        await SessionManager.shared.setOverlayUpperDir(sessionID: sessionID, dir: upperDir)
                     }
-                    if let teamStore = await SessionManager.shared.getTeamStore(sessionID: sessionID) {
-                        shareMounts.append(MountSpec(source: teamStore.memoryDir.path, destination: "/memory/team", readOnly: false))
-                    }
-                    // Mount skills directory directly
-                    let skillsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/skills").path
-                    shareMounts.append(MountSpec(source: skillsDir, destination: "/skills", readOnly: true))
 
                     // Spawn the agent using the Pluggable VM architecture
                     do {
@@ -876,7 +892,7 @@ extension ClientServiceProvider {
         guard firstWord.hasPrefix("/") else { return false }
         let commandPart = String(firstWord.dropFirst())
         let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
-        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq"]
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec"]
         return knownBases.contains(base)
     }
 
@@ -1290,63 +1306,54 @@ extension ClientServiceProvider {
             try await handleChangesetCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
         case "mergequeue", "mq":
             try await handleMergeQueueCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
+        case "exec":
+            let command = cmd.args.isEmpty ? (cmd.subcmd ?? "") : (cmd.subcmd.map { "\($0) \(cmd.args)" } ?? cmd.args)
+            guard !command.isEmpty else {
+                try await sendOutput("Usage: /exec <shell command>")
+                return
+            }
+            var hostCmd = Pecan_HostCommand()
+            var execCmd = Pecan_ExecCommand()
+            execCmd.requestID = UUID().uuidString
+            execCmd.command = command
+            hostCmd.execCommand = execCmd
+            try await SessionManager.shared.sendToAgent(sessionID: sessionID, command: hostCmd)
         default:
             try await sendOutput("Unknown command '/\(cmd.base)'.")
         }
     }
 
     static func handleChangesetCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
-        let currentPath = FileManager.default.currentDirectoryPath
-        let mountPath = "\(currentPath)/.run/fuse/overlay/\(sessionID)"
-
-        guard FileManager.default.fileExists(atPath: mountPath) else {
+        guard let dirs = await SessionManager.shared.overlayDirs(sessionID: sessionID) else {
             try await sendOutput("No overlay filesystem for this session. Is a project mounted?")
             return
         }
 
-        let pecanDir = "\(mountPath)/.pecan"
-
         switch cmd.subcmd {
         case "diff", nil:
-            // Default: show changes summary + diff
-            let changesPath = "\(pecanDir)/changes"
-            let diffPath = "\(pecanDir)/diff"
-            let statusPath = "\(pecanDir)/status"
+            let changes = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower)
+            let added = changes.filter { $0.hasPrefix("A ") }.count
+            let modified = changes.filter { $0.hasPrefix("M ") }.count
+            let deleted = changes.filter { $0.hasPrefix("D ") }.count
 
-            let changes = (try? String(contentsOfFile: changesPath, encoding: .utf8)) ?? ""
-            let diff = (try? String(contentsOfFile: diffPath, encoding: .utf8)) ?? ""
-            let statusJSON = (try? String(contentsOfFile: statusPath, encoding: .utf8)) ?? "{}"
-
-            // Parse status JSON for summary line
-            let statusData = statusJSON.data(using: .utf8) ?? Data()
-            let statusDict = (try? JSONSerialization.jsonObject(with: statusData) as? [String: Any]) ?? [:]
-            let modified = statusDict["modified"] as? Int ?? 0
-            let added = statusDict["added"] as? Int ?? 0
-            let deleted = statusDict["deleted"] as? Int ?? 0
-
-            if modified + added + deleted == 0 {
+            if added + modified + deleted == 0 {
                 try await sendOutput("No changes in current overlay.")
                 return
             }
 
-            // Header
             var out = "\u{1b}[1mChangeset\u{1b}[0m  \u{1b}[32m+\(added)\u{1b}[0m \u{1b}[33m~\(modified)\u{1b}[0m \u{1b}[31m-\(deleted)\u{1b}[0m\r\n\r\n"
-
-            // Changes list
-            if !changes.isEmpty {
-                for line in changes.components(separatedBy: "\n") where !line.isEmpty {
-                    let prefix = String(line.prefix(1))
-                    let path = String(line.dropFirst(2))
-                    switch prefix {
-                    case "A": out += "  \u{1b}[32m+ \(path)\u{1b}[0m\r\n"
-                    case "M": out += "  \u{1b}[33m~ \(path)\u{1b}[0m\r\n"
-                    case "D": out += "  \u{1b}[31m- \(path)\u{1b}[0m\r\n"
-                    default:  out += "  \(line)\r\n"
-                    }
+            for line in changes {
+                let prefix = String(line.prefix(1))
+                let path = String(line.dropFirst(2))
+                switch prefix {
+                case "A": out += "  \u{1b}[32m+ \(path)\u{1b}[0m\r\n"
+                case "M": out += "  \u{1b}[33m~ \(path)\u{1b}[0m\r\n"
+                case "D": out += "  \u{1b}[31m- \(path)\u{1b}[0m\r\n"
+                default:  out += "  \(line)\r\n"
                 }
             }
 
-            // Diff (colored)
+            let diff = computeUnifiedDiff(upperDir: dirs.upper, lowerDir: dirs.lower, changes: changes)
             if !diff.isEmpty {
                 out += "\r\n"
                 for line in diff.components(separatedBy: "\n") {
@@ -1363,47 +1370,33 @@ extension ClientServiceProvider {
                     }
                 }
             }
-
             try await sendOutput(out)
 
         case "status":
-            let statusPath = "\(pecanDir)/status"
-            let status = (try? String(contentsOfFile: statusPath, encoding: .utf8)) ?? "No status available."
-            try await sendOutput(status)
+            let changes = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower)
+            let added = changes.filter { $0.hasPrefix("A ") }.count
+            let modified = changes.filter { $0.hasPrefix("M ") }.count
+            let deleted = changes.filter { $0.hasPrefix("D ") }.count
+            let total = added + modified + deleted
+            try await sendOutput("{\"added\":\(added),\"modified\":\(modified),\"deleted\":\(deleted),\"total\":\(total)}")
 
         case "promote":
-            guard let dirs = await FSServerManager.shared.overlayDirs(sessionID: sessionID) else {
-                try await sendOutput("No overlay filesystem for this session.")
-                return
-            }
             let promoted = try promoteOverlay(upperDir: dirs.upper, lowerDir: dirs.lower)
             if promoted == 0 {
                 try await sendOutput("Nothing to promote — overlay is clean.")
             } else {
-                try await FSServerManager.shared.discardOverlay(sessionID: sessionID)
+                try await SessionManager.shared.discardOverlay(sessionID: sessionID)
                 try await sendOutput("Promoted \(promoted) change(s) to project directory.")
             }
 
         case "discard":
-            guard await FSServerManager.shared.overlayDirs(sessionID: sessionID) != nil else {
-                try await sendOutput("No overlay filesystem for this session.")
-                return
-            }
-            let changesPath = "\(pecanDir)/changes"
-            let changes = (try? String(contentsOfFile: changesPath, encoding: .utf8)) ?? ""
-            let count = changes.isEmpty ? 0 : changes.components(separatedBy: "\n").filter { !$0.isEmpty }.count
-            try await FSServerManager.shared.discardOverlay(sessionID: sessionID)
+            let count = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower).count
+            try await SessionManager.shared.discardOverlay(sessionID: sessionID)
             try await sendOutput("Discarded \(count) change(s). Overlay is now clean.")
 
         case "submit":
-            guard await FSServerManager.shared.overlayDirs(sessionID: sessionID) != nil else {
-                try await sendOutput("No overlay filesystem for this session.")
-                return
-            }
-            let changesPath = "\(pecanDir)/changes"
-            let changes = (try? String(contentsOfFile: changesPath, encoding: .utf8)) ?? ""
-            let count = changes.isEmpty ? 0 : changes.components(separatedBy: "\n").filter { !$0.isEmpty }.count
-            guard count > 0 else {
+            let changes = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower)
+            guard !changes.isEmpty else {
                 try await sendOutput("Nothing to submit — overlay is clean.")
                 return
             }
@@ -1415,7 +1408,7 @@ extension ClientServiceProvider {
             let entry = try await MergeQueueStore.shared.submit(
                 sessionID: sessionID, agentName: agentName,
                 projectName: projectName, note: note)
-            try await sendOutput("Submitted changeset #\(entry.id) (\(count) change(s)) to merge queue.")
+            try await sendOutput("Submitted changeset #\(entry.id) (\(changes.count) change(s)) to merge queue.")
 
         default:
             try await sendOutput("""
@@ -1428,6 +1421,69 @@ extension ClientServiceProvider {
                   /changeset:submit [note]  Submit to merge queue for review
                 """)
         }
+    }
+
+    /// Walk the upper dir and return change lines: "A path", "M path", "D path" (sorted).
+    private static func overlayChanges(upperDir: String, lowerDir: String) -> [String] {
+        let fm = FileManager.default
+        guard let enumerator = fm.enumerator(atPath: upperDir) else { return [] }
+        var changes: [String] = []
+        while let rel = enumerator.nextObject() as? String {
+            var isDir: ObjCBool = false
+            fm.fileExists(atPath: "\(upperDir)/\(rel)", isDirectory: &isDir)
+            if isDir.boolValue { continue }
+            let fileName = (rel as NSString).lastPathComponent
+            if fileName.hasPrefix(".wh.") {
+                let dir = (rel as NSString).deletingLastPathComponent
+                let target = String(fileName.dropFirst(4))
+                let path = dir.isEmpty ? target : "\(dir)/\(target)"
+                changes.append("D \(path)")
+            } else if fm.fileExists(atPath: "\(lowerDir)/\(rel)") {
+                changes.append("M \(rel)")
+            } else {
+                changes.append("A \(rel)")
+            }
+        }
+        return changes.sorted()
+    }
+
+    /// Compute a unified diff of changes in the upper dir vs the lower dir.
+    private static func computeUnifiedDiff(upperDir: String, lowerDir: String, changes: [String]) -> String {
+        var parts: [String] = []
+        for line in changes {
+            let kind = String(line.prefix(1))
+            let path = String(line.dropFirst(2))
+            switch kind {
+            case "A":
+                let content = (try? String(contentsOfFile: "\(upperDir)/\(path)", encoding: .utf8)) ?? ""
+                let lines = content.components(separatedBy: "\n")
+                var d = "--- /dev/null\n+++ b/\(path)\n@@ -0,0 +1,\(lines.count) @@\n"
+                for l in lines { d += "+\(l)\n" }
+                parts.append(d)
+            case "D":
+                let content = (try? String(contentsOfFile: "\(lowerDir)/\(path)", encoding: .utf8)) ?? ""
+                let lines = content.components(separatedBy: "\n")
+                var d = "--- a/\(path)\n+++ /dev/null\n@@ -1,\(lines.count) +0,0 @@\n"
+                for l in lines { d += "-\(l)\n" }
+                parts.append(d)
+            case "M":
+                let proc = Process()
+                proc.executableURL = URL(fileURLWithPath: "/usr/bin/diff")
+                proc.arguments = ["-u",
+                                  "--label", "a/\(path)", "\(lowerDir)/\(path)",
+                                  "--label", "b/\(path)", "\(upperDir)/\(path)"]
+                let pipe = Pipe()
+                proc.standardOutput = pipe
+                proc.standardError = FileHandle.standardError
+                try? proc.run()
+                proc.waitUntilExit()
+                if let d = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8), !d.isEmpty {
+                    parts.append(d)
+                }
+            default: break
+            }
+        }
+        return parts.joined(separator: "\n")
     }
 
     /// Copy upper layer files to lower layer (promote). Returns count of promoted items.
@@ -1503,12 +1559,12 @@ extension ClientServiceProvider {
                 return
             }
             // Promote the overlay
-            guard let dirs = await FSServerManager.shared.overlayDirs(sessionID: entry.sessionID) else {
+            guard let dirs = await SessionManager.shared.overlayDirs(sessionID: entry.sessionID) else {
                 try await sendOutput("Session \(entry.sessionID) has no active overlay — cannot promote.")
                 return
             }
             let promoted = try promoteOverlay(upperDir: dirs.upper, lowerDir: dirs.lower)
-            try await FSServerManager.shared.discardOverlay(sessionID: entry.sessionID)
+            try await SessionManager.shared.discardOverlay(sessionID: entry.sessionID)
             try await MergeQueueStore.shared.resolve(id: id, status: "approved")
             try await sendOutput("Approved #\(id): promoted \(promoted) change(s) to project directory.")
 
@@ -1786,6 +1842,28 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     cmdMsg.toolResponse = toolResp
                     try await responseStream.send(cmdMsg)
 
+                case .execResponse(let resp):
+                    guard let sid = activeSessionID else { continue }
+                    var srvMsg = Pecan_ServerMessage()
+                    var out = Pecan_AgentOutput()
+                    out.sessionID = sid
+                    out.text = resp.output
+                    srvMsg.agentOutput = out
+                    try await SessionManager.shared.sendToUI(sessionID: sid, message: srvMsg)
+
+                case .memoryCommand(let cmd):
+                    guard let sid = activeSessionID else { continue }
+                    let reply = await Self.handleMemoryCommand(cmd, sessionID: sid)
+                    var hostCmd = Pecan_HostCommand()
+                    hostCmd.memoryResponse = reply
+                    try await responseStream.send(hostCmd)
+
+                case .skillsCommand(let cmd):
+                    let reply = await Self.handleSkillsCommand(cmd)
+                    var hostCmd = Pecan_HostCommand()
+                    hostCmd.skillsResponse = reply
+                    try await responseStream.send(hostCmd)
+
                 case nil:
                     break
                 }
@@ -1793,12 +1871,96 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
         } catch {
             logger.error("Agent Stream error or disconnected: \(error)")
         }
-        
+
         logger.info("Agent Client disconnected.")
     }
 }
 
 extension AgentServiceProvider {
+    /// Handle a memory command from the agent, dispatching to the appropriate store.
+    static func handleMemoryCommand(_ cmd: Pecan_MemoryCommand, sessionID: String) async -> Pecan_MemoryResponse {
+        var resp = Pecan_MemoryResponse()
+        resp.requestID = cmd.requestID
+
+        func store() async -> (any ScopedStore)? {
+            switch cmd.scope {
+            case "project": return await SessionManager.shared.getProjectStore(sessionID: sessionID)
+            case "team":    return await SessionManager.shared.getTeamStore(sessionID: sessionID)
+            default:        return await SessionManager.shared.getStore(sessionID: sessionID)
+            }
+        }
+
+        do {
+            guard let s = await store() else {
+                resp.errorMessage = "No store available for scope '\(cmd.scope)'"
+                return resp
+            }
+            switch cmd.action {
+            case "list_tags":
+                let tags = try s.listTags()
+                resp.content = tags.joined(separator: "\n")
+            case "read_tag":
+                resp.content = try s.renderTag(tag: cmd.tag)
+            case "write_tag":
+                try s.applyMemoryDiff(tag: cmd.tag, content: cmd.content)
+            case "append_tag":
+                try s.appendMemory(tag: cmd.tag, content: cmd.content)
+            case "unlink_tag":
+                try s.unlinkTag(tag: cmd.tag)
+            case "rename_tag":
+                try s.renameTag(from: cmd.tag, to: cmd.newTag)
+            default:
+                resp.errorMessage = "Unknown memory action: \(cmd.action)"
+            }
+        } catch {
+            resp.errorMessage = error.localizedDescription
+        }
+        return resp
+    }
+
+    /// Handle a skills command from the agent, serving files from ~/.pecan/skills/.
+    static func handleSkillsCommand(_ cmd: Pecan_SkillsCommand) async -> Pecan_SkillsResponse {
+        var resp = Pecan_SkillsResponse()
+        resp.requestID = cmd.requestID
+
+        let skillsBase = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".pecan/skills").path
+        // Sanitize path: strip leading slashes, resolve to skills dir
+        let relPath = cmd.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let fullPath = relPath.isEmpty ? skillsBase : "\(skillsBase)/\(relPath)"
+
+        let fm = FileManager.default
+        switch cmd.action {
+        case "list_dir":
+            guard let contents = try? fm.contentsOfDirectory(atPath: fullPath) else {
+                resp.errorMessage = "Cannot list directory: \(cmd.path)"
+                return resp
+            }
+            var entries: [[String: Any]] = []
+            for name in contents.sorted() {
+                let childPath = "\(fullPath)/\(name)"
+                var isDir: ObjCBool = false
+                fm.fileExists(atPath: childPath, isDirectory: &isDir)
+                let isExec = !isDir.boolValue && fm.isExecutableFile(atPath: childPath)
+                entries.append(["name": name, "isDir": isDir.boolValue, "isExecutable": isExec])
+            }
+            if let data = try? JSONSerialization.data(withJSONObject: entries),
+               let json = String(data: data, encoding: .utf8) {
+                resp.content = json
+            }
+        case "read_file":
+            guard fm.fileExists(atPath: fullPath) else {
+                resp.errorMessage = "File not found: \(cmd.path)"
+                return resp
+            }
+            resp.content = (try? String(contentsOfFile: fullPath, encoding: .utf8)) ?? ""
+            resp.isExecutable = fm.isExecutableFile(atPath: fullPath)
+        default:
+            resp.errorMessage = "Unknown skills action: \(cmd.action)"
+        }
+        return resp
+    }
+
     /// Execute an HTTP request on behalf of the agent.
     static func executeHttpRequest(_ req: Pecan_HttpProxyRequest) async -> Pecan_HttpProxyResponse {
         var resp = Pecan_HttpProxyResponse()
@@ -1879,6 +2041,116 @@ extension ClientServiceProvider {
             try await pending.responseStream.send(cmdMsg)
         } catch {
             logger.error("Failed to send HTTP proxy response: \(error)")
+        }
+    }
+}
+
+/// Ensure built-in skill directories exist under skillsDir.
+/// Only creates SKILL.md and scripts if not already present (preserves user customizations).
+func ensureBuiltinSkills(skillsDir: String) {
+    let fm = FileManager.default
+
+    struct BuiltinSkill {
+        let dir: String
+        let skillMD: String
+        let scripts: [(name: String, content: String)]
+    }
+
+    let builtins: [BuiltinSkill] = [
+        BuiltinSkill(
+            dir: "web",
+            skillMD: """
+            ---
+            name: web
+            description: Make HTTP requests with custom methods, headers, and bodies.
+            ---
+
+            ## Web Tools
+
+            Use `http_request` to make POST, PUT, PATCH, or DELETE requests.
+
+            ### http_request
+            Make an HTTP request with a custom method, headers, and body.
+
+            Usage: `http_request '{"url":"https://...","method":"POST","headers":{"Content-Type":"application/json"},"body":"..."}'`
+            """,
+            scripts: [("http_request", "#!/bin/sh\npecan-agent invoke http_request \"$@\"\n")]
+        ),
+        BuiltinSkill(
+            dir: "dev",
+            skillMD: """
+            ---
+            name: dev
+            description: Developer tools for creating and registering custom Lua tools at runtime.
+            ---
+
+            ## Developer Tools
+
+            Use `create_lua_tool` to define new persistent tools using Lua module scripts.
+
+            ### create_lua_tool
+            Create a new Lua tool and register it for the current session.
+
+            Usage: `create_lua_tool '{"name":"my_tool","description":"...","script":"return { name=\\"my_tool\\", execute=function(args) ... end }"}'`
+            """,
+            scripts: [("create_lua_tool", "#!/bin/sh\npecan-agent invoke create_lua_tool \"$@\"\n")]
+        ),
+        BuiltinSkill(
+            dir: "memory",
+            skillMD: """
+            ---
+            name: memory
+            description: Search and manage persistent memories stored in /memory/.
+            ---
+
+            ## Memory Management
+
+            Memories are stored as tagged files in `/memory/`. Each file contains entries marked with `<!-- memory:N -->` blocks.
+
+            ### Read all memories for a tag
+            ```
+            cat /memory/CORE.md
+            cat /memory/NOTES.md
+            ```
+
+            ### List all tags
+            ```
+            ls /memory/
+            ```
+
+            ### Search memories
+            ```
+            grep -r "keyword" /memory/
+            grep "keyword" /memory/NOTES.md
+            ```
+
+            ### Add a new memory
+            Use `append_file` with path `/memory/TAG.md` — appending always creates a new memory entry.
+
+            ### Edit a memory
+            Use `edit_file` to find-and-replace within a memory file.
+
+            ### Delete a memory
+            Rewrite the file with `write_file`, omitting the block you want to delete (blocks without their ID are deleted).
+            """,
+            scripts: []
+        ),
+    ]
+
+    for skill in builtins {
+        let skillDir = "\(skillsDir)/\(skill.dir)"
+        let skillMDPath = "\(skillDir)/SKILL.md"
+        guard !fm.fileExists(atPath: skillMDPath) else { continue }
+        try? fm.createDirectory(atPath: skillDir, withIntermediateDirectories: true)
+        try? skill.skillMD.write(toFile: skillMDPath, atomically: true, encoding: .utf8)
+        if !skill.scripts.isEmpty {
+            let scriptsDir = "\(skillDir)/scripts"
+            try? fm.createDirectory(atPath: scriptsDir, withIntermediateDirectories: true)
+            for script in skill.scripts {
+                let scriptPath = "\(scriptsDir)/\(script.name)"
+                try? script.content.write(toFile: scriptPath, atomically: true, encoding: .utf8)
+                try? fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: scriptPath)
+            }
         }
     }
 }
@@ -1967,13 +2239,11 @@ func main() async throws {
 
     logger.info("Pecan Server started on port \(boundPort) and Unix socket \(socketPath) with default model: \(config.defaultModel ?? "unknown")")
 
-    // Mount global skills FUSE filesystem
+    // Ensure skills directory exists and populate built-in skills
     let homeDir = FileManager.default.homeDirectoryForCurrentUser
-    let skillsDir = homeDir.appendingPathComponent(".pecan/skills").path
-    try? FileManager.default.createDirectory(atPath: skillsDir, withIntermediateDirectories: true)
-    if let skillsMount = try? await FSServerManager.shared.mountSkills(skillsDir: skillsDir) {
-        logger.info("Skills filesystem mounted at \(skillsMount)")
-    }
+    let skillsDir = homeDir.appendingPathComponent(".pecan/skills")
+    try? FileManager.default.createDirectory(at: skillsDir, withIntermediateDirectories: true)
+    ensureBuiltinSkills(skillsDir: skillsDir.path)
 
     // Background trigger timer: check for due triggers every 10 seconds
     Task {

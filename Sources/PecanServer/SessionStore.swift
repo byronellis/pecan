@@ -101,7 +101,6 @@ final class SessionStore: ScopedStore, Sendable {
     let sessionID: String
     let sessionDir: URL
     let workspacePath: URL
-    let memoryDir: URL
     var dbPath: String { sessionDir.appendingPathComponent("session.db").path }
     let dbQueue: DatabaseQueue
 
@@ -111,11 +110,9 @@ final class SessionStore: ScopedStore, Sendable {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         self.sessionDir = homeDir.appendingPathComponent(".pecan/sessions/\(sessionID)")
         self.workspacePath = sessionDir.appendingPathComponent("workspace")
-        self.memoryDir = sessionDir.appendingPathComponent("memory")
 
         let fm = FileManager.default
         try fm.createDirectory(at: workspacePath, withIntermediateDirectories: true)
-        try fm.createDirectory(at: memoryDir, withIntermediateDirectories: true)
 
         let dbPath = sessionDir.appendingPathComponent("session.db").path
         self.dbQueue = try DatabaseQueue(path: dbPath)
@@ -130,7 +127,6 @@ final class SessionStore: ScopedStore, Sendable {
         let homeDir = FileManager.default.homeDirectoryForCurrentUser
         self.sessionDir = homeDir.appendingPathComponent(".pecan/sessions/\(sessionID)")
         self.workspacePath = sessionDir.appendingPathComponent("workspace")
-        self.memoryDir = sessionDir.appendingPathComponent("memory")
 
         let dbPath = sessionDir.appendingPathComponent("session.db").path
         guard FileManager.default.fileExists(atPath: dbPath) else {
@@ -289,6 +285,32 @@ final class SessionStore: ScopedStore, Sendable {
 
     func getCoreMemories() throws -> [MemoryRecord] {
         try ScopedStoreCRUD.getCoreMemories(dbQueue: dbQueue)
+    }
+
+    // MARK: - ScopedStore: Memory FUSE
+
+    func listTags() throws -> [String] {
+        try ScopedStoreCRUD.listTags(dbQueue: dbQueue)
+    }
+
+    func renderTag(tag: String) throws -> String {
+        try ScopedStoreCRUD.renderTag(dbQueue: dbQueue, tag: tag)
+    }
+
+    func applyMemoryDiff(tag: String, content: String) throws {
+        try ScopedStoreCRUD.applyMemoryDiff(dbQueue: dbQueue, tag: tag, content: content)
+    }
+
+    func appendMemory(tag: String, content: String) throws {
+        try ScopedStoreCRUD.appendMemory(dbQueue: dbQueue, tag: tag, content: content)
+    }
+
+    func unlinkTag(tag: String) throws {
+        try ScopedStoreCRUD.unlinkTag(dbQueue: dbQueue, tag: tag)
+    }
+
+    func renameTag(from: String, to: String) throws {
+        try ScopedStoreCRUD.renameTag(dbQueue: dbQueue, from: from, to: to)
     }
 
     // MARK: - ScopedStore: Shares

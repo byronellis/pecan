@@ -89,7 +89,44 @@ message AgentEvent {
         ContextCommand context_command = 6;
         TaskCommand task_command = 7;
         HttpProxyRequest http_request = 8;
+        ExecResponse exec_response = 9;
+        MemoryCommand memory_command = 10;
+        SkillsCommand skills_command = 11;
     }
+}
+
+message ExecResponse {
+    string request_id = 1;
+    string output = 2;
+    int32 exit_code = 3;
+}
+
+message MemoryCommand {
+    string request_id = 1;
+    string action = 2;      // "list_tags", "read_tag", "write_tag", "append_tag", "unlink_tag", "rename_tag"
+    string scope = 3;       // "agent", "project", "team"
+    string tag = 4;
+    string content = 5;
+    string new_tag = 6;     // used by rename_tag
+}
+
+message MemoryResponse {
+    string request_id = 1;
+    string content = 2;     // JSON array for list_tags; rendered markdown for read_tag
+    string error_message = 3;
+}
+
+message SkillsCommand {
+    string request_id = 1;
+    string action = 2;      // "list_dir", "read_file"
+    string path = 3;
+}
+
+message SkillsResponse {
+    string request_id = 1;
+    string content = 2;     // JSON array for list_dir; file content for read_file
+    bool is_executable = 3;
+    string error_message = 4;
 }
 
 message AgentRegistration {
@@ -159,7 +196,15 @@ message HostCommand {
         ContextResponse context_response = 7;
         TaskResponse task_response = 8;
         HttpProxyResponse http_response = 9;
+        ExecCommand exec_command = 10;
+        MemoryResponse memory_response = 11;
+        SkillsResponse skills_response = 12;
     }
+}
+
+message ExecCommand {
+    string request_id = 1;
+    string command = 2;
 }
 
 message GetModelsResponse {

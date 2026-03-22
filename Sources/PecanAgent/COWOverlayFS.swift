@@ -143,7 +143,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
         while let rel = enumerator.nextObject() as? String {
             let fullUpper = upperDir + "/" + rel
             var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: fullUpper, isDirectory: &isDir)
+            _ = FileManager.default.fileExists(atPath: fullUpper, isDirectory: &isDir)
             if isDir.boolValue { continue }
 
             let fileName = (rel as NSString).lastPathComponent
@@ -183,7 +183,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
         while let rel = enumerator.nextObject() as? String {
             let fullUpper = upperDir + "/" + rel
             var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: fullUpper, isDirectory: &isDir)
+            _ = FileManager.default.fileExists(atPath: fullUpper, isDirectory: &isDir)
             if isDir.boolValue { continue }
 
             let fileName = (rel as NSString).lastPathComponent
@@ -333,7 +333,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
         if FileManager.default.fileExists(atPath: uPath) {
             let id = nodeID(for: relPath)
             var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: uPath, isDirectory: &isDir)
+            _ = FileManager.default.fileExists(atPath: uPath, isDirectory: &isDir)
             let attr: FUSEAttr
             if let a = statToAttr(ino: id, path: uPath) {
                 attr = a
@@ -350,7 +350,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
         if FileManager.default.fileExists(atPath: lPath) {
             let id = nodeID(for: relPath)
             var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: lPath, isDirectory: &isDir)
+            _ = FileManager.default.fileExists(atPath: lPath, isDirectory: &isDir)
             let attr: FUSEAttr
             if let a = statToAttr(ino: id, path: lPath) {
                 attr = a
@@ -630,7 +630,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
 
         // Create file if not exists
         if !FileManager.default.fileExists(atPath: uPath) {
-            FileManager.default.createFile(atPath: uPath, contents: nil)
+            _ = FileManager.default.createFile(atPath: uPath, contents: nil)
         }
 
         guard let fh = FileHandle(forWritingAtPath: uPath) else { return .failure(FUSEErrno(-EIO)) }
@@ -709,7 +709,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
             let whDir = upperPath(parentPath)
             try? FileManager.default.createDirectory(atPath: whDir, withIntermediateDirectories: true)
             let whPath = whDir + "/.wh." + name
-            FileManager.default.createFile(atPath: whPath, contents: nil)
+            _ = FileManager.default.createFile(atPath: whPath, contents: nil)
         }
 
         invalidateCache()
@@ -732,7 +732,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
             let whDir = upperPath(parentPath)
             try? FileManager.default.createDirectory(atPath: whDir, withIntermediateDirectories: true)
             let whPath = whDir + "/.wh." + name
-            FileManager.default.createFile(atPath: whPath, contents: nil)
+            _ = FileManager.default.createFile(atPath: whPath, contents: nil)
         }
 
         invalidateCache()
@@ -770,7 +770,7 @@ actor COWOverlayFilesystem: FUSEFilesystem {
             let whDir = upperPath(oldParentPath)
             try? FileManager.default.createDirectory(atPath: whDir, withIntermediateDirectories: true)
             let whPath = whDir + "/.wh." + oldName
-            FileManager.default.createFile(atPath: whPath, contents: nil)
+            _ = FileManager.default.createFile(atPath: whPath, contents: nil)
         }
 
         invalidateCache()

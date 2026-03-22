@@ -273,9 +273,14 @@ func fuseOpenDevice() throws -> Int32 {
 // MARK: - Mount FUSE
 
 func fuseMountPoint(_ path: String, fd: Int32) throws {
+    // Ensure the mount point directory exists
+    try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+
     // MS_NOSUID = 2, MS_NODEV = 4 on Linux
     let mountFlags: UInt = 2 | 4
-    let options = "fd=\(fd),rootmode=040755,user_id=0,group_id=0,allow_other"
+    // rootmode is parsed by the kernel as octal (fsparam_u32oct), so pass "40755" not "16877"
+    // 40755 (octal) = 16877 (decimal) = S_IFDIR | 0755
+    let options = "fd=\(fd),rootmode=40755,user_id=0,group_id=0,allow_other"
     let result = path.withCString { targetPtr -> Int32 in
         "fuse".withCString { typePtr -> Int32 in
             options.withCString { dataPtr -> Int32 in
@@ -284,7 +289,8 @@ func fuseMountPoint(_ path: String, fd: Int32) throws {
         }
     }
     if result != 0 {
-        throw FUSEError.mountFailed("mount fuse at \(path) failed: \(errno)")
+        let errStr = String(cString: strerror(errno))
+        throw FUSEError.mountFailed("mount fuse at \(path) failed (errno \(errno)): \(errStr)")
     }
 }
 
