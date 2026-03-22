@@ -73,25 +73,97 @@ Pecan is divided into three main components:
 - **Pluggable LLMs:** Configurable to talk to any OpenAI-compatible API endpoint -- local vLLM/MLX servers, commercial providers, or anything else that speaks the OpenAI protocol.
 - **Persistent Sessions:** Sessions persist across restarts at `~/.pecan/sessions/`, with workspace directories mounted into containers.
 
+## Virtual Filesystems
+
+Pecan uses FUSE-T to expose several virtual filesystems inside every container. Rather than adding LLM tools for every capability, capabilities surface as files the agent can read and write with the same `read_file`, `write_file`, and `shell` tools it already knows.
+
+### `/memory/` — Persistent Memory
+
+Per-session, per-project, and per-team memories stored in SQLite. Memories are plain markdown files organized by tag:
+
+```
+/memory/
+  CORE.md       # injected into system prompt on every turn
+  NOTES.md      # general observations
+  project/      # shared across all agents on this project
+  team/         # shared across team members
+```
+
+Read with `cat`, search with `grep -r`, append to add, edit in-place to update. The skill at `/skills/memory/SKILL.md` explains the conventions.
+
+### `/skills/` — Agent Skills
+
+A read-only catalog of skills mounted from `~/.pecan/skills/`. Each skill is a directory containing a `SKILL.md` instruction file and an optional `scripts/` directory of executable tools.
+
+Skills follow **progressive disclosure**: only names and descriptions appear in the system prompt. The agent reads `SKILL.md` to activate a skill and get its full instructions, then uses `activate_skill` to register it.
+
+Scripts inside `scripts/` are auto-exposed as executable commands. Any `.lua` scripts are wrapped in a shell shim that calls `pecan-agent invoke <name>`, so the agent can run any registered tool from the shell without it consuming a native LLM tool slot.
+
+Built-in skills (`web/`, `dev/`, `memory/`) are created automatically on first run.
+
+### `/project/` — Copy-on-Write Project Overlay
+
+Each agent session gets a **copy-on-write view** of its project directory inspired by overlayfs / Google's srcfs. Reads are transparent — the agent sees the full project. Writes go to a per-session scratch layer (`/.run/overlay/<sessionID>/`); the actual project directory is never modified.
+
+A virtual `/.pecan/` directory inside the overlay exposes the changeset at all times:
+
+| Path | Content |
+|------|---------|
+| `/.pecan/diff` | Unified diff (lower vs upper), one block per changed file |
+| `/.pecan/changes` | `[A\|M\|D] <path>` for each changed file |
+| `/.pecan/status` | JSON summary with counts and timestamp |
+
+See [designs/overlay-filesystem.md](designs/overlay-filesystem.md) for the full design.
+
 ## Built-in Tools
 
-The agent ships with a comprehensive tool suite, organized by tag:
+The agent's native LLM tool count is kept small. Most capabilities come from the virtual filesystems and skills above, not from registered tools.
 
 | Tag | Tools | Description |
 |-----|-------|-------------|
 | **core** | `read_file`, `write_file`, `edit_file`, `search_files`, `shell` | File operations and command execution |
-| **web** | `web_fetch`, `web_search`, `http_request` | Web access (proxied through server) |
+| **web** | `web_fetch`, `web_search` | Web access (proxied through server) |
 | **tasks** | `task_create`, `task_list`, `task_get`, `task_update`, `task_focus` | Task management with priorities, labels, dependencies |
-| **memory** | `memory_add`, `memory_get`, `memory_list`, `memory_search`, `memory_update`, `memory_delete`, `memory_tag`, `memory_untag` | Persistent memories across sessions; tag as `core` for system prompt injection |
 | **triggers** | `trigger_create`, `trigger_list`, `trigger_cancel` | Schedule one-shot or repeating instructions |
 | **skills** | `activate_skill` | Load Agent Skills instructions into context |
-| **meta** | `create_lua_tool` | Dynamically create and register new Lua tools |
+
+Tools tagged `invoke_only` (e.g. `http_request`, `create_lua_tool`) are registered in the tool manager but excluded from the LLM tool list. They're accessible to skill scripts via `pecan-agent invoke <tool> '<json>'`.
+
+## Projects & Teams
+
+Pecan supports organizing work across projects and teams with persistent stores for each.
+
+**Projects** associate a session with a local directory. When a project is active, the directory is mounted at `/project/` inside the container via the COW overlay — the agent can read and write freely without touching the real files.
+
+**Teams** layer shared workspaces (`/team/`) and memories on top of projects, enabling multiple agents to collaborate on the same codebase with explicit changeset handoffs.
+
+### Changeset Workflow
+
+When an agent is done with a task, the changeset can be reviewed, applied, or queued for human review — all from the TUI:
+
+```
+/changeset          # show colored unified diff + counts
+/changeset:status   # JSON summary
+/changeset:promote  # apply upper layer directly to project directory
+/changeset:discard  # wipe the scratch layer, start fresh
+/changeset:submit   # add to the merge queue for review
+```
+
+### Merge Queue
+
+`/mergequeue` (alias `/mq`) manages changesets submitted for human or agent review:
+
+```
+/mergequeue             # list pending entries
+/mq:approve <id>        # promote changeset to lower layer and mark approved
+/mq:reject <id>         # mark rejected
+```
 
 ## Extensibility
 
 ### Lua Tools
 
-User-defined tools live in `~/.pecan/tools/` and are automatically loaded at agent startup. Tools use a **module pattern** -- the Lua script returns a table with metadata and an `execute` function:
+User-defined tools live in `~/.pecan/tools/` and are automatically loaded at agent startup. Tools use a **module pattern** — the Lua script returns a table with metadata and an `execute` function:
 
 ```lua
 return {
@@ -110,7 +182,7 @@ return {
 }
 ```
 
-Tools can also be created dynamically at runtime via the `create_lua_tool` built-in tool.
+Tools can also be created dynamically at runtime via `pecan-agent invoke create_lua_tool '<json>'` or through the `dev` skill.
 
 ### Prompt Fragments
 
@@ -143,21 +215,22 @@ return {
 
 ### Agent Skills
 
-Pecan supports the [Agent Skills](https://agentskills.io) open standard. Skills are folders containing a `SKILL.md` file with YAML frontmatter and optional `scripts/`, `references/`, and `assets/` directories:
+Skills are folders under `~/.pecan/skills/` containing a `SKILL.md` file with YAML frontmatter and optional `scripts/`, `references/`, and `assets/` directories:
 
 ```
 ~/.pecan/skills/
   my-skill/
     SKILL.md          # name + description in YAML frontmatter, instructions in body
     scripts/
-      helper.lua      # Lua tools auto-registered from skills
+      helper.sh       # executable tool (called directly by the agent)
+      helper.lua      # Lua tool (auto-wrapped as a shell shim via pecan-agent invoke)
     references/
       api-docs.md
     assets/
       template.json
 ```
 
-Skills follow **progressive disclosure**: only names and descriptions are loaded at startup. Full instructions are loaded on demand via the `activate_skill` tool. The cross-client convention path `~/.agents/skills/` is also supported.
+The cross-client convention path `~/.agents/skills/` is also supported.
 
 ## Getting Started
 
