@@ -342,6 +342,83 @@ public actor FSServerManager {
         }
     }
 
+    /// Swap the lower directory for an existing overlay without restarting the container.
+    /// The mount path stays stable; only the backing FUSE process is replaced.
+    /// If no overlay exists yet, falls through to a normal mount.
+    public func remountOverlay(sessionID: String, newLowerDir: String) async throws -> String {
+        guard let entry = overlayMounts.removeValue(forKey: sessionID) else {
+            return try await mountOverlay(sessionID: sessionID, lowerDir: newLowerDir)
+        }
+
+        guard let binaryPath = fsBinaryPath() else { throw FSManagerError.binaryNotFound }
+
+        // Tear down the old FUSE process (keep the mount directory).
+        let umount = Process()
+        umount.executableURL = URL(fileURLWithPath: "/sbin/umount")
+        umount.arguments = [entry.mountPath]
+        try? umount.run()
+        umount.waitUntilExit()
+        if entry.process.isRunning {
+            entry.process.terminate()
+            entry.process.waitUntilExit()
+        }
+
+        let currentPath = FileManager.default.currentDirectoryPath
+        let procArgs = [
+            entry.mountPath,
+            "--mode", "overlay",
+            "--lower-dir", newLowerDir,
+            "--upper-dir", entry.upperDir,
+            "--session-id", sessionID
+        ]
+
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: binaryPath)
+        proc.arguments = procArgs
+        proc.currentDirectoryURL = URL(fileURLWithPath: currentPath)
+        proc.standardOutput = FileHandle.standardOutput
+        proc.standardError = FileHandle.standardError
+
+        var env = ProcessInfo.processInfo.environment
+        let existingLib = env["DYLD_LIBRARY_PATH"] ?? ""
+        env["DYLD_LIBRARY_PATH"] = existingLib.isEmpty ? "/usr/local/lib" : "/usr/local/lib:\(existingLib)"
+        proc.environment = env
+
+        proc.terminationHandler = { p in
+            logger.warning("pecan-fs-server (overlay/\(sessionID)) exited (status \(p.terminationStatus))")
+        }
+
+        try proc.run()
+        logger.info("Remounted pecan-fs-server (overlay) pid \(proc.processIdentifier) for \(sessionID) → lower: \(newLowerDir)")
+        overlayMounts[sessionID] = OverlayEntry(process: proc, mountPath: entry.mountPath, lowerDir: newLowerDir, upperDir: entry.upperDir)
+
+        try await waitForMount(mountPath: entry.mountPath)
+        return entry.mountPath
+    }
+
+    /// Replace the memory FUSE for a session with updated DB paths (e.g. after project switch).
+    /// The mount path stays stable; the backing process is replaced transparently.
+    public func remountMemory(sessionID: String,
+                              agentDBPath: String,
+                              projectDBPath: String? = nil,
+                              teamDBPath: String? = nil) async throws -> String {
+        if let entry = mounts.removeValue(forKey: sessionID) {
+            let umount = Process()
+            umount.executableURL = URL(fileURLWithPath: "/sbin/umount")
+            umount.arguments = [entry.mountPath]
+            try? umount.run()
+            umount.waitUntilExit()
+            if entry.process.isRunning {
+                entry.process.terminate()
+                entry.process.waitUntilExit()
+            }
+        }
+        return try await mount(sessionID: sessionID,
+                               agentDBPath: agentDBPath,
+                               projectDBPath: projectDBPath,
+                               teamDBPath: teamDBPath)
+    }
+
     /// Returns (lowerDir, upperDir) for the session's overlay, or nil if not mounted.
     public func overlayDirs(sessionID: String) -> (lower: String, upper: String)? {
         guard let entry = overlayMounts[sessionID] else { return nil }

@@ -952,13 +952,19 @@ extension ClientServiceProvider {
                 await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: name, store: store)
                 // Clear team association since we switched projects
                 await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
-                // Restart container with new mounts and update UI breadcrumbs
-                logger.info("Restarting container for project switch to '\(name)'...")
-                try await SessionManager.shared.restartContainer(sessionID: sessionID)
-                logger.info("Container restarted, sending session update...")
+                // Remount overlay and memory FUSE in-place — no container restart needed.
+                if let dir = store.directory {
+                    _ = try? await FSServerManager.shared.remountOverlay(sessionID: sessionID, newLowerDir: dir)
+                }
+                if let agentStore = await SessionManager.shared.getStore(sessionID: sessionID) {
+                    _ = try? await FSServerManager.shared.remountMemory(
+                        sessionID: sessionID,
+                        agentDBPath: agentStore.dbPath,
+                        projectDBPath: store.dbPath)
+                }
+                logger.info("Remounted overlay and memory for project switch to '\(name)'")
                 try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
-                logger.info("Session update sent.")
-                try await sendOutput("Switched to project '\(name)'. Agent restarted with project mounted.")
+                try await sendOutput("Switched to project '\(name)'. /project now shows the new project.")
             } catch {
                 logger.error("Project switch failed at: \(error)")
                 try await sendOutput("Failed to switch project: \(error.localizedDescription)")
@@ -1423,7 +1429,7 @@ extension ClientServiceProvider {
             let store = await SessionManager.shared.getStore(sessionID: sessionID)
             let agentName = (try? store?.name) ?? sessionID
             let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID)
-            let projectName = projectStore?.name ?? ""
+            let projectName = (try? projectStore?.name) ?? ""
             let entry = try await MergeQueueStore.shared.submit(
                 sessionID: sessionID, agentName: agentName,
                 projectName: projectName, note: note)
