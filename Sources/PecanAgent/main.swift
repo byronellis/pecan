@@ -104,6 +104,27 @@ func main() async throws {
     await PromptComposer.shared.registerBuiltinFragments()
     await PromptComposer.shared.loadUserFragments()
 
+#if os(Linux)
+    // Mount COW overlay at /project if lower dir exists
+    let lowerProjectDir = "/project-lower"
+    if FileManager.default.fileExists(atPath: lowerProjectDir) {
+        Task.detached {
+            do {
+                let upperDir = "/tmp/overlay-upper"
+                try FileManager.default.createDirectory(atPath: upperDir, withIntermediateDirectories: true)
+                let fd = try fuseOpenDevice()
+                try fuseMountPoint("/project", fd: fd)
+                let fs = COWOverlayFilesystem(lower: lowerProjectDir, upper: upperDir)
+                let server = FUSEServer(fd: fd, fs: fs)
+                logger.info("Mounted COW overlay at /project (lower: \(lowerProjectDir))")
+                await server.run()
+            } catch {
+                logger.error("Failed to mount project overlay: \(error)")
+            }
+        }
+    }
+#endif
+
     // Setup gRPC Client
     let group = MultiThreadedEventLoopGroup(numberOfThreads: 1)
 

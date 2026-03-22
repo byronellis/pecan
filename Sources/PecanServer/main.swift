@@ -578,7 +578,7 @@ actor SessionManager {
 
         if let projectStore = getProjectStore(sessionID: sessionID) {
             if let dir = projectStore.directory {
-                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+                shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
             }
         }
         if let teamStore = getTeamStore(sessionID: sessionID) {
@@ -696,9 +696,9 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             let projectStore = try ProjectStore(name: projectName)
                             await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: projectName, store: projectStore)
 
-                            // Mount project directory directly (Containerization cannot share FUSE-T/NFS-backed paths)
+                            // Mount project directory as read-only lower layer; agent mounts COW overlay at /project
                             if let dir = projectStore.directory {
-                                shareMounts.append(MountSpec(source: dir, destination: "/project", readOnly: false))
+                                shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
                             }
 
                             // If no team specified, use default team
