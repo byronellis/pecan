@@ -253,9 +253,11 @@ actor MemoryFUSEFilesystem: FUSEFilesystem {
             entries.append(("..", rootNodeID, DT_DIR))
             if hasProject { entries.append(("project", projectDirNodeID, DT_DIR)) }
             if hasTeam    { entries.append(("team",    teamDirNodeID,    DT_DIR)) }
-            // List session-scope tags
-            let tags = (try? await MemoryClient.shared.listTags(scope: "agent")) ?? []
-            for tag in tags {
+            // Always include CORE, then any additional tags from the DB
+            var tagSet: [String] = ["CORE"]
+            let agentTags = (try? await MemoryClient.shared.listTags(scope: "agent")) ?? []
+            for tag in agentTags where !tagSet.contains(tag) { tagSet.append(tag) }
+            for tag in tagSet {
                 let filename = "\(tag).md"
                 let relPath = "/\(filename)"
                 let childID = nodeID(for: relPath)
@@ -265,8 +267,10 @@ actor MemoryFUSEFilesystem: FUSEFilesystem {
         case projectDirNodeID:
             entries.append((".", projectDirNodeID, DT_DIR))
             entries.append(("..", rootNodeID, DT_DIR))
-            let tags = (try? await MemoryClient.shared.listTags(scope: "project")) ?? []
-            for tag in tags {
+            var tagSet: [String] = ["CORE"]
+            let projectTags = (try? await MemoryClient.shared.listTags(scope: "project")) ?? []
+            for tag in projectTags where !tagSet.contains(tag) { tagSet.append(tag) }
+            for tag in tagSet {
                 let filename = "\(tag).md"
                 let relPath = "/project/\(filename)"
                 let childID = nodeID(for: relPath)
@@ -276,8 +280,10 @@ actor MemoryFUSEFilesystem: FUSEFilesystem {
         case teamDirNodeID:
             entries.append((".", teamDirNodeID, DT_DIR))
             entries.append(("..", rootNodeID, DT_DIR))
-            let tags = (try? await MemoryClient.shared.listTags(scope: "team")) ?? []
-            for tag in tags {
+            var tagSet: [String] = ["CORE"]
+            let teamTags = (try? await MemoryClient.shared.listTags(scope: "team")) ?? []
+            for tag in teamTags where !tagSet.contains(tag) { tagSet.append(tag) }
+            for tag in tagSet {
                 let filename = "\(tag).md"
                 let relPath = "/team/\(filename)"
                 let childID = nodeID(for: relPath)
