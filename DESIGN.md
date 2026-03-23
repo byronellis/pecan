@@ -40,7 +40,7 @@ The agent process that runs inside the container:
 - Completely isolated from the internet. No direct access to LLM APIs or external resources.
 - Connects to `pecan-server` via gRPC over the relayed Unix socket.
 - All tools execute locally inside the container. Only LLM completions and external network requests are proxied through the server.
-- System prompt composed from modular fragments (identity, guidelines, tool summary, skill catalog, etc.).
+- System prompt composed from modular fragments (identity, guidelines, memory + CORE.md content, skill catalog, etc.).
 - Supports dynamic extension via Lua tools, prompt fragments, hooks, and Agent Skills.
 
 **Key files:**
@@ -80,29 +80,32 @@ A terminal UI application:
 
 ## Container Mounts
 
-| Host Path | Container Path | Mode |
-|-----------|---------------|------|
-| `~/.pecan/sessions/{id}/workspace/` | `/home/{agentName}` | read-write |
-| `.build/aarch64-swift-linux-musl/release/` | `/opt/pecan` | read-only |
-| `~/.pecan/tools/` | `/home/{agentName}/.pecan/tools/` | read-only |
-| `~/.pecan/skills/` | `/home/{agentName}/.pecan/skills/` | read-only |
-| `~/.agents/skills/` | `/home/{agentName}/.agents/skills/` | read-only |
+| Host Path | Container Path | Mode | Notes |
+|-----------|---------------|------|-------|
+| `.build/aarch64-swift-linux-musl/release/` | `/opt/pecan` | read-only | Agent binary |
+| `~/.pecan/tools/` | `/home/{agentName}/.pecan/tools/` | read-only | User Lua tools |
+| `{projectDir}` | `/project-lower` | read-only (virtiofs) | Project lower layer |
+| *(in-container)* | `/project-upper` | read-write | COW upper layer (local to container) |
+| *(in-container)* | `/project` | FUSE overlay | Merged view (lower + upper) |
+| *(gRPC-backed)* | `/memory` | FUSE | Memory filesystem |
+| *(gRPC-backed)* | `/skills` | FUSE COW | Skills catalog (lower from server, upper at `/tmp/skills-upper`) |
+
+The project lower layer is mounted read-only so agents can never corrupt the host project directly. All writes land in `/project-upper` and are merged back on `/changeset:submit`.
+
+Memory and skills filesystems are backed by gRPC calls to the server rather than host mounts, keeping all persistence server-side.
 
 ## Tool System
 
 ### Tool Tags
 
-Tools are organized by tags that control which tools are active in a given context:
+Tools carry tags that control whether they are sent to the LLM as structured tool definitions:
 
-- `core` -- File operations (`read_file`, `write_file`, `edit_file`, `search_files`) and `shell`.
-- `web` -- `web_fetch`, `web_search`, `http_request` (proxied through server).
-- `tasks` -- Task management (`task_create`, `task_list`, `task_get`, `task_update`, `task_focus`).
-- `memory` -- Persistent memory system (`memory_add/get/list/search/update/delete/tag/untag`).
-- `triggers` -- Scheduled instructions (`trigger_create/list/cancel`).
-- `skills` -- `activate_skill` for loading Agent Skills.
-- `meta` -- `create_lua_tool` for dynamic tool creation.
+- `core` -- Always active: `read_file`, `write_file`, `append_file`, `edit_file`, `search_files`, `bash`.
+- `web` -- Always active: `web_fetch`, `web_search` (proxied through server).
+- `skills` -- Always active: `activate_skill` for loading Agent Skills.
+- `invoke_only` -- Registered in `ToolManager` but never sent to the LLM. Accessible to skill scripts via `pecan-agent invoke <tool> '<json>'`. Includes: `http_request`, `create_lua_tool`, all task tools, all trigger tools.
 
-The `PromptComposer` maintains the active tag set and only includes matching tools in LLM requests.
+The `PromptComposer` maintains the active tag set (`core`, `web`, `skills`) and only includes matching tools in LLM requests. This keeps the tool count at 9, reducing token overhead per turn.
 
 ### Lua Tool Specification
 
@@ -143,12 +146,14 @@ The system prompt is built from independent **PromptFragment** instances, sorted
 | Priority | Fragment | Description |
 |----------|----------|-------------|
 | 0 | `BaseIdentityFragment` | Agent identity and role |
+| 50 | `ProjectTeamContextFragment` | Active project/team name and mount paths |
 | 100 | `GuidelinesFragment` | Tool usage best practices |
-| 200 | `CoreMemoriesFragment` | Placeholder (memories injected asynchronously) |
-| 250 | `FocusedTaskFragment` | Currently focused task context |
-| 300 | `ToolSummaryFragment` | List of available tools filtered by active tags |
+| 200 | `MemoryFragment` | Memory system instructions + CORE.md content for each active scope |
+| 250 | `FocusedTaskFragment` | Currently focused task (if set) |
 | 350 | `SkillCatalogFragment` | Discovered skills with names and descriptions |
 | 450+ | User fragments | Custom Lua fragments from `~/.pecan/prompts/*.lua` |
+
+`MemoryFragment` reads `/memory/CORE.md`, `/memory/project/CORE.md`, and `/memory/team/CORE.md` directly at prompt composition time and inlines their content. No asynchronous injection is needed.
 
 ## Agent Skills
 
@@ -219,13 +224,15 @@ Each session is stored at `~/.pecan/sessions/{sessionID}/`:
 
 ## Agent Startup Flow
 
-1. Register built-in tools (`ToolManager.registerBuiltinTools()`)
-2. Load user Lua tools from `~/.pecan/tools/*.lua`
-3. Load hooks from `~/.pecan/hooks/*.lua`
-4. Discover skills from `~/.pecan/skills/` and `~/.agents/skills/`
-5. Register Lua tools from skill `scripts/` directories
-6. Register built-in prompt fragments
-7. Load user prompt fragments from `~/.pecan/prompts/*.lua`
-8. Connect to server via gRPC
-9. Send registration, compose system prompt, enter event loop
-10. Inject core memories asynchronously after registration
+1. Mount FUSE filesystems: `/memory` (gRPC-backed), `/skills` (gRPC-backed COW), `/project` (overlay: `/project-lower` + `/project-upper`) on OS threads to avoid cooperative thread pool starvation
+2. Register built-in tools (`ToolManager.registerBuiltinTools()`)
+3. Load user Lua tools from `~/.pecan/tools/*.lua`
+4. Load hooks from `~/.pecan/hooks/*.lua`
+5. Discover skills from `/skills/` and `~/.agents/skills/`
+6. Register Lua tools from skill `scripts/` directories
+7. Register built-in prompt fragments
+8. Load user prompt fragments from `~/.pecan/prompts/*.lua`
+9. Connect to server via gRPC
+10. Send registration; server responds with project/team context
+11. Compose system prompt (reads CORE.md files from FUSE at this point) and send to server context store
+12. Enter event loop

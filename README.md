@@ -75,7 +75,7 @@ Pecan is divided into three main components:
 
 ## Virtual Filesystems
 
-Pecan uses FUSE-T to expose several virtual filesystems inside every container. Rather than adding LLM tools for every capability, capabilities surface as files the agent can read and write with the same `read_file`, `write_file`, and `shell` tools it already knows.
+Pecan exposes several virtual filesystems inside every container via Linux FUSE. Rather than adding LLM tools for every capability, capabilities surface as files the agent can read and write with the same `read_file`, `write_file`, and `bash` tools it already knows.
 
 ### `/memory/` — Persistent Memory
 
@@ -83,51 +83,39 @@ Per-session, per-project, and per-team memories stored in SQLite. Memories are p
 
 ```
 /memory/
-  CORE.md       # injected into system prompt on every turn
-  NOTES.md      # general observations
-  project/      # shared across all agents on this project
-  team/         # shared across team members
+  CORE.md           # always present; contents included in every system prompt
+  NOTES.md          # any other tag (appears once written)
+  project/          # shared across all agents on this project
+  team/             # shared across team members
 ```
 
-Read with `cat`, search with `grep -r`, append to add, edit in-place to update. The skill at `/skills/memory/SKILL.md` explains the conventions.
+Read with `cat`, search with `grep -r`, append to add, edit in-place to update. Full instructions are in the system prompt — no skill activation needed.
 
 ### `/skills/` — Agent Skills
 
-A read-only catalog of skills mounted from `~/.pecan/skills/`. Each skill is a directory containing a `SKILL.md` instruction file and an optional `scripts/` directory of executable tools.
+A COW (copy-on-write) catalog of skills served from `~/.pecan/skills/` on the host. Each skill is a directory containing a `SKILL.md` instruction file and an optional `scripts/` directory of executable shell wrappers.
 
-Skills follow **progressive disclosure**: only names and descriptions appear in the system prompt. The agent reads `SKILL.md` to activate a skill and get its full instructions, then uses `activate_skill` to register it.
+Skills follow **progressive disclosure**: only names and descriptions appear in the system prompt catalog. The agent uses `activate_skill` to load a skill's full instructions into context when needed.
 
-Scripts inside `scripts/` are auto-exposed as executable commands. Any `.lua` scripts are wrapped in a shell shim that calls `pecan-agent invoke <name>`, so the agent can run any registered tool from the shell without it consuming a native LLM tool slot.
+Scripts in `scripts/` are executable from the bash tool. Shell scripts wrap `pecan-agent invoke <tool>` to expose any registered tool without it consuming an LLM tool slot.
 
-Built-in skills (`web/`, `dev/`, `memory/`) are created automatically on first run.
+Built-in skills (`web/`, `dev/`, `tasks/`, `triggers/`) are created automatically on first run.
 
 ### `/project/` — Copy-on-Write Project Overlay
 
-Each agent session gets a **copy-on-write view** of its project directory inspired by overlayfs / Google's srcfs. Reads are transparent — the agent sees the full project. Writes go to a per-session scratch layer (`/.run/overlay/<sessionID>/`); the actual project directory is never modified.
-
-A virtual `/.pecan/` directory inside the overlay exposes the changeset at all times:
-
-| Path | Content |
-|------|---------|
-| `/.pecan/diff` | Unified diff (lower vs upper), one block per changed file |
-| `/.pecan/changes` | `[A\|M\|D] <path>` for each changed file |
-| `/.pecan/status` | JSON summary with counts and timestamp |
-
-See [designs/overlay-filesystem.md](designs/overlay-filesystem.md) for the full design.
+Each agent session gets a **copy-on-write view** of its project directory. The lower layer is a read-only virtiofs mount of the host project directory; writes go to a per-container scratch directory (`/project-upper`). The actual project directory is never modified until an explicit merge.
 
 ## Built-in Tools
 
-The agent's native LLM tool count is kept small. Most capabilities come from the virtual filesystems and skills above, not from registered tools.
+The agent's native LLM tool count is intentionally small — 9 tools total. Most capabilities come from virtual filesystems and skills, not registered tools.
 
 | Tag | Tools | Description |
 |-----|-------|-------------|
-| **core** | `read_file`, `write_file`, `edit_file`, `search_files`, `shell` | File operations and command execution |
+| **core** | `read_file`, `write_file`, `append_file`, `edit_file`, `search_files`, `bash` | File operations and command execution |
 | **web** | `web_fetch`, `web_search` | Web access (proxied through server) |
-| **tasks** | `task_create`, `task_list`, `task_get`, `task_update`, `task_focus` | Task management with priorities, labels, dependencies |
-| **triggers** | `trigger_create`, `trigger_list`, `trigger_cancel` | Schedule one-shot or repeating instructions |
-| **skills** | `activate_skill` | Load Agent Skills instructions into context |
+| **skills** | `activate_skill` | Load a skill's full instructions into context |
 
-Tools tagged `invoke_only` (e.g. `http_request`, `create_lua_tool`) are registered in the tool manager but excluded from the LLM tool list. They're accessible to skill scripts via `pecan-agent invoke <tool> '<json>'`.
+Tools tagged `invoke_only` (`http_request`, `create_lua_tool`, task tools, trigger tools) are registered in the tool manager but not sent to the LLM. They are accessible to skill scripts via `pecan-agent invoke <tool> '<json>'`.
 
 ## Projects & Teams
 
@@ -139,24 +127,24 @@ Pecan supports organizing work across projects and teams with persistent stores 
 
 ### Changeset Workflow
 
-When an agent is done with a task, the changeset can be reviewed, applied, or queued for human review — all from the TUI:
+The changeset is the set of writes the agent has made to `/project/` that haven't yet been merged back to the host. All changeset commands are issued from the TUI:
 
 ```
-/changeset          # show colored unified diff + counts
-/changeset:status   # JSON summary
-/changeset:promote  # apply upper layer directly to project directory
-/changeset:discard  # wipe the scratch layer, start fresh
-/changeset:submit   # add to the merge queue for review
+/changeset [patterns]          # unified diff, optional glob filter (e.g. *.swift)
+/changeset:status [patterns]   # list changed files with add/modify/delete counts
+/changeset:discard [patterns]  # revert matching files (all if no pattern)
+/changeset:submit [note]       # merge the changeset into the project directory
 ```
 
-### Merge Queue
+`/changeset:submit` triggers the **merge engine**: changes are classified as clean or conflicting using a 3-way merge against the git HEAD recorded at container spawn time. Clean changes are applied immediately. Conflicts are sent to the agent for resolution using `diff3`-style markers; the engine retries up to 5 times before declaring failure.
 
-`/mergequeue` (alias `/mq`) manages changesets submitted for human or agent review:
+### Merge History
+
+`/mergequeue` (alias `/mq`) shows the history of submitted changesets:
 
 ```
-/mergequeue             # list pending entries
-/mq:approve <id>        # promote changeset to lower layer and mark approved
-/mq:reject <id>         # mark rejected
+/mq                    # list all merges
+/mq:list merging       # filter by status (merging / merged / failed)
 ```
 
 ## Extensibility
