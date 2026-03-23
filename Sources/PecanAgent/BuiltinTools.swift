@@ -298,7 +298,7 @@ public struct BashTool: PecanTool, Sendable {
 public struct TaskCreateTool: PecanTool, Sendable {
     public let name = "task_create"
     public let description = "Create a new task to track work. Returns the created task as JSON."
-    public let tags: Set<String> = ["tasks"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -344,7 +344,7 @@ public struct TaskCreateTool: PecanTool, Sendable {
 public struct TaskListTool: PecanTool, Sendable {
     public let name = "task_list"
     public let description = "List tasks. By default merges agent, team, and project tasks. Use scope to filter to a single level."
-    public let tags: Set<String> = ["tasks"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -420,7 +420,7 @@ public struct TaskListTool: PecanTool, Sendable {
 public struct TaskGetTool: PecanTool, Sendable {
     public let name = "task_get"
     public let description = "Get details of a specific task by ID."
-    public let tags: Set<String> = ["tasks"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -457,7 +457,7 @@ public struct TaskGetTool: PecanTool, Sendable {
 public struct TaskUpdateTool: PecanTool, Sendable {
     public let name = "task_update"
     public let description = "Update fields on an existing task. Only provided fields are changed."
-    public let tags: Set<String> = ["tasks"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -495,7 +495,7 @@ public struct TaskUpdateTool: PecanTool, Sendable {
 public struct TaskFocusTool: PecanTool, Sendable {
     public let name = "task_focus"
     public let description = "Set a task as the focused task shown in the UI chrome. Pass task_id 0 to unfocus all."
-    public let tags: Set<String> = ["tasks"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -845,7 +845,7 @@ public struct AppendFileTool: PecanTool, Sendable {
 public struct TriggerCreateTool: PecanTool, Sendable {
     public let name = "trigger_create"
     public let description = "Schedule a future instruction to yourself. One-shot by default; set interval_seconds for repeating."
-    public let tags: Set<String> = ["triggers"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -882,7 +882,7 @@ public struct TriggerCreateTool: PecanTool, Sendable {
 public struct TriggerListTool: PecanTool, Sendable {
     public let name = "trigger_list"
     public let description = "List scheduled triggers. Defaults to active triggers."
-    public let tags: Set<String> = ["triggers"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",
@@ -921,7 +921,7 @@ public struct TriggerListTool: PecanTool, Sendable {
 public struct TriggerCancelTool: PecanTool, Sendable {
     public let name = "trigger_cancel"
     public let description = "Cancel an active trigger."
-    public let tags: Set<String> = ["triggers"]
+    public let tags: Set<String> = ["invoke_only"]
     public let parametersJSONSchema = """
     {
         "type": "object",

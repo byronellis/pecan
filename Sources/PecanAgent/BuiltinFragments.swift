@@ -164,25 +164,6 @@ struct FocusedTaskFragment: PromptFragment, Sendable {
     }
 }
 
-// MARK: - ToolSummaryFragment (priority 300)
-
-struct ToolSummaryFragment: PromptFragment, Sendable {
-    let id = "builtin.tool_summary"
-    let name = "Tool Summary"
-    let priority = 300
-
-    func render(context: PromptContext) async -> String? {
-        let tools = await ToolManager.shared.allToolDescriptions(tags: context.activeToolTags)
-        guard !tools.isEmpty else { return nil }
-
-        var section = "## Available Tools"
-        for tool in tools {
-            section += "\n- **\(tool.name)**: \(tool.description)"
-        }
-        return section
-    }
-}
-
 // MARK: - SkillCatalogFragment (priority 350)
 
 struct SkillCatalogFragment: PromptFragment, Sendable {

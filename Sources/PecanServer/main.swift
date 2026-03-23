@@ -2037,6 +2037,97 @@ func ensureBuiltinSkills(skillsDir: String) {
             """,
             scripts: [("create_lua_tool", "#!/bin/sh\npecan-agent invoke create_lua_tool \"$@\"\n")]
         ),
+        BuiltinSkill(
+            dir: "tasks",
+            skillMD: """
+            ---
+            name: tasks
+            description: Create and manage tasks to track work across agent, team, and project scopes.
+            ---
+
+            ## Task Management
+
+            Tasks track work items with title, status, priority, severity, labels, and due date.
+            Scopes: `agent` (default, private), `team` (shared within team), `project` (shared across project).
+            Statuses: `todo`, `implementing`, `testing`, `preparing`, `done`, `blocked`.
+            Priority: 1 (critical) to 5 (low). Default 3.
+
+            ### Create a task
+            ```
+            task_create '{"title":"Fix the bug","priority":2,"scope":"agent"}'
+            task_create '{"title":"Deploy feature","description":"...","labels":"backend,deploy","scope":"project"}'
+            ```
+
+            ### List tasks
+            ```
+            task_list '{}'                              # all tasks across all scopes
+            task_list '{"status":"todo"}'               # filter by status
+            task_list '{"scope":"project"}'             # project-scoped only
+            task_list '{"label":"backend","status":"implementing"}'
+            ```
+
+            ### Get a task
+            ```
+            task_get '{"task_id":42}'
+            ```
+
+            ### Update a task
+            ```
+            task_update '{"task_id":42,"status":"done"}'
+            task_update '{"task_id":42,"title":"New title","priority":1,"labels":"urgent"}'
+            ```
+
+            ### Focus a task (highlights it in the UI)
+            ```
+            task_focus '{"task_id":42}'   # focus
+            task_focus '{"task_id":0}'    # unfocus
+            ```
+            """,
+            scripts: [
+                ("task_create",  "#!/bin/sh\npecan-agent invoke task_create \"$@\"\n"),
+                ("task_list",    "#!/bin/sh\npecan-agent invoke task_list \"$@\"\n"),
+                ("task_get",     "#!/bin/sh\npecan-agent invoke task_get \"$@\"\n"),
+                ("task_update",  "#!/bin/sh\npecan-agent invoke task_update \"$@\"\n"),
+                ("task_focus",   "#!/bin/sh\npecan-agent invoke task_focus \"$@\"\n"),
+            ]
+        ),
+        BuiltinSkill(
+            dir: "triggers",
+            skillMD: """
+            ---
+            name: triggers
+            description: Schedule future instructions to yourself — one-shot or repeating.
+            ---
+
+            ## Triggers
+
+            Triggers deliver an instruction to you at a scheduled time. Useful for reminders,
+            periodic check-ins, or deferred actions.
+
+            ### Schedule a trigger
+            ```
+            trigger_create '{"instruction":"Check if the build passed","fire_at":"2026-03-22T15:00:00Z"}'
+            trigger_create '{"instruction":"Send weekly summary","fire_at":"2026-03-24T09:00:00Z","interval_seconds":604800}'
+            ```
+            `interval_seconds` makes the trigger repeat after firing (0 or omitted = one-shot).
+
+            ### List active triggers
+            ```
+            trigger_list '{}'
+            trigger_list '{"status":"fired"}'    # or "cancelled"
+            ```
+
+            ### Cancel a trigger
+            ```
+            trigger_cancel '{"trigger_id":3}'
+            ```
+            """,
+            scripts: [
+                ("trigger_create", "#!/bin/sh\npecan-agent invoke trigger_create \"$@\"\n"),
+                ("trigger_list",   "#!/bin/sh\npecan-agent invoke trigger_list \"$@\"\n"),
+                ("trigger_cancel", "#!/bin/sh\npecan-agent invoke trigger_cancel \"$@\"\n"),
+            ]
+        ),
     ]
 
     for skill in builtins {
