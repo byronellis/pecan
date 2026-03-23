@@ -109,43 +109,43 @@ func main() async throws {
     let memFS = MemoryFUSEFilesystem()
     let skillsFS = SkillsFUSEFilesystem(upperDir: "/tmp/skills-upper")
 
-    // Mount COW overlay at /project if lower dir exists; upper dir is bind-mounted from host
+    // Mount COW overlay at /project if lower dir exists; upper dir is local to the container
     let lowerProjectDir = "/project-lower"
     let upperProjectDir = "/project-upper"
     if FileManager.default.fileExists(atPath: lowerProjectDir) {
-        Task.detached {
+        Thread.detachNewThread {
             do {
                 let fd = try fuseOpenDevice()
                 try fuseMountPoint("/project", fd: fd)
                 let fs = COWOverlayFilesystem(lower: lowerProjectDir, upper: upperProjectDir)
                 let server = FUSEServer(fd: fd, fs: fs)
                 logger.info("Mounted COW overlay at /project (lower: \(lowerProjectDir), upper: \(upperProjectDir))")
-                await server.run()
+                server.runOnThread()
             } catch {
                 logger.error("Failed to mount project overlay: \(error)")
             }
         }
     }
 
-    Task.detached {
+    Thread.detachNewThread {
         do {
             let fd = try fuseOpenDevice()
             try fuseMountPoint("/memory", fd: fd)
             let server = FUSEServer(fd: fd, fs: memFS)
             logger.info("Mounted memory FUSE at /memory")
-            await server.run()
+            server.runOnThread()
         } catch {
             logger.error("Failed to mount memory FUSE: \(error)")
         }
     }
 
-    Task.detached {
+    Thread.detachNewThread {
         do {
             let fd = try fuseOpenDevice()
             try fuseMountPoint("/skills", fd: fd)
             let server = FUSEServer(fd: fd, fs: skillsFS)
             logger.info("Mounted skills FUSE at /skills")
-            await server.run()
+            server.runOnThread()
         } catch {
             logger.error("Failed to mount skills FUSE: \(error)")
         }
@@ -579,6 +579,31 @@ func main() async throws {
 
             case .skillsResponse(let resp):
                 await SkillsClient.shared.handleResponse(resp)
+
+            case .changesetCommand(let cmd):
+                #if os(Linux)
+                let csResp = ChangesetHandler.handle(cmd: cmd)
+                var csEvent = Pecan_AgentEvent()
+                csEvent.changesetResponse = csResp
+                try? await writer.send(csEvent)
+                #endif
+
+            case .mergeConflictCommand(let cmd):
+                // Agent accepts its own version for all conflicts.
+                // The server's MergeEngine will apply the resolutions to the project directory
+                // and then discard those paths from the overlay, then retry the merge.
+                var resolution = Pecan_MergeResolutionResponse()
+                resolution.mergeID = cmd.mergeID
+                resolution.abort = false
+                resolution.resolved = cmd.conflicts.map { conflict in
+                    var f = Pecan_MergeResolvedFile()
+                    f.path = conflict.path
+                    f.content = conflict.agentContent.data(using: .utf8) ?? Data()
+                    return f
+                }
+                var resolveEvent = Pecan_AgentEvent()
+                resolveEvent.mergeResolution = resolution
+                try? await writer.send(resolveEvent)
 
             case .shutdown(let req):
                 logger.warning("Received shutdown command: \(req.reason)")

@@ -92,6 +92,8 @@ message AgentEvent {
         ExecResponse exec_response = 9;
         MemoryCommand memory_command = 10;
         SkillsCommand skills_command = 11;
+        ChangesetResponse changeset_response = 12;
+        MergeResolutionResponse merge_resolution = 13;
     }
 }
 
@@ -127,6 +129,48 @@ message SkillsResponse {
     string content = 2;     // JSON array for list_dir; file content for read_file
     bool is_executable = 3;
     string error_message = 4;
+}
+
+message ChangesetCommand {
+    string request_id = 1;
+    string action = 2;          // "list", "diff", "read_file", "discard"
+    string path = 3;            // used by read_file to specify which file
+    repeated string patterns = 4; // optional glob filters for list/diff/discard (e.g. "*.swift", "src/**")
+}
+
+message ChangesetResponse {
+    string request_id = 1;
+    string content = 2;     // JSON array of {path,type} for "list"; unified diff text for "diff"
+    bytes file_data = 3;    // raw file bytes for "read_file"
+    string error_message = 4;
+}
+
+// Sent from server to agent when a merge has conflicts the agent must resolve.
+message MergeConflictCommand {
+    string merge_id = 1;
+    int32 attempt = 2;
+    repeated MergeConflict conflicts = 3;
+}
+
+message MergeConflict {
+    string path = 1;
+    string base_content = 2;    // project file as of the agent's base commit (empty if new file)
+    string current_content = 3; // current project file (what someone else may have changed)
+    string agent_content = 4;   // what the agent wrote (upper dir)
+    string conflict_text = 5;   // pre-merged text with <<<< ==== >>>> markers
+}
+
+// Sent from agent back to server with resolved file contents.
+message MergeResolutionResponse {
+    string merge_id = 1;
+    repeated MergeResolvedFile resolved = 2;
+    bool abort = 3;             // true if agent declares the conflicts unresolvable
+    string message = 4;         // explanation from agent
+}
+
+message MergeResolvedFile {
+    string path = 1;
+    bytes content = 2;
 }
 
 message AgentRegistration {
@@ -199,6 +243,8 @@ message HostCommand {
         ExecCommand exec_command = 10;
         MemoryResponse memory_response = 11;
         SkillsResponse skills_response = 12;
+        ChangesetCommand changeset_command = 13;
+        MergeConflictCommand merge_conflict_command = 14;
     }
 }
 
@@ -276,6 +322,7 @@ message SessionUpdate {
     string session_id = 1;
     string project_name = 2;
     string team_name = 3;
+    string merge_status = 4;  // "merging", "merged", "failed", or "" for normal
 }
 
 // ==========================================
@@ -324,6 +371,7 @@ message LauncherRequest {
     oneof payload {
         LauncherSpawnRequest spawn = 1;
         LauncherTerminateRequest terminate = 2;
+        LauncherExecRequest exec = 3;
     }
 }
 
@@ -336,6 +384,11 @@ message LauncherSpawnRequest {
 
 message LauncherTerminateRequest {
     string session_id = 1;
+}
+
+message LauncherExecRequest {
+    string session_id = 1;
+    repeated string command = 2;
 }
 
 message LauncherResponse {

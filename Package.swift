@@ -15,6 +15,7 @@ let package = Package(
         .executable(name: "pecan", targets: ["PecanUI"]),
         .executable(name: "pecan-agent", targets: ["PecanAgent"]),
         .executable(name: "pecan-mlx-server", targets: ["PecanMLXServer"]),
+        .executable(name: "pecan-shell", targets: ["PecanShell"]),
     ],
     dependencies: [
         .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.23.0"),
@@ -79,6 +80,11 @@ let package = Package(
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "Logging", package: "swift-log"),
+            ]),
+        .executableTarget(
+            name: "PecanShell",
+            dependencies: [
+                "PecanShared",
             ]),
     ]
 )

@@ -76,14 +76,25 @@ func runLauncher() async throws {
 }
 
 @available(macOS 15.0, *)
-func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
-    defer { close(fd) }
+func writeLauncherResponse(fd: Int32, response: Pecan_LauncherResponse) {
+    do {
+        let responseData: [UInt8] = try response.serializedBytes()
+        var length = UInt32(responseData.count).bigEndian
+        _ = withUnsafeBytes(of: &length) { ptr in write(fd, ptr.baseAddress!, 4) }
+        _ = responseData.withUnsafeBufferPointer { ptr in write(fd, ptr.baseAddress!, ptr.count) }
+    } catch {
+        logger.error("Failed to encode response: \(error)")
+    }
+}
 
+@available(macOS 15.0, *)
+func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
     // Read 4-byte length prefix
     var lengthBytes = [UInt8](repeating: 0, count: 4)
     let headerRead = read(fd, &lengthBytes, 4)
     guard headerRead == 4 else {
         logger.warning("Failed to read request length")
+        close(fd)
         return
     }
     let messageLength = Int(UInt32(bigEndian: lengthBytes.withUnsafeBufferPointer {
@@ -102,6 +113,7 @@ func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
     }
     guard totalRead == messageLength else {
         logger.warning("Incomplete request: got \(totalRead) of \(messageLength) bytes")
+        close(fd)
         return
     }
 
@@ -121,6 +133,9 @@ func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
                 response.success = false
                 response.errorMessage = error.localizedDescription
             }
+            writeLauncherResponse(fd: fd, response: response)
+            close(fd)
+
         case .terminate(let req):
             logger.info("Terminate request for session \(req.sessionID)")
             response.sessionID = req.sessionID
@@ -132,27 +147,28 @@ func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
                 response.success = false
                 response.errorMessage = error.localizedDescription
             }
+            writeLauncherResponse(fd: fd, response: response)
+            close(fd)
+
+        case .exec(let req):
+            logger.info("Exec request for session \(req.sessionID): \(req.command)")
+            response.sessionID = req.sessionID
+            response.success = true
+            writeLauncherResponse(fd: fd, response: response)
+            // fd stays open — execShell relays stdio then closes it
+            await spawner.execShell(sessionID: req.sessionID, command: Array(req.command), socketFD: fd)
+
         case nil:
             logger.error("Empty launcher request")
             response.errorMessage = "Empty request payload"
+            writeLauncherResponse(fd: fd, response: response)
+            close(fd)
         }
     } catch {
         logger.error("Failed to decode request: \(error)")
         response.errorMessage = "Invalid request: \(error.localizedDescription)"
-    }
-
-    // Write length-prefixed response
-    do {
-        let responseData: [UInt8] = try response.serializedBytes()
-        var length = UInt32(responseData.count).bigEndian
-        _ = withUnsafeBytes(of: &length) { ptr in
-            write(fd, ptr.baseAddress!, 4)
-        }
-        _ = responseData.withUnsafeBufferPointer { ptr in
-            write(fd, ptr.baseAddress!, ptr.count)
-        }
-    } catch {
-        logger.error("Failed to encode response: \(error)")
+        writeLauncherResponse(fd: fd, response: response)
+        close(fd)
     }
 }
 

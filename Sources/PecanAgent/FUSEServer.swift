@@ -38,7 +38,9 @@ actor FUSEServer {
         self.fs = fs
     }
 
-    func run() async {
+    /// Run the FUSE event loop on the calling OS thread.
+    /// Use Thread.detachNewThread { server.runOnThread() } to avoid blocking the Swift cooperative thread pool.
+    nonisolated func runOnThread() {
         let bufSize = 1024 * 1024 // 1 MB
         let buf = UnsafeMutableRawPointer.allocate(byteCount: bufSize, alignment: 8)
         defer { buf.deallocate() }
@@ -48,13 +50,23 @@ actor FUSEServer {
             if bytesRead <= 0 { break }
 
             let data = Data(bytes: buf, count: bytesRead)
-            guard let hdr = readStruct(FUSEInHeader.self, from: data, offset: 0) else { continue }
+            let sema = DispatchSemaphore(value: 0)
+            Task {
+                await self.handleRequest(data: data)
+                sema.signal()
+            }
+            sema.wait()
+        }
+    }
+
+    private func handleRequest(data: Data) async {
+            guard let hdr = readStruct(FUSEInHeader.self, from: data, offset: 0) else { return }
             let headerSize = MemoryLayout<FUSEInHeader>.size
 
             guard let opcode = FUSEOpcode(rawValue: hdr.opcode) else {
                 let resp = buildResponse(unique: hdr.unique, error: -ENOSYS)
                 writeResponse(resp)
-                continue
+                return
             }
 
             switch opcode {
@@ -75,7 +87,7 @@ actor FUSEServer {
                 writeResponse(resp)
 
             case .forget:
-                guard let forgetIn = readStruct(FUSEForgetIn.self, from: data, offset: headerSize) else { continue }
+                guard let forgetIn = readStruct(FUSEForgetIn.self, from: data, offset: headerSize) else { return }
                 await fs.forget(nodeID: hdr.nodeid, nlookup: forgetIn.nlookup)
                 // No response for FORGET
 
@@ -102,7 +114,7 @@ actor FUSEServer {
             case .setattr:
                 guard let setattrIn = readStruct(FUSESetAttrIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let size: UInt64? = (setattrIn.valid & FATTR_SIZE) != 0 ? setattrIn.size : nil
                 let mode: UInt32? = (setattrIn.valid & FATTR_MODE) != 0 ? setattrIn.mode : nil
@@ -117,7 +129,7 @@ actor FUSEServer {
             case .opendir:
                 guard let openIn = readStruct(FUSEOpenIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let result = await fs.opendir(nodeID: hdr.nodeid, flags: openIn.flags)
                 switch result {
@@ -134,7 +146,7 @@ actor FUSEServer {
             case .readdir:
                 guard let readIn = readStruct(FUSEReadIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let result = await fs.readdir(nodeID: hdr.nodeid, fh: readIn.fh, offset: readIn.offset, size: readIn.size)
                 switch result {
@@ -147,7 +159,7 @@ actor FUSEServer {
             case .releasedir:
                 guard let releaseIn = readStruct(FUSEReleaseIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: 0))
-                    continue
+                    return
                 }
                 await fs.releasedir(nodeID: hdr.nodeid, fh: releaseIn.fh)
                 writeResponse(buildResponse(unique: hdr.unique, error: 0))
@@ -155,7 +167,7 @@ actor FUSEServer {
             case .open:
                 guard let openIn = readStruct(FUSEOpenIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let result = await fs.open(nodeID: hdr.nodeid, flags: openIn.flags)
                 switch result {
@@ -172,7 +184,7 @@ actor FUSEServer {
             case .read:
                 guard let readIn = readStruct(FUSEReadIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let result = await fs.read(nodeID: hdr.nodeid, fh: readIn.fh, offset: readIn.offset, size: readIn.size)
                 switch result {
@@ -185,7 +197,7 @@ actor FUSEServer {
             case .write:
                 guard let writeIn = readStruct(FUSEWriteIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let writeDataOffset = headerSize + MemoryLayout<FUSEWriteIn>.size
                 let writeData = data.dropFirst(writeDataOffset)
@@ -204,7 +216,7 @@ actor FUSEServer {
             case .create:
                 guard let createIn = readStruct(FUSECreateIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let nameData = data.dropFirst(headerSize + MemoryLayout<FUSECreateIn>.size)
                 let name = cStringFromData(nameData)
@@ -232,7 +244,7 @@ actor FUSEServer {
             case .mkdir:
                 guard let mkdirIn = readStruct(FUSEMkdirIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 let nameData = data.dropFirst(headerSize + MemoryLayout<FUSEMkdirIn>.size)
                 let name = cStringFromData(nameData)
@@ -269,7 +281,7 @@ actor FUSEServer {
             case .rename:
                 guard let renameIn = readStruct(FUSERenameIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: -EIO))
-                    continue
+                    return
                 }
                 // After the FUSERenameIn struct, there are two null-terminated strings: oldname, newname
                 let namesOffset = headerSize + MemoryLayout<FUSERenameIn>.size
@@ -286,7 +298,7 @@ actor FUSEServer {
             case .release:
                 guard let releaseIn = readStruct(FUSEReleaseIn.self, from: data, offset: headerSize) else {
                     writeResponse(buildResponse(unique: hdr.unique, error: 0))
-                    continue
+                    return
                 }
                 await fs.release(nodeID: hdr.nodeid, fh: releaseIn.fh)
                 writeResponse(buildResponse(unique: hdr.unique, error: 0))
@@ -299,10 +311,9 @@ actor FUSEServer {
             case .mknod:
                 writeResponse(buildResponse(unique: hdr.unique, error: -ENOSYS))
             }
-        }
     }
 
-    private func writeResponse(_ data: Data) {
+    private nonisolated func writeResponse(_ data: Data) {
         data.withUnsafeBytes { ptr in
             _ = write(fd, ptr.baseAddress!, data.count)
         }

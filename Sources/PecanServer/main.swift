@@ -27,8 +27,11 @@ actor SessionManager {
     // Agent idle/busy tracking for trigger delivery
     private var agentBusy: [String: Bool] = [:]
 
-    // Overlay upper dirs for changeset tracking: sessionID -> host-side upper dir path
-    private var overlayUpperDirs: [String: String] = [:]
+    // Merge state: sessionID -> mergeID (non-nil = agent is in merge mode)
+    private var mergingIDs: [String: String] = [:]
+
+    // Git base commit recorded at container spawn, used for 3-way merge conflict detection
+    private var gitBaseCommits: [String: String] = [:]
 
     func registerUI(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>) {
         uiStreams[sessionID] = stream
@@ -125,6 +128,38 @@ actor SessionManager {
         } else {
             logger.warning("No UI stream found for session \(sessionID)")
         }
+    }
+
+    func hasAgent(sessionID: String) -> Bool {
+        agentStreams[sessionID] != nil
+    }
+
+    func isMerging(sessionID: String) -> Bool {
+        mergingIDs[sessionID] != nil
+    }
+
+    func setMerging(sessionID: String, mergeID: String) {
+        mergingIDs[sessionID] = mergeID
+    }
+
+    func clearMerging(sessionID: String, mergeStatus: String) {
+        mergingIDs.removeValue(forKey: sessionID)
+        // Notify UI of the new merge status
+        Task {
+            try? await self.sendSessionUpdateToUI(sessionID: sessionID, mergeStatus: mergeStatus)
+        }
+    }
+
+    func setGitBase(sessionID: String, commit: String?) {
+        if let commit = commit {
+            gitBaseCommits[sessionID] = commit
+        } else {
+            gitBaseCommits.removeValue(forKey: sessionID)
+        }
+    }
+
+    func gitBase(sessionID: String) -> String? {
+        gitBaseCommits[sessionID]
     }
 
     func sendToAgent(sessionID: String, command: Pecan_HostCommand) async throws {
@@ -476,7 +511,7 @@ actor SessionManager {
         return String(data: data, encoding: .utf8) ?? "{}"
     }
 
-    func sendSessionUpdateToUI(sessionID: String) async throws {
+    func sendSessionUpdateToUI(sessionID: String, mergeStatus: String = "") async throws {
         let projectName = sessionProjects[sessionID] ?? ""
         let teamName = sessionTeams[sessionID] ?? ""
         var srvMsg = Pecan_ServerMessage()
@@ -484,6 +519,7 @@ actor SessionManager {
         update.sessionID = sessionID
         update.projectName = projectName
         update.teamName = teamName
+        update.mergeStatus = mergeStatus
         srvMsg.sessionUpdate = update
         try await sendToUI(sessionID: sessionID, message: srvMsg)
     }
@@ -546,33 +582,14 @@ actor SessionManager {
         try store.completeTriggerDelivery(id: trigger.id!)
     }
 
-    func setOverlayUpperDir(sessionID: String, dir: String) {
-        overlayUpperDirs[sessionID] = dir
-    }
-
-    func overlayDirs(sessionID: String) -> (lower: String, upper: String)? {
-        guard let upper = overlayUpperDirs[sessionID],
-              let projectStore = getProjectStore(sessionID: sessionID),
-              let lower = projectStore.directory else { return nil }
-        return (lower: lower, upper: upper)
-    }
-
-    func discardOverlay(sessionID: String) throws {
-        guard let upper = overlayUpperDirs[sessionID] else { return }
-        let items = try FileManager.default.contentsOfDirectory(atPath: upper)
-        for item in items {
-            try FileManager.default.removeItem(atPath: "\(upper)/\(item)")
-        }
-        logger.info("Discarded overlay upper layer for session \(sessionID)")
-    }
-
     func removeSession(sessionID: String) async {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
         sessionStores.removeValue(forKey: sessionID)
         sessionProjects.removeValue(forKey: sessionID)
         sessionTeams.removeValue(forKey: sessionID)
-        overlayUpperDirs.removeValue(forKey: sessionID)
+        mergingIDs.removeValue(forKey: sessionID)
+        gitBaseCommits.removeValue(forKey: sessionID)
 
         do {
             try await SpawnerFactory.shared.terminate(sessionID: sessionID)
@@ -603,18 +620,12 @@ actor SessionManager {
         if let projectStore = getProjectStore(sessionID: sessionID) {
             if let dir = projectStore.directory {
                 shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
+                // Record git HEAD for 3-way merge conflict detection at submit time
+                setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
             }
         }
         if let teamStore = getTeamStore(sessionID: sessionID) {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
-        }
-
-        // Mount overlay upper dir so agent can write changesets to /project-upper
-        if let projectStore = getProjectStore(sessionID: sessionID), projectStore.directory != nil {
-            let upperDir = "/tmp/pecan-overlay/\(sessionID)"
-            try FileManager.default.createDirectory(atPath: upperDir, withIntermediateDirectories: true)
-            shareMounts.append(MountSpec(source: upperDir, destination: "/project-upper", readOnly: false))
-            setOverlayUpperDir(sessionID: sessionID, dir: upperDir)
         }
 
         // Clear stale agent stream so the new agent can register
@@ -718,6 +729,7 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             // Mount project directory as read-only lower layer; agent mounts COW overlay at /project
                             if let dir = projectStore.directory {
                                 shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
+                                await SessionManager.shared.setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
                             }
 
                             // If no team specified, use default team
@@ -750,15 +762,6 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     started.teamName = teamName
                     response.sessionStarted = started
                     try await responseStream.send(response)
-
-                    // Mount overlay upper dir so agent can write changesets to /project-upper
-                    if let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID),
-                       projectStore.directory != nil {
-                        let upperDir = "/tmp/pecan-overlay/\(sessionID)"
-                        try FileManager.default.createDirectory(atPath: upperDir, withIntermediateDirectories: true)
-                        shareMounts.append(MountSpec(source: upperDir, destination: "/project-upper", readOnly: false))
-                        await SessionManager.shared.setOverlayUpperDir(sessionID: sessionID, dir: upperDir)
-                    }
 
                     // Spawn the agent using the Pluggable VM architecture
                     do {
@@ -951,14 +954,14 @@ extension ClientServiceProvider {
                 try await sendOutput("Project '\(name)' not found. Available: \(available.joined(separator: ", "))")
                 return
             }
+            if (try? await Self.hasOpenChangeset(sessionID: sessionID)) == true {
+                try await sendOutput("Cannot switch projects: there is an open changeset. Submit (/changeset:submit) or discard (/changeset:discard) it first.")
+                return
+            }
             do {
                 let store = try ProjectStore(name: name)
                 await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: name, store: store)
-                // Clear team association since we switched projects
                 await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
-                // No container restart needed — /project and /memory/project are bind mounts;
-                // the agent will see the new directories on next access after container restart.
-                // For now, restart the container so the new bind mounts take effect.
                 logger.info("Restarting container for project switch to '\(name)'...")
                 try await SessionManager.shared.restartContainer(sessionID: sessionID)
                 try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
@@ -1051,6 +1054,10 @@ extension ClientServiceProvider {
                 try await sendOutput("Team '\(name)' not found in project '\(projectName)'. Available: \(available.joined(separator: ", "))")
                 return
             }
+            if (try? await Self.hasOpenChangeset(sessionID: sessionID)) == true {
+                try await sendOutput("Cannot change teams: there is an open changeset. Submit (/changeset:submit) or discard (/changeset:discard) it first.")
+                return
+            }
             do {
                 let store = try TeamStore(teamName: name, projectName: projectName)
                 await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: name, projectName: projectName, store: store)
@@ -1064,6 +1071,10 @@ extension ClientServiceProvider {
         case "leave":
             guard let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID) else {
                 try await sendOutput("Not currently in a team.")
+                return
+            }
+            if (try? await Self.hasOpenChangeset(sessionID: sessionID)) == true {
+                try await sendOutput("Cannot leave team: there is an open changeset. Submit (/changeset:submit) or discard (/changeset:discard) it first.")
                 return
             }
             await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
@@ -1323,79 +1334,82 @@ extension ClientServiceProvider {
         }
     }
 
-    static func handleChangesetCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
-        guard let dirs = await SessionManager.shared.overlayDirs(sessionID: sessionID) else {
-            try await sendOutput("No overlay filesystem for this session. Is a project mounted?")
+    static func handleChangesetCommand(sessionID: String, cmd: ParsedCommand, sendOutput: @escaping (String) async throws -> Void) async throws {
+        guard let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID),
+              projectStore.directory != nil else {
+            try await sendOutput("No project mounted for this session.")
             return
         }
 
+        // Parse any trailing args as glob patterns
+        let patterns = cmd.args.split(separator: " ").map(String.init).filter { !$0.isEmpty }
+
         switch cmd.subcmd {
         case "diff", nil:
-            let changes = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower)
-            let added = changes.filter { $0.hasPrefix("A ") }.count
-            let modified = changes.filter { $0.hasPrefix("M ") }.count
-            let deleted = changes.filter { $0.hasPrefix("D ") }.count
-
-            if added + modified + deleted == 0 {
-                try await sendOutput("No changes in current overlay.")
+            let resp = try await ChangesetClient.shared.request(sessionID: sessionID, action: "diff", patterns: patterns)
+            if resp.content.isEmpty {
+                let scope = patterns.isEmpty ? "overlay" : "'\(patterns.joined(separator: " "))'"
+                try await sendOutput("No changes in \(scope).")
                 return
             }
-
-            var out = "\u{1b}[1mChangeset\u{1b}[0m  \u{1b}[32m+\(added)\u{1b}[0m \u{1b}[33m~\(modified)\u{1b}[0m \u{1b}[31m-\(deleted)\u{1b}[0m\r\n\r\n"
-            for line in changes {
-                let prefix = String(line.prefix(1))
-                let path = String(line.dropFirst(2))
-                switch prefix {
-                case "A": out += "  \u{1b}[32m+ \(path)\u{1b}[0m\r\n"
-                case "M": out += "  \u{1b}[33m~ \(path)\u{1b}[0m\r\n"
-                case "D": out += "  \u{1b}[31m- \(path)\u{1b}[0m\r\n"
-                default:  out += "  \(line)\r\n"
-                }
-            }
-
-            let diff = computeUnifiedDiff(upperDir: dirs.upper, lowerDir: dirs.lower, changes: changes)
-            if !diff.isEmpty {
-                out += "\r\n"
-                for line in diff.components(separatedBy: "\n") {
-                    if line.hasPrefix("+++") || line.hasPrefix("---") {
-                        out += "\u{1b}[1m\(line)\u{1b}[0m\r\n"
-                    } else if line.hasPrefix("@@") {
-                        out += "\u{1b}[36m\(line)\u{1b}[0m\r\n"
-                    } else if line.hasPrefix("+") {
-                        out += "\u{1b}[32m\(line)\u{1b}[0m\r\n"
-                    } else if line.hasPrefix("-") {
-                        out += "\u{1b}[31m\(line)\u{1b}[0m\r\n"
-                    } else {
-                        out += "\(line)\r\n"
-                    }
+            var out = ""
+            for line in resp.content.components(separatedBy: "\n") {
+                if line.hasPrefix("+++") || line.hasPrefix("---") {
+                    out += "\u{1b}[1m\(line)\u{1b}[0m\r\n"
+                } else if line.hasPrefix("@@") {
+                    out += "\u{1b}[36m\(line)\u{1b}[0m\r\n"
+                } else if line.hasPrefix("+") {
+                    out += "\u{1b}[32m\(line)\u{1b}[0m\r\n"
+                } else if line.hasPrefix("-") {
+                    out += "\u{1b}[31m\(line)\u{1b}[0m\r\n"
+                } else {
+                    out += "\(line)\r\n"
                 }
             }
             try await sendOutput(out)
 
         case "status":
-            let changes = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower)
-            let added = changes.filter { $0.hasPrefix("A ") }.count
-            let modified = changes.filter { $0.hasPrefix("M ") }.count
-            let deleted = changes.filter { $0.hasPrefix("D ") }.count
+            let resp = try await ChangesetClient.shared.request(sessionID: sessionID, action: "list", patterns: patterns)
+            let changes = parseChangeList(resp.content)
+            let added    = changes.filter { $0.type == "added" }.count
+            let modified = changes.filter { $0.type == "modified" }.count
+            let deleted  = changes.filter { $0.type == "deleted" }.count
             let total = added + modified + deleted
-            try await sendOutput("{\"added\":\(added),\"modified\":\(modified),\"deleted\":\(deleted),\"total\":\(total)}")
-
-        case "promote":
-            let promoted = try promoteOverlay(upperDir: dirs.upper, lowerDir: dirs.lower)
-            if promoted == 0 {
-                try await sendOutput("Nothing to promote — overlay is clean.")
-            } else {
-                try await SessionManager.shared.discardOverlay(sessionID: sessionID)
-                try await sendOutput("Promoted \(promoted) change(s) to project directory.")
+            if total == 0 {
+                let scope = patterns.isEmpty ? "overlay" : "'\(patterns.joined(separator: " "))'"
+                try await sendOutput("No changes in \(scope).")
+                return
             }
+            var out = "\u{1b}[1mChangeset\u{1b}[0m  \u{1b}[32m+\(added)\u{1b}[0m \u{1b}[33m~\(modified)\u{1b}[0m \u{1b}[31m-\(deleted)\u{1b}[0m\r\n\r\n"
+            for c in changes {
+                switch c.type {
+                case "added":    out += "  \u{1b}[32m+ \(c.path)\u{1b}[0m\r\n"
+                case "modified": out += "  \u{1b}[33m~ \(c.path)\u{1b}[0m\r\n"
+                case "deleted":  out += "  \u{1b}[31m- \(c.path)\u{1b}[0m\r\n"
+                default:         out += "  \(c.path)\r\n"
+                }
+            }
+            try await sendOutput(out)
 
         case "discard":
-            let count = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower).count
-            try await SessionManager.shared.discardOverlay(sessionID: sessionID)
-            try await sendOutput("Discarded \(count) change(s). Overlay is now clean.")
+            let listResp = try await ChangesetClient.shared.request(sessionID: sessionID, action: "list", patterns: patterns)
+            let count = parseChangeList(listResp.content).count
+            guard count > 0 else {
+                let scope = patterns.isEmpty ? "overlay" : "'\(patterns.joined(separator: " "))'"
+                try await sendOutput("No changes in \(scope).")
+                return
+            }
+            _ = try await ChangesetClient.shared.request(sessionID: sessionID, action: "discard", patterns: patterns)
+            let scope = patterns.isEmpty ? "Overlay is now clean." : "\(count) matching change(s) discarded."
+            try await sendOutput("Discarded \(count) change(s). \(scope)")
 
         case "submit":
-            let changes = overlayChanges(upperDir: dirs.upper, lowerDir: dirs.lower)
+            guard !(await SessionManager.shared.isMerging(sessionID: sessionID)) else {
+                try await sendOutput("A merge is already in progress for this session.")
+                return
+            }
+            let listResp = try await ChangesetClient.shared.request(sessionID: sessionID, action: "list")
+            let changes = parseChangeList(listResp.content)
             guard !changes.isEmpty else {
                 try await sendOutput("Nothing to submit — overlay is clean.")
                 return
@@ -1403,120 +1417,81 @@ extension ClientServiceProvider {
             let note = cmd.args.isEmpty ? "" : cmd.args
             let store = await SessionManager.shared.getStore(sessionID: sessionID)
             let agentName = (try? store?.name) ?? sessionID
-            let projectStore = await SessionManager.shared.getProjectStore(sessionID: sessionID)
-            let projectName = (try? projectStore?.name) ?? ""
-            let entry = try await MergeQueueStore.shared.submit(
-                sessionID: sessionID, agentName: agentName,
-                projectName: projectName, note: note)
-            try await sendOutput("Submitted changeset #\(entry.id) (\(changes.count) change(s)) to merge queue.")
+            let projectName = (try? projectStore.name) ?? ""
+            guard let projectDir = projectStore.directory else {
+                try await sendOutput("Project has no directory configured — cannot merge.")
+                return
+            }
+
+            let mergeID = UUID().uuidString
+            _ = try await MergeQueueStore.shared.begin(
+                mergeID: mergeID, sessionID: sessionID,
+                agentName: agentName, projectName: projectName, note: note)
+            await SessionManager.shared.setMerging(sessionID: sessionID, mergeID: mergeID)
+            try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID, mergeStatus: "merging")
+            try await sendOutput("Merging \(changes.count) change(s) into project '\(projectName)'...")
+
+            let gitBase = await SessionManager.shared.gitBase(sessionID: sessionID)
+            let capturedSessionID = sessionID
+            Task.detached {
+                await MergeEngine.run(
+                    sessionID: capturedSessionID,
+                    mergeID: mergeID,
+                    projectDir: projectDir,
+                    gitBase: gitBase,
+                    sendOutput: { msg in
+                        var srvMsg = Pecan_ServerMessage()
+                        var out = Pecan_AgentOutput()
+                        out.sessionID = capturedSessionID
+                        out.text = msg
+                        srvMsg.agentOutput = out
+                        try await SessionManager.shared.sendToUI(sessionID: capturedSessionID, message: srvMsg)
+                    }
+                )
+            }
 
         default:
             try await sendOutput("""
                 Usage:
-                  /changeset            Show changes list and unified diff
-                  /changeset:diff       Same as above
-                  /changeset:status     JSON summary of changes
-                  /changeset:promote    Apply changes to project directory directly
-                  /changeset:discard    Wipe all changes from overlay
-                  /changeset:submit [note]  Submit to merge queue for review
+                  /changeset [patterns]              Unified diff (optional glob filters)
+                  /changeset:diff [patterns]         Same as above
+                  /changeset:status [patterns]       List changed files with counts
+                  /changeset:discard [patterns]      Discard matching changes (all if no pattern)
+                  /changeset:submit [note]           Submit to merge queue for review
+                Examples:
+                  /changeset:diff *.swift            Diff only Swift files
+                  /changeset:status src/**           Status of src/ subtree
+                  /changeset:discard README.md       Revert a single file
                 """)
         }
     }
 
-    /// Walk the upper dir and return change lines: "A path", "M path", "D path" (sorted).
-    private static func overlayChanges(upperDir: String, lowerDir: String) -> [String] {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(atPath: upperDir) else { return [] }
-        var changes: [String] = []
-        while let rel = enumerator.nextObject() as? String {
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: "\(upperDir)/\(rel)", isDirectory: &isDir)
-            if isDir.boolValue { continue }
-            let fileName = (rel as NSString).lastPathComponent
-            if fileName.hasPrefix(".wh.") {
-                let dir = (rel as NSString).deletingLastPathComponent
-                let target = String(fileName.dropFirst(4))
-                let path = dir.isEmpty ? target : "\(dir)/\(target)"
-                changes.append("D \(path)")
-            } else if fm.fileExists(atPath: "\(lowerDir)/\(rel)") {
-                changes.append("M \(rel)")
-            } else {
-                changes.append("A \(rel)")
-            }
+    /// Returns true if the session has an active agent with a non-empty overlay changeset.
+    static func hasOpenChangeset(sessionID: String) async throws -> Bool {
+        guard await SessionManager.shared.getProjectStore(sessionID: sessionID)?.directory != nil else {
+            return false
         }
-        return changes.sorted()
+        guard await SessionManager.shared.hasAgent(sessionID: sessionID) else {
+            return false
+        }
+        let resp = try await ChangesetClient.shared.request(sessionID: sessionID, action: "list")
+        return !parseChangeList(resp.content).isEmpty
     }
 
-    /// Compute a unified diff of changes in the upper dir vs the lower dir.
-    private static func computeUnifiedDiff(upperDir: String, lowerDir: String, changes: [String]) -> String {
-        var parts: [String] = []
-        for line in changes {
-            let kind = String(line.prefix(1))
-            let path = String(line.dropFirst(2))
-            switch kind {
-            case "A":
-                let content = (try? String(contentsOfFile: "\(upperDir)/\(path)", encoding: .utf8)) ?? ""
-                let lines = content.components(separatedBy: "\n")
-                var d = "--- /dev/null\n+++ b/\(path)\n@@ -0,0 +1,\(lines.count) @@\n"
-                for l in lines { d += "+\(l)\n" }
-                parts.append(d)
-            case "D":
-                let content = (try? String(contentsOfFile: "\(lowerDir)/\(path)", encoding: .utf8)) ?? ""
-                let lines = content.components(separatedBy: "\n")
-                var d = "--- a/\(path)\n+++ /dev/null\n@@ -1,\(lines.count) +0,0 @@\n"
-                for l in lines { d += "-\(l)\n" }
-                parts.append(d)
-            case "M":
-                let proc = Process()
-                proc.executableURL = URL(fileURLWithPath: "/usr/bin/diff")
-                proc.arguments = ["-u",
-                                  "--label", "a/\(path)", "\(lowerDir)/\(path)",
-                                  "--label", "b/\(path)", "\(upperDir)/\(path)"]
-                let pipe = Pipe()
-                proc.standardOutput = pipe
-                proc.standardError = FileHandle.standardError
-                try? proc.run()
-                proc.waitUntilExit()
-                if let d = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8), !d.isEmpty {
-                    parts.append(d)
-                }
-            default: break
-            }
-        }
-        return parts.joined(separator: "\n")
+    private struct ChangeEntry {
+        let path: String
+        let type: String
     }
 
-    /// Copy upper layer files to lower layer (promote). Returns count of promoted items.
-    private static func promoteOverlay(upperDir: String, lowerDir: String) throws -> Int {
-        let fm = FileManager.default
-        guard let enumerator = fm.enumerator(atPath: upperDir) else { return 0 }
-        var count = 0
-        while let rel = enumerator.nextObject() as? String {
-            var isDir: ObjCBool = false
-            fm.fileExists(atPath: "\(upperDir)/\(rel)", isDirectory: &isDir)
-            if isDir.boolValue { continue }
-
-            let fileName = (rel as NSString).lastPathComponent
-            if fileName.hasPrefix(".wh.") {
-                // Whiteout — delete corresponding lower file
-                let dir = (rel as NSString).deletingLastPathComponent
-                let target = String(fileName.dropFirst(4))
-                let lowerTarget = dir.isEmpty ? "\(lowerDir)/\(target)" : "\(lowerDir)/\(dir)/\(target)"
-                if fm.fileExists(atPath: lowerTarget) {
-                    try fm.removeItem(atPath: lowerTarget)
-                    count += 1
-                }
-            } else {
-                // Regular file — copy to lower
-                let dstPath = "\(lowerDir)/\(rel)"
-                let dstDir = (dstPath as NSString).deletingLastPathComponent
-                try fm.createDirectory(atPath: dstDir, withIntermediateDirectories: true)
-                if fm.fileExists(atPath: dstPath) { try fm.removeItem(atPath: dstPath) }
-                try fm.copyItem(atPath: "\(upperDir)/\(rel)", toPath: dstPath)
-                count += 1
-            }
+    private static func parseChangeList(_ json: String) -> [ChangeEntry] {
+        guard let data = json.data(using: .utf8),
+              let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: String]] else {
+            return []
         }
-        return count
+        return arr.compactMap { dict in
+            guard let path = dict["path"], let type = dict["type"] else { return nil }
+            return ChangeEntry(path: path, type: type)
+        }
     }
 
     static func handleMergeQueueCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
@@ -1525,73 +1500,34 @@ extension ClientServiceProvider {
             let statusFilter = cmd.args.isEmpty ? nil : cmd.args
             let entries = try await MergeQueueStore.shared.list(status: statusFilter)
             if entries.isEmpty {
-                try await sendOutput("Merge queue is empty\(statusFilter.map { " (status: \($0))" } ?? "").")
+                try await sendOutput("Merge history is empty\(statusFilter.map { " (status: \($0))" } ?? "").")
                 return
             }
-            var out = "\u{1b}[1mMerge Queue\u{1b}[0m\r\n\r\n"
+            var out = "\u{1b}[1mMerge History\u{1b}[0m\r\n\r\n"
             for e in entries {
                 let statusColor: String
                 switch e.status {
-                case "pending":  statusColor = "\u{1b}[33m"
-                case "approved": statusColor = "\u{1b}[32m"
-                case "rejected": statusColor = "\u{1b}[31m"
+                case "merging":  statusColor = "\u{1b}[33m"
+                case "merged":   statusColor = "\u{1b}[32m"
+                case "failed":   statusColor = "\u{1b}[31m"
                 default:         statusColor = "\u{1b}[0m"
                 }
                 let project = e.projectName.isEmpty ? "" : " [\(e.projectName)]"
                 let note = e.note.isEmpty ? "" : " — \(e.note)"
-                out += "  \u{1b}[1m#\(e.id)\u{1b}[0m \(statusColor)\(e.status)\u{1b}[0m  \(e.agentName)\(project)\(note)\r\n"
-                out += "       submitted \(e.submittedAt)\r\n"
+                out += "  \(statusColor)\(e.status)\u{1b}[0m  \(e.agentName)\(project)\(note)\r\n"
+                out += "       submitted \(e.submittedAt)"
+                if let resolved = e.resolvedAt { out += "  resolved \(resolved)" }
+                if !e.resultMessage.isEmpty { out += "\r\n       \(e.resultMessage)" }
+                out += "\r\n"
             }
-            out += "\r\nUse /mq:approve <id> or /mq:reject <id>"
             try await sendOutput(out)
-
-        case "approve":
-            guard let id = Int64(cmd.args.trimmingCharacters(in: .whitespaces)) else {
-                try await sendOutput("Usage: /mq:approve <id>")
-                return
-            }
-            guard let entry = try await MergeQueueStore.shared.get(id: id) else {
-                try await sendOutput("No merge queue entry #\(id).")
-                return
-            }
-            guard entry.status == "pending" else {
-                try await sendOutput("Entry #\(id) is already \(entry.status).")
-                return
-            }
-            // Promote the overlay
-            guard let dirs = await SessionManager.shared.overlayDirs(sessionID: entry.sessionID) else {
-                try await sendOutput("Session \(entry.sessionID) has no active overlay — cannot promote.")
-                return
-            }
-            let promoted = try promoteOverlay(upperDir: dirs.upper, lowerDir: dirs.lower)
-            try await SessionManager.shared.discardOverlay(sessionID: entry.sessionID)
-            try await MergeQueueStore.shared.resolve(id: id, status: "approved")
-            try await sendOutput("Approved #\(id): promoted \(promoted) change(s) to project directory.")
-
-        case "reject":
-            guard let id = Int64(cmd.args.trimmingCharacters(in: .whitespaces)) else {
-                try await sendOutput("Usage: /mq:reject <id>")
-                return
-            }
-            guard let entry = try await MergeQueueStore.shared.get(id: id) else {
-                try await sendOutput("No merge queue entry #\(id).")
-                return
-            }
-            guard entry.status == "pending" else {
-                try await sendOutput("Entry #\(id) is already \(entry.status).")
-                return
-            }
-            try await MergeQueueStore.shared.resolve(id: id, status: "rejected")
-            try await sendOutput("Rejected #\(id). The agent's overlay is unchanged.")
 
         default:
             try await sendOutput("""
                 Usage:
-                  /mergequeue           List all queue entries
+                  /mergequeue           List merge history
                   /mq                   Same
-                  /mq:list [status]     List filtered by status (pending/approved/rejected)
-                  /mq:approve <id>      Approve and promote changeset to project
-                  /mq:reject <id>       Reject changeset (overlay unchanged)
+                  /mq:list [status]     Filter by status (merging/merged/failed)
                 """)
         }
     }
@@ -1863,6 +1799,12 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     var hostCmd = Pecan_HostCommand()
                     hostCmd.skillsResponse = reply
                     try await responseStream.send(hostCmd)
+
+                case .changesetResponse(let resp):
+                    await ChangesetClient.shared.handleResponse(resp)
+
+                case .mergeResolution(let resp):
+                    await MergeConflictClient.shared.handleResponse(resp)
 
                 case nil:
                     break

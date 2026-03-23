@@ -24,6 +24,52 @@ public final class FileWriter: Writer, @unchecked Sendable {
     }
 }
 
+/// A Writer that logs each write call before delegating to an inner writer.
+final class LoggingWriter: Writer, @unchecked Sendable {
+    private let inner: any Writer
+    private let sessionID: String
+
+    init(inner: any Writer, sessionID: String) {
+        self.inner = inner
+        self.sessionID = sessionID
+    }
+
+    func write(_ data: Data) throws {
+        logger.info("execShell[\(sessionID)]: stdout write \(data.count) bytes")
+        try inner.write(data)
+    }
+
+    func close() throws {
+        logger.info("execShell[\(sessionID)]: stdout closed")
+        try inner.close()
+    }
+}
+
+/// A ReaderStream backed by a raw file descriptor (e.g. a socket).
+final class SocketReaderStream: ReaderStream, @unchecked Sendable {
+    private let fd: Int32
+
+    init(fd: Int32) {
+        self.fd = fd
+    }
+
+    func stream() -> AsyncStream<Data> {
+        AsyncStream { continuation in
+            Task.detached {
+                let bufSize = 4096
+                let buf = UnsafeMutableRawPointer.allocate(byteCount: bufSize, alignment: 1)
+                defer { buf.deallocate() }
+                while true {
+                    let n = read(self.fd, buf, bufSize)
+                    if n <= 0 { break }
+                    continuation.yield(Data(bytes: buf, count: n))
+                }
+                continuation.finish()
+            }
+        }
+    }
+}
+
 /// A spawner that creates an isolated Linux VM using Apple's Containerization framework.
 @available(macOS 15.0, *)
 actor ContainerSpawner {
@@ -142,15 +188,16 @@ actor ContainerSpawner {
                 logger.info("Configured Unix socket relay: \(hostSocketPath.path) -> \(guestSocketPath.path) (via vsock)")
 
                 for mount in mounts {
-                    let m = Mount.share(source: mount.source, destination: mount.destination)
+                    let opts: [String] = mount.readOnly ? ["ro"] : []
+                    let m = Mount.share(source: mount.source, destination: mount.destination, options: opts)
                     config.mounts.append(m)
                     logger.debug("Mount: \(mount.source) -> \(mount.destination) (\(mount.readOnly ? "ro" : "rw"))")
                 }
 
                 // Patch /etc/passwd so getpwuid(0) returns the agent's home dir,
-                // create the home directory, then exec the agent.
+                // create the home directory and /project-upper, then exec the agent.
                 let home = "/home/\(agentName)"
-                let initCmd = "sed -i 's|^root:.*|root:x:0:0:root:\(home):/bin/ash|' /etc/passwd && mkdir -p \(home) && cd \(home) && exec /opt/pecan/pecan-agent '\(sessionID)' /tmp/grpc.sock"
+                let initCmd = "sed -i 's|^root:.*|root:x:0:0:root:\(home):/bin/ash|' /etc/passwd && mkdir -p \(home) /project-upper && cd \(home) && exec /opt/pecan/pecan-agent '\(sessionID)' /tmp/grpc.sock"
                 config.process.arguments = ["/bin/sh", "-c", initCmd]
                 config.process.workingDirectory = "/" // shell cds into home before exec
                 config.process.environmentVariables.append("HOME=\(home)")
@@ -224,5 +271,43 @@ actor ContainerSpawner {
 
     private func removeSession(_ sessionID: String) {
         containers.removeValue(forKey: sessionID)
+    }
+
+    func execShell(sessionID: String, command: [String], socketFD: Int32) async {
+        guard let entry = containers[sessionID] else {
+            let msg = "error: no running container for session \(sessionID)\n"
+            _ = msg.withCString { write(socketFD, $0, Int(strlen($0))) }
+            close(socketFD)
+            return
+        }
+
+        let container = entry.container
+        let handle = FileHandle(fileDescriptor: socketFD, closeOnDealloc: false)
+        let writer = LoggingWriter(inner: FileWriter(handle: handle), sessionID: sessionID)
+        let reader = SocketReaderStream(fd: socketFD)
+        let cmd = command.isEmpty ? ["/bin/sh", "-i"] : command
+
+        do {
+            logger.info("execShell: calling container.exec for session \(sessionID)")
+            let process = try await container.exec(UUID().uuidString) { config in
+                config.arguments = cmd
+                config.environmentVariables = ["PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "TERM=xterm-256color"]
+                config.workingDirectory = "/"
+                config.stdin = reader
+                config.stdout = writer
+                config.stderr = writer
+                config.terminal = false
+            }
+            logger.info("execShell: container.exec returned, calling process.start")
+            try await process.start()
+            logger.info("execShell: process started, waiting for exit")
+            _ = try? await process.wait()
+            logger.info("execShell: process exited")
+        } catch {
+            let msg = "exec error: \(error)\n"
+            _ = msg.withCString { write(socketFD, $0, Int(strlen($0))) }
+            logger.error("execShell error: \(error)")
+        }
+        close(socketFD)
     }
 }
