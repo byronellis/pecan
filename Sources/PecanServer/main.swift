@@ -2037,46 +2037,6 @@ func ensureBuiltinSkills(skillsDir: String) {
             """,
             scripts: [("create_lua_tool", "#!/bin/sh\npecan-agent invoke create_lua_tool \"$@\"\n")]
         ),
-        BuiltinSkill(
-            dir: "memory",
-            skillMD: """
-            ---
-            name: memory
-            description: Search and manage persistent memories stored in /memory/.
-            ---
-
-            ## Memory Management
-
-            Memories are stored as tagged files in `/memory/`. Each file contains entries marked with `<!-- memory:N -->` blocks.
-
-            ### Read all memories for a tag
-            ```
-            cat /memory/CORE.md
-            cat /memory/NOTES.md
-            ```
-
-            ### List all tags
-            ```
-            ls /memory/
-            ```
-
-            ### Search memories
-            ```
-            grep -r "keyword" /memory/
-            grep "keyword" /memory/NOTES.md
-            ```
-
-            ### Add a new memory
-            Use `append_file` with path `/memory/TAG.md` — appending always creates a new memory entry.
-
-            ### Edit a memory
-            Use `edit_file` to find-and-replace within a memory file.
-
-            ### Delete a memory
-            Rewrite the file with `write_file`, omitting the block you want to delete (blocks without their ID are deleted).
-            """,
-            scripts: []
-        ),
     ]
 
     for skill in builtins {
