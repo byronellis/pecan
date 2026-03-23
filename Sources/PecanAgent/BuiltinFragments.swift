@@ -82,7 +82,6 @@ struct MemoryFragment: PromptFragment, Sendable {
             "**Adding a new memory**: `append_file path=/memory/NOTES.md content=\"...\"`",
             "  (appending to a tag file always creates a new memory entry)",
             "**Editing / full replace**: `write_file` with the complete block document — existing `<!-- memory:N -->` IDs are preserved; blocks without IDs are inserted; missing IDs are deleted.",
-            "**Core memories** (auto-injected into context at startup): tag `core` → `/memory/CORE.md`",
             "",
             "File format:",
             "```",
@@ -100,6 +99,30 @@ struct MemoryFragment: PromptFragment, Sendable {
         if context.team != nil {
             lines.append("**Team memories**: `/memory/team/TAG.md` — shared within the team.")
         }
+
+        // Inject CORE.md contents for each available scope directly into the system prompt.
+        func coreContent(at path: String) -> String? {
+            guard let content = try? String(contentsOfFile: path, encoding: .utf8),
+                  !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return content
+        }
+
+        if let core = coreContent(at: "/memory/CORE.md") {
+            lines.append("")
+            lines.append("## Core Memories")
+            lines.append(core)
+        }
+        if context.project != nil, let core = coreContent(at: "/memory/project/CORE.md") {
+            lines.append("")
+            lines.append("## Project Core Memories")
+            lines.append(core)
+        }
+        if context.team != nil, let core = coreContent(at: "/memory/team/CORE.md") {
+            lines.append("")
+            lines.append("## Team Core Memories")
+            lines.append(core)
+        }
+
         return lines.joined(separator: "\n")
     }
 }

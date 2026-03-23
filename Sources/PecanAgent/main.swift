@@ -23,30 +23,6 @@ actor StreamWriter {
     }
 }
 
-/// Read core memory files from /memory/core_*.md and inject as a system message.
-/// Must be called from a detached Task so it doesn't block the response loop.
-func injectCoreMemories(_ writer: StreamWriter) async {
-    let corePath = "/memory/CORE.md"
-    guard let content = try? String(contentsOfFile: corePath, encoding: .utf8),
-          !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-    let section = "## Core Memories\n\n\(content)"
-
-    do {
-        var ctxMsg = Pecan_AgentEvent()
-        var ctxCmd = Pecan_ContextCommand()
-        ctxCmd.requestID = UUID().uuidString
-        var addMsg = Pecan_AddContextMessage()
-        addMsg.section = .system
-        addMsg.role = "system"
-        addMsg.content = section
-        ctxCmd.addMessage = addMsg
-        ctxMsg.contextCommand = ctxCmd
-        try await writer.send(ctxMsg)
-        logger.info("Injected core memories from \(corePath)")
-    } catch {
-        logger.debug("Could not inject core memories: \(error)")
-    }
-}
 
 /// Send a JSON-structured progress message to the server for the UI to parse.
 func sendTypedProgress(
@@ -288,9 +264,6 @@ func main() async throws {
                 ctxCmd.addMessage = addMsg
                 ctxMsg.contextCommand = ctxCmd
                 try await writer.send(ctxMsg)
-
-                // Inject core memories in a separate Task so we don't block the response loop
-                Task { await injectCoreMemories(writer) }
 
             case .modelsResponse(let resp):
                 availableModels = resp.models.map { $0.key }
