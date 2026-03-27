@@ -44,6 +44,18 @@ func sendTypedProgress(
 func main() async throws {
     let args = CommandLine.arguments
 
+    // Fetch subcommand: pecan-agent fetch [curl/wget-style args]
+    // Connects to the running agent's HTTP proxy socket and routes the request through the server.
+    if args.count >= 2 && args[1] == "fetch" {
+        #if os(Linux)
+        runFetchSubcommand()
+        #else
+        fputs("fetch subcommand only supported on Linux\n", stderr)
+        exit(1)
+        #endif
+        exit(0)
+    }
+
     // Invoke subcommand: pecan-agent invoke <tool_name> [<json_args>]
     if args.count >= 3 && args[1] == "invoke" {
         let toolName = args[2]
@@ -126,6 +138,10 @@ func main() async throws {
             logger.error("Failed to mount skills FUSE: \(error)")
         }
     }
+
+    // HTTP proxy socket: lets curl/wget shims route requests through the agent's gRPC connection
+    installHTTPShims()
+    Thread.detachNewThread { startHTTPProxySocket() }
 #endif
 
     // Setup gRPC Client
