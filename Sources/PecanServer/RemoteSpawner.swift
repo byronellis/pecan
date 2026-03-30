@@ -11,7 +11,22 @@ public actor RemoteSpawner: AgentSpawner {
         self.socketPath = socketPath
     }
 
-    public func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec]) async throws {
+    public func saveEnvironment(sessionID: String, outputPath: String) async throws {
+        var request = Pecan_LauncherRequest()
+        request.saveEnv = .with {
+            $0.sessionID = sessionID
+            $0.outputPath = outputPath
+        }
+        let response = try await sendRequest(request, timeout: 300)
+        if !response.success {
+            throw NSError(
+                domain: "RemoteSpawner", code: 7,
+                userInfo: [NSLocalizedDescriptionKey: response.errorMessage.isEmpty ? "Unknown saveEnvironment error" : response.errorMessage]
+            )
+        }
+    }
+
+    public func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec], networkEnabled: Bool = false, envMountPath: String = "") async throws {
         let currentPath = FileManager.default.currentDirectoryPath
         let grpcSocketPath = "\(currentPath)/.run/grpc.sock"
 
@@ -32,6 +47,8 @@ public actor RemoteSpawner: AgentSpawner {
             $0.grpcSocketPath = grpcSocketPath
             $0.agentName = agentName
             $0.mounts = mounts
+            $0.networkEnabled = networkEnabled
+            $0.envMountPath = envMountPath
         }
 
         let response = try await sendRequest(request)
@@ -56,7 +73,7 @@ public actor RemoteSpawner: AgentSpawner {
         }
     }
 
-    private func sendRequest(_ request: Pecan_LauncherRequest) async throws -> Pecan_LauncherResponse {
+    private func sendRequest(_ request: Pecan_LauncherRequest, timeout: Int = 60) async throws -> Pecan_LauncherResponse {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else {
             throw NSError(domain: "RemoteSpawner", code: 3,
@@ -87,9 +104,8 @@ public actor RemoteSpawner: AgentSpawner {
                          userInfo: [NSLocalizedDescriptionKey: "Failed to connect to launcher at \(socketPath): \(String(cString: strerror(errno)))"])
         }
 
-        // Set read timeout to 30s for VM boot time
-        var timeout = timeval(tv_sec: 30, tv_usec: 0)
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        var tvTimeout = timeval(tv_sec: timeout, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tvTimeout, socklen_t(MemoryLayout<timeval>.size))
 
         // Send length-prefixed protobuf
         let requestData: [UInt8] = try request.serializedBytes()

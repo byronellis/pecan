@@ -372,6 +372,7 @@ message LauncherRequest {
         LauncherSpawnRequest spawn = 1;
         LauncherTerminateRequest terminate = 2;
         LauncherExecRequest exec = 3;
+        LauncherSaveEnvRequest save_env = 4;
     }
 }
 
@@ -380,6 +381,10 @@ message LauncherSpawnRequest {
     string grpc_socket_path = 2;
     string agent_name = 3;
     repeated LauncherMountSpec mounts = 4;
+    bool network_enabled = 5;
+    // Host directory mounted read-only at /tmp/pecan-mounts inside container.
+    // If env.tar exists inside it, the init command will extract it before starting the agent.
+    string env_mount_path = 6;
 }
 
 message LauncherTerminateRequest {
@@ -389,6 +394,12 @@ message LauncherTerminateRequest {
 message LauncherExecRequest {
     string session_id = 1;
     repeated string command = 2;
+}
+
+// Save the running container's environment as a tarball at the given host path.
+message LauncherSaveEnvRequest {
+    string session_id = 1;
+    string output_path = 2;
 }
 
 message LauncherResponse {

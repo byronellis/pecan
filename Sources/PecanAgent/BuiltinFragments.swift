@@ -118,29 +118,6 @@ struct MemoryFragment: PromptFragment, Sendable {
             lines.append("**Team memories**: `/memory/team/TAG.md` — shared within the team.")
         }
 
-        // Inject CORE.md contents for each available scope directly into the system prompt.
-        func coreContent(at path: String) -> String? {
-            guard let content = try? String(contentsOfFile: path, encoding: .utf8),
-                  !content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-            return content
-        }
-
-        if let core = coreContent(at: "/memory/CORE.md") {
-            lines.append("")
-            lines.append("## Core Memories")
-            lines.append(core)
-        }
-        if context.project != nil, let core = coreContent(at: "/memory/project/CORE.md") {
-            lines.append("")
-            lines.append("## Project Core Memories")
-            lines.append(core)
-        }
-        if context.team != nil, let core = coreContent(at: "/memory/team/CORE.md") {
-            lines.append("")
-            lines.append("## Team Core Memories")
-            lines.append(core)
-        }
-
         return lines.joined(separator: "\n")
     }
 }

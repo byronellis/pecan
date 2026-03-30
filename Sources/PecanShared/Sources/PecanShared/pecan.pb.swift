@@ -1266,12 +1266,21 @@ public struct Pecan_LauncherRequest: Sendable {
     set {payload = .exec(newValue)}
   }
 
+  public var saveEnv: Pecan_LauncherSaveEnvRequest {
+    get {
+      if case .saveEnv(let v)? = payload {return v}
+      return Pecan_LauncherSaveEnvRequest()
+    }
+    set {payload = .saveEnv(newValue)}
+  }
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public enum OneOf_Payload: Equatable, Sendable {
     case spawn(Pecan_LauncherSpawnRequest)
     case terminate(Pecan_LauncherTerminateRequest)
     case exec(Pecan_LauncherExecRequest)
+    case saveEnv(Pecan_LauncherSaveEnvRequest)
 
   }
 
@@ -1290,6 +1299,12 @@ public struct Pecan_LauncherSpawnRequest: Sendable {
   public var agentName: String = String()
 
   public var mounts: [Pecan_LauncherMountSpec] = []
+
+  public var networkEnabled: Bool = false
+
+  /// Host directory mounted read-only at /tmp/pecan-mounts inside container.
+  /// If env.tar exists inside it, the init command will extract it before starting the agent.
+  public var envMountPath: String = String()
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1316,6 +1331,21 @@ public struct Pecan_LauncherExecRequest: Sendable {
   public var sessionID: String = String()
 
   public var command: [String] = []
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Save the running container's environment as a tarball at the given host path.
+public struct Pecan_LauncherSaveEnvRequest: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var sessionID: String = String()
+
+  public var outputPath: String = String()
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -4230,7 +4260,7 @@ extension Pecan_LauncherMountSpec: SwiftProtobuf.Message, SwiftProtobuf._Message
 
 extension Pecan_LauncherRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".LauncherRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}spawn\0\u{1}terminate\0\u{1}exec\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}spawn\0\u{1}terminate\0\u{1}exec\0\u{3}save_env\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -4277,6 +4307,19 @@ extension Pecan_LauncherRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageIm
           self.payload = .exec(v)
         }
       }()
+      case 4: try {
+        var v: Pecan_LauncherSaveEnvRequest?
+        var hadOneofValue = false
+        if let current = self.payload {
+          hadOneofValue = true
+          if case .saveEnv(let m) = current {v = m}
+        }
+        try decoder.decodeSingularMessageField(value: &v)
+        if let v = v {
+          if hadOneofValue {try decoder.handleConflictingOneOf()}
+          self.payload = .saveEnv(v)
+        }
+      }()
       default: break
       }
     }
@@ -4300,6 +4343,10 @@ extension Pecan_LauncherRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageIm
       guard case .exec(let v)? = self.payload else { preconditionFailure() }
       try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
     }()
+    case .saveEnv?: try {
+      guard case .saveEnv(let v)? = self.payload else { preconditionFailure() }
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
+    }()
     case nil: break
     }
     try unknownFields.traverse(visitor: &visitor)
@@ -4314,7 +4361,7 @@ extension Pecan_LauncherRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageIm
 
 extension Pecan_LauncherSpawnRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".LauncherSpawnRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}grpc_socket_path\0\u{3}agent_name\0\u{1}mounts\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}grpc_socket_path\0\u{3}agent_name\0\u{1}mounts\0\u{3}network_enabled\0\u{3}env_mount_path\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -4326,6 +4373,8 @@ extension Pecan_LauncherSpawnRequest: SwiftProtobuf.Message, SwiftProtobuf._Mess
       case 2: try { try decoder.decodeSingularStringField(value: &self.grpcSocketPath) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self.agentName) }()
       case 4: try { try decoder.decodeRepeatedMessageField(value: &self.mounts) }()
+      case 5: try { try decoder.decodeSingularBoolField(value: &self.networkEnabled) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self.envMountPath) }()
       default: break
       }
     }
@@ -4344,6 +4393,12 @@ extension Pecan_LauncherSpawnRequest: SwiftProtobuf.Message, SwiftProtobuf._Mess
     if !self.mounts.isEmpty {
       try visitor.visitRepeatedMessageField(value: self.mounts, fieldNumber: 4)
     }
+    if self.networkEnabled != false {
+      try visitor.visitSingularBoolField(value: self.networkEnabled, fieldNumber: 5)
+    }
+    if !self.envMountPath.isEmpty {
+      try visitor.visitSingularStringField(value: self.envMountPath, fieldNumber: 6)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -4352,6 +4407,8 @@ extension Pecan_LauncherSpawnRequest: SwiftProtobuf.Message, SwiftProtobuf._Mess
     if lhs.grpcSocketPath != rhs.grpcSocketPath {return false}
     if lhs.agentName != rhs.agentName {return false}
     if lhs.mounts != rhs.mounts {return false}
+    if lhs.networkEnabled != rhs.networkEnabled {return false}
+    if lhs.envMountPath != rhs.envMountPath {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -4417,6 +4474,41 @@ extension Pecan_LauncherExecRequest: SwiftProtobuf.Message, SwiftProtobuf._Messa
   public static func ==(lhs: Pecan_LauncherExecRequest, rhs: Pecan_LauncherExecRequest) -> Bool {
     if lhs.sessionID != rhs.sessionID {return false}
     if lhs.command != rhs.command {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+extension Pecan_LauncherSaveEnvRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".LauncherSaveEnvRequest"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}session_id\0\u{3}output_path\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.sessionID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self.outputPath) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if !self.sessionID.isEmpty {
+      try visitor.visitSingularStringField(value: self.sessionID, fieldNumber: 1)
+    }
+    if !self.outputPath.isEmpty {
+      try visitor.visitSingularStringField(value: self.outputPath, fieldNumber: 2)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Pecan_LauncherSaveEnvRequest, rhs: Pecan_LauncherSaveEnvRequest) -> Bool {
+    if lhs.sessionID != rhs.sessionID {return false}
+    if lhs.outputPath != rhs.outputPath {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

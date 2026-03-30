@@ -2,8 +2,11 @@ import Foundation
 import Containerization
 import ContainerizationExtras
 import ContainerizationOS
+import ContainerizationEXT4
+import ContainerizationArchive
 import Logging
 import PecanShared
+import SystemPackage
 
 let logger = Logger(label: "com.pecan.vm-launcher")
 
@@ -70,17 +73,120 @@ final class SocketReaderStream: ReaderStream, @unchecked Sendable {
     }
 }
 
+/// Unpack an env tar into an EXT4 formatter, stripping `trusted.overlay.*` xattrs.
+///
+/// Overlayfs sets `trusted.overlay.origin` on the upper root directory to record
+/// the lower layer's identity. If a snapshot exports this xattr and we restore it
+/// verbatim, vminitd rejects the mount with ESTALE because the xattr references
+/// the original container's lower-layer UUID, not the new one. Stripping it at
+/// restore time lets overlayfs treat the layer as a fresh upper dir.
+///
+/// This mirrors the logic in `EXT4.Formatter.unpack(reader:)` (Formatter+Unpack.swift)
+/// but filters xattrs before passing each entry to the formatter.
+@available(macOS 15.0, *)
+private func unpackStrippingOverlayXattrs(formatter: EXT4.Formatter, source: URL) throws {
+    let reader = try ArchiveReader(file: source)
+    let bufferSize = 128 * 1024
+    let reusableBuffer = UnsafeMutableBufferPointer<UInt8>.allocate(capacity: bufferSize)
+    defer { reusableBuffer.deallocate() }
+
+    var hardlinks: [FilePath: FilePath] = [:]
+
+    for (entry, streamReader) in reader.makeStreamingIterator() {
+        guard var pathStr = entry.path else { continue }
+
+        // Normalise path (matches preProcessPath in Formatter+Unpack)
+        if pathStr.hasPrefix("./") { pathStr = String(pathStr.dropFirst()) }
+        if !pathStr.hasPrefix("/") { pathStr = "/" + pathStr }
+        let path = FilePath(pathStr)
+
+        // Strip trusted.overlay.* xattrs — these encode lower-layer identity and
+        // must not survive a round-trip or overlayfs will reject the mount.
+        var xattrs = entry.xattrs
+        xattrs = xattrs.filter { !$0.key.hasPrefix("trusted.overlay.") }
+        entry.xattrs = xattrs
+
+        // Handle whiteouts (OCI layer convention)
+        if path.lastComponent?.string.hasPrefix(".wh.") == true {
+            continue  // skip whiteouts — they only matter for full-rootfs restore
+        }
+
+        // Defer hardlinks to a second pass (same as Formatter+Unpack)
+        if let hardlink = entry.hardlink {
+            var hl = hardlink
+            if hl.hasPrefix("./") { hl = String(hl.dropFirst()) }
+            if !hl.hasPrefix("/") { hl = "/" + hl }
+            hardlinks[path] = FilePath(hl)
+            continue
+        }
+
+        let ts = FileTimestamps(
+            access: entry.contentAccessDate,
+            modification: entry.modificationDate,
+            creation: entry.creationDate
+        )
+
+        switch entry.fileType {
+        case .directory:
+            try formatter.create(
+                path: path,
+                mode: EXT4.Inode.Mode(.S_IFDIR, entry.permissions),
+                ts: ts, uid: entry.owner, gid: entry.group, xattrs: xattrs
+            )
+        case .regular:
+            try formatter.create(
+                path: path,
+                mode: EXT4.Inode.Mode(.S_IFREG, entry.permissions),
+                ts: ts, buf: streamReader, uid: entry.owner, gid: entry.group,
+                xattrs: xattrs, fileBuffer: reusableBuffer
+            )
+        case .symbolicLink:
+            let target = entry.symlinkTarget.map { FilePath($0) }
+            try formatter.create(
+                path: path, link: target,
+                mode: EXT4.Inode.Mode(.S_IFLNK, entry.permissions),
+                ts: ts, uid: entry.owner, gid: entry.group, xattrs: xattrs
+            )
+        default:
+            continue
+        }
+    }
+
+    // Second pass: create hardlinks
+    for (link, target) in hardlinks {
+        try? formatter.link(link: link, target: target)
+    }
+}
+
 /// A spawner that creates an isolated Linux VM using Apple's Containerization framework.
 @available(macOS 15.0, *)
 actor ContainerSpawner {
-    /// Maps sessionID → (containerName, container) so we can delete by the correct name.
+    /// Maps sessionID → container entry so we can delete by the correct name.
     private var containers: [String: (name: String, container: LinuxContainer)] = [:]
     /// Shared manager reused across all containers (avoids stale state from manager recreation).
     private var sharedManager: ContainerManager?
     /// Counter to generate unique container names across restarts of the same session.
     private var restartCounters: [String: Int] = [:]
 
+    // Writable overlay layer capacity. The upper layer only holds the diff
+    // from the base image (installed packages etc.), so 2 GB is generous.
+    private static let writableLayerSize: UInt64 = 2 * 1024 * 1024 * 1024
+
     init() {}
+
+    /// Root directory of the Containerization framework's storage for a given container.
+    private func containerStorageDir(containerName: String) -> URL {
+        let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        return appSupport
+            .appendingPathComponent("com.apple.containerization")
+            .appendingPathComponent("containers")
+            .appendingPathComponent(containerName)
+    }
+
+    /// Path to the writable overlay layer (upper layer diff) for a given container.
+    private func writableLayerPath(containerName: String) -> URL {
+        containerStorageDir(containerName: containerName).appendingPathComponent("writable.ext4")
+    }
 
     /// Locate an uncompressed Linux kernel (vmlinux) for the VM.
     private func resolveKernelPath() throws -> String {
@@ -111,16 +217,23 @@ actor ContainerSpawner {
         let kernelPath = try resolveKernelPath()
         let initfsReference = "ghcr.io/apple/containerization/vminit:0.26.5"
         logger.info("Initializing shared ContainerManager with kernel: \(kernelPath), initfs: \(initfsReference)")
+        let network: ContainerManager.Network?
+        if #available(macOS 26, *) {
+            network = try ContainerManager.VmnetNetwork()
+        } else {
+            network = nil
+        }
         let manager = try await ContainerManager(
             kernel: Kernel(path: URL(fileURLWithPath: kernelPath), platform: .linuxArm),
             initfsReference: initfsReference,
+            network: network,
             rosetta: false
         )
         sharedManager = manager
         return manager
     }
 
-    func spawnAgent(sessionID: String, grpcSocketPath: String, agentName: String, mounts: [Pecan_LauncherMountSpec]) async throws {
+    func spawnAgent(sessionID: String, grpcSocketPath: String, agentName: String, mounts: [Pecan_LauncherMountSpec], networkEnabled: Bool = false, envMountPath: String = "") async throws {
         logger.info("Setting up Containerization VM for session \(sessionID) (agent: \(agentName))...")
 
         // If there's already a running container for this session, save it for background cleanup
@@ -160,8 +273,9 @@ actor ContainerSpawner {
             container = try await manager.create(
                 containerName,
                 reference: imageReference,
-                rootfsSizeInBytes: 1024 * 1024 * 1024,
-                networking: false
+                rootfsSizeInBytes: 512 * 1024 * 1024,
+                writableLayerSizeInBytes: Self.writableLayerSize,
+                networking: networkEnabled
             ) { @Sendable config in
                 config.cpus = 2
                 config.memoryInBytes = 512 * 1024 * 1024
@@ -195,9 +309,18 @@ actor ContainerSpawner {
                 }
 
                 // Patch /etc/passwd so getpwuid(0) returns the agent's home dir,
-                // create the home directory and /project-upper, then exec the agent.
+                // create directories, then exec the agent.
                 let home = "/home/\(agentName)"
-                let initCmd = "sed -i 's|^root:.*|root:x:0:0:root:\(home):/bin/ash|' /etc/passwd && mkdir -p \(home) /project-upper && cd \(home) && exec /opt/pecan/pecan-agent '\(sessionID)' /tmp/grpc.sock"
+                // vminitd fully configures the network (ip link up, ip addr add, default route,
+                // /etc/resolv.conf) before our process starts — no manual setup needed here.
+                let networkSetup = ""
+                let initCmd = """
+                    \(networkSetup)rm -f /usr/local/bin/curl /usr/local/bin/wget && \
+                    sed -i 's|^root:.*|root:x:0:0:root:\(home):/bin/ash|' /etc/passwd && \
+                    mkdir -p \(home) && \
+                    cd \(home) && \
+                    exec /opt/pecan/pecan-agent '\(sessionID)' /tmp/grpc.sock
+                    """
                 config.process.arguments = ["/bin/sh", "-c", initCmd]
                 config.process.workingDirectory = "/" // shell cds into home before exec
                 config.process.environmentVariables.append("HOME=\(home)")
@@ -208,6 +331,49 @@ actor ContainerSpawner {
         } catch {
             logger.error("Failed to create container \(containerName): \(error)")
             throw error
+        }
+
+        // Restore saved environment by populating the fresh writable.ext4 with the saved diff.
+        // manager.create() just created a fresh empty writable.ext4; we overwrite it using
+        // EXT4.Formatter so vminitd mounts a clean upper layer containing the saved packages.
+        // This avoids the xino ESTALE issue from restoring a live-captured block device image.
+        //
+        // We write to a temp file first so that a failure never corrupts writable.ext4
+        // (EXT4.Formatter.init truncates the target file before writing).
+        let writablePath = writableLayerPath(containerName: containerName)
+        let envURL = URL(fileURLWithPath: envMountPath)
+        if !envMountPath.isEmpty {
+            var isDir: ObjCBool = false
+            let exists = FileManager.default.fileExists(atPath: envMountPath, isDirectory: &isDir)
+            if exists && !isDir.boolValue {
+                let tempPath = writablePath.deletingPathExtension().appendingPathExtension("tmp.ext4")
+                do {
+                    logger.info("Restoring environment from \(envMountPath)...")
+                    let formatter = try EXT4.Formatter(
+                        FilePath(tempPath.path),
+                        minDiskSize: Self.writableLayerSize
+                    )
+                    // Custom unpack that strips trusted.overlay.* xattrs so that
+                    // vminitd can mount a fresh overlayfs without xino origin verification
+                    // failing against the wrong lower-layer UUID.
+                    try unpackStrippingOverlayXattrs(
+                        formatter: formatter,
+                        source: envURL
+                    )
+                    try formatter.close()
+                    try FileManager.default.replaceItem(
+                        at: writablePath,
+                        withItemAt: tempPath,
+                        backupItemName: nil,
+                        options: [],
+                        resultingItemURL: nil
+                    )
+                    logger.info("Environment restored successfully into writable layer.")
+                } catch {
+                    try? FileManager.default.removeItem(at: tempPath)
+                    logger.warning("Failed to restore environment (will start fresh): \(error)")
+                }
+            }
         }
 
         logger.info("Starting lifecycle for container \(containerName)...")
@@ -271,6 +437,49 @@ actor ContainerSpawner {
 
     private func removeSession(_ sessionID: String) {
         containers.removeValue(forKey: sessionID)
+    }
+
+    /// Snapshot the running container's environment to `outputPath` on the host.
+    ///
+    /// Strategy: flush dirty kernel buffers inside the container with sync(1), then
+    /// read the writable.ext4 (overlay upper layer) directly on the host using
+    /// EXT4.EXT4Reader and export it to a tar archive.  The resulting tar contains
+    /// only the diff from the base Alpine image — installed packages, config changes,
+    /// etc. — and is small regardless of base image size.
+    ///
+    /// On restore (next spawnAgent call with envMountPath set), EXT4.Formatter
+    /// unpacks this tar into a fresh writable.ext4 before the container starts, so
+    /// vminitd mounts a clean upper layer with the saved state pre-populated.
+    func saveEnvironment(sessionID: String, outputPath: String) async throws {
+        guard let entry = containers[sessionID] else {
+            throw NSError(domain: "ContainerSpawner", code: 10,
+                userInfo: [NSLocalizedDescriptionKey: "No running container for session \(sessionID)"])
+        }
+
+        // Flush dirty kernel buffers so the writable.ext4 on the host is up-to-date.
+        let syncProc = try await entry.container.exec(UUID().uuidString) { config in
+            config.arguments = ["/bin/sh", "-c", "sync"]
+            config.workingDirectory = "/"
+        }
+        try await syncProc.start()
+        _ = try? await syncProc.wait()
+        logger.info("sync completed for session \(sessionID)")
+
+        let writablePath = writableLayerPath(containerName: entry.name)
+        guard FileManager.default.fileExists(atPath: writablePath.path) else {
+            throw NSError(domain: "ContainerSpawner", code: 11,
+                userInfo: [NSLocalizedDescriptionKey: "Writable layer not found at \(writablePath.path)"])
+        }
+
+        let destURL = URL(fileURLWithPath: outputPath)
+        try FileManager.default.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? FileManager.default.removeItem(at: destURL)
+
+        logger.info("Exporting writable layer \(writablePath.path) -> \(outputPath)...")
+        let reader = try EXT4.EXT4Reader(blockDevice: FilePath(writablePath.path))
+        try reader.export(archive: FilePath(outputPath))
+
+        logger.info("Environment snapshot saved to \(outputPath)")
     }
 
     func execShell(sessionID: String, command: [String], socketFD: Int32) async {

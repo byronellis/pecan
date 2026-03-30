@@ -16,8 +16,9 @@ public struct MountSpec: Codable, Sendable {
 }
 
 public protocol AgentSpawner: Sendable {
-    func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec]) async throws
+    func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec], networkEnabled: Bool, envMountPath: String) async throws
     func terminateAgent(sessionID: String) async throws
+    func saveEnvironment(sessionID: String, outputPath: String) async throws
 }
 
 /// A spawner that just runs the agent as a local subprocess. Useful for development.
@@ -26,7 +27,11 @@ public actor LocalProcessSpawner: AgentSpawner {
 
     public init() {}
 
-    public func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec]) async throws {
+    public func saveEnvironment(sessionID: String, outputPath: String) async throws {
+        logger.info("LocalProcessSpawner: saveEnvironment is a no-op for local processes")
+    }
+
+    public func spawnAgent(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec], networkEnabled: Bool = false, envMountPath: String = "") async throws {
         logger.info("Spawning local agent process for session \(sessionID)...")
         let task = Process()
         let currentPath = FileManager.default.currentDirectoryPath
@@ -143,8 +148,12 @@ public actor SpawnerFactory {
         launcherManager = nil
     }
 
-    public func spawn(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec] = []) async throws {
-        try await activeSpawner.spawnAgent(sessionID: sessionID, agentName: agentName, workspacePath: workspacePath, shares: shares)
+    public func spawn(sessionID: String, agentName: String, workspacePath: String, shares: [MountSpec] = [], networkEnabled: Bool = false, envMountPath: String = "") async throws {
+        try await activeSpawner.spawnAgent(sessionID: sessionID, agentName: agentName, workspacePath: workspacePath, shares: shares, networkEnabled: networkEnabled, envMountPath: envMountPath)
+    }
+
+    public func saveEnvironment(sessionID: String, outputPath: String) async throws {
+        try await activeSpawner.saveEnvironment(sessionID: sessionID, outputPath: outputPath)
     }
 
     public func terminate(sessionID: String) async throws {

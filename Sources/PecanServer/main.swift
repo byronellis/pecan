@@ -27,11 +27,17 @@ actor SessionManager {
     // Agent idle/busy tracking for trigger delivery
     private var agentBusy: [String: Bool] = [:]
 
+    // Commands queued while agent stream is not yet registered (e.g. sent between spawn and connect)
+    private var pendingAgentCommands: [String: [Pecan_HostCommand]] = [:]
+
     // Merge state: sessionID -> mergeID (non-nil = agent is in merge mode)
     private var mergingIDs: [String: String] = [:]
 
     // Git base commit recorded at container spawn, used for 3-way merge conflict detection
     private var gitBaseCommits: [String: String] = [:]
+
+    // Network state per session (default: off)
+    private var networkEnabled: [String: Bool] = [:]
 
     func registerUI(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>) {
         uiStreams[sessionID] = stream
@@ -39,6 +45,17 @@ actor SessionManager {
 
     func registerAgent(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_HostCommand>) {
         agentStreams[sessionID] = stream
+        // Clear busy state from any previous agent session
+        agentBusy[sessionID] = false
+        // Drain any commands that arrived before the agent connected
+        if let queued = pendingAgentCommands.removeValue(forKey: sessionID), !queued.isEmpty {
+            logger.info("Delivering \(queued.count) queued command(s) to newly registered agent for session \(sessionID)")
+            Task {
+                for cmd in queued {
+                    try? await stream.send(cmd)
+                }
+            }
+        }
     }
 
     func setStore(sessionID: String, store: SessionStore) {
@@ -162,11 +179,42 @@ actor SessionManager {
         gitBaseCommits[sessionID]
     }
 
+    func setNetworkEnabled(sessionID: String, enabled: Bool) {
+        networkEnabled[sessionID] = enabled
+    }
+
+    func isNetworkEnabled(sessionID: String) -> Bool {
+        networkEnabled[sessionID] ?? false
+    }
+
+    /// Returns (creating if needed) the host directory mounted read-only at /tmp/pecan-mounts.
+    /// Contains env.tar if a snapshot has been saved. Per-project when active; per-session otherwise.
+    func persistEnvDir(sessionID: String) -> String? {
+        let fm = FileManager.default
+        let path: String
+        if let projectStore = getProjectStore(sessionID: sessionID) {
+            path = projectStore.projectDir.appendingPathComponent("env").path
+        } else if let store = sessionStores[sessionID] {
+            path = store.workspacePath.appendingPathComponent(".pecan/env").path
+        } else {
+            return nil
+        }
+        try? fm.createDirectory(atPath: path, withIntermediateDirectories: true, attributes: nil)
+        return path
+    }
+
+    /// Returns the host path for the saved env.tar snapshot, or nil if no session found.
+    func persistEnvTarPath(sessionID: String) -> String? {
+        guard let dir = persistEnvDir(sessionID: sessionID) else { return nil }
+        return URL(fileURLWithPath: dir).appendingPathComponent("env.tar").path
+    }
+
     func sendToAgent(sessionID: String, command: Pecan_HostCommand) async throws {
         if let stream = agentStreams[sessionID] {
             try await stream.send(command)
         } else {
-            logger.warning("No Agent stream found for session \(sessionID)")
+            logger.warning("No Agent stream yet for session \(sessionID) — queuing command for delivery on connect")
+            pendingAgentCommands[sessionID, default: []].append(command)
         }
     }
 
@@ -585,11 +633,13 @@ actor SessionManager {
     func removeSession(sessionID: String) async {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
+        pendingAgentCommands.removeValue(forKey: sessionID)
         sessionStores.removeValue(forKey: sessionID)
         sessionProjects.removeValue(forKey: sessionID)
         sessionTeams.removeValue(forKey: sessionID)
         mergingIDs.removeValue(forKey: sessionID)
         gitBaseCommits.removeValue(forKey: sessionID)
+        networkEnabled.removeValue(forKey: sessionID)
 
         do {
             try await SpawnerFactory.shared.terminate(sessionID: sessionID)
@@ -628,15 +678,19 @@ actor SessionManager {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
         }
 
-        // Clear stale agent stream so the new agent can register
+        // Clear stale agent stream and any pending commands so the new agent starts fresh
         agentStreams.removeValue(forKey: sessionID)
+        pendingAgentCommands.removeValue(forKey: sessionID)
+        agentBusy[sessionID] = false
 
         // Spawn the new container first (the old one is still running — that's fine)
         try await SpawnerFactory.shared.spawn(
             sessionID: sessionID,
             agentName: agentName,
             workspacePath: store.workspacePath.path,
-            shares: shareMounts
+            shares: shareMounts,
+            networkEnabled: isNetworkEnabled(sessionID: sessionID),
+            envMountPath: persistEnvTarPath(sessionID: sessionID) ?? ""
         )
 
         // Notify UI
@@ -764,12 +818,14 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     try await responseStream.send(response)
 
                     // Spawn the agent using the Pluggable VM architecture
+                    let envMountPath = await SessionManager.shared.persistEnvTarPath(sessionID: sessionID) ?? ""
                     do {
                         try await SpawnerFactory.shared.spawn(
                             sessionID: sessionID,
                             agentName: agentName,
                             workspacePath: store.workspacePath.path,
-                            shares: shareMounts
+                            shares: shareMounts,
+                            envMountPath: envMountPath
                         )
                     } catch {
                         logger.error("Failed to spawn agent: \(error)")
@@ -810,7 +866,8 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                             try await SessionManager.shared.sendToUI(sessionID: req.sessionID, message: errorMsg)
                         }
                     } else {
-                        logger.debug("Routing user input to agent for session \(req.sessionID)")
+                        let hasAgent = await SessionManager.shared.hasAgent(sessionID: req.sessionID)
+                        logger.info("Routing user input to agent for session \(req.sessionID), hasAgent=\(hasAgent)")
                         await SessionManager.shared.setAgentBusy(sessionID: req.sessionID, busy: true)
                         var cmdMsg = Pecan_HostCommand()
                         var processInput = Pecan_ProcessInput()
@@ -895,7 +952,7 @@ extension ClientServiceProvider {
         guard firstWord.hasPrefix("/") else { return false }
         let commandPart = String(firstWord.dropFirst())
         let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
-        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec"]
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec", "network", "image"]
         return knownBases.contains(base)
     }
 
@@ -1329,9 +1386,80 @@ extension ClientServiceProvider {
             execCmd.command = command
             hostCmd.execCommand = execCmd
             try await SessionManager.shared.sendToAgent(sessionID: sessionID, command: hostCmd)
+        case "network":
+            try await handleNetworkCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
+        case "image":
+            try await handleImageCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
         default:
             try await sendOutput("Unknown command '/\(cmd.base)'.")
         }
+    }
+
+    static func handleNetworkCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
+        let current = await SessionManager.shared.isNetworkEnabled(sessionID: sessionID)
+        switch cmd.subcmd {
+        case nil, "status":
+            try await sendOutput("Network: \(current ? "enabled" : "disabled")\r\nUse /network:on or /network:off to change (saves image snapshot and restarts container).")
+        case "on":
+            if current {
+                try await sendOutput("Network is already enabled.")
+            } else {
+                try await saveEnvSnapshot(sessionID: sessionID, sendOutput: sendOutput)
+                await SessionManager.shared.setNetworkEnabled(sessionID: sessionID, enabled: true)
+                try await SessionManager.shared.restartContainer(sessionID: sessionID)
+            }
+        case "off":
+            if !current {
+                try await sendOutput("Network is already disabled.")
+            } else {
+                try await saveEnvSnapshot(sessionID: sessionID, sendOutput: sendOutput)
+                await SessionManager.shared.setNetworkEnabled(sessionID: sessionID, enabled: false)
+                try await SessionManager.shared.restartContainer(sessionID: sessionID)
+            }
+        default:
+            try await sendOutput("Usage: /network[:on|:off]")
+        }
+    }
+
+    static func handleImageCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
+        switch cmd.subcmd {
+        case nil, "status":
+            if let tarPath = await SessionManager.shared.persistEnvTarPath(sessionID: sessionID),
+               FileManager.default.fileExists(atPath: tarPath) {
+                let attrs = try? FileManager.default.attributesOfItem(atPath: tarPath)
+                let size = attrs?[.size] as? Int64 ?? 0
+                let date = (attrs?[.modificationDate] as? Date).map { ISO8601DateFormatter().string(from: $0) } ?? "unknown"
+                let mb = Double(size) / 1_048_576
+                try await sendOutput(String(format: "Image snapshot: %.1f MB, saved %@\r\nUse /image:discard to remove.", mb, date))
+            } else {
+                try await sendOutput("No image snapshot saved.\r\nUse /image:save to capture the current container state.")
+            }
+        case "save":
+            try await saveEnvSnapshot(sessionID: sessionID, sendOutput: sendOutput)
+        case "discard":
+            if let tarPath = await SessionManager.shared.persistEnvTarPath(sessionID: sessionID) {
+                try? FileManager.default.removeItem(atPath: tarPath)
+                try await sendOutput("Image snapshot discarded. Next restart will use clean alpine:3.19.")
+            } else {
+                try await sendOutput("No image snapshot to discard.")
+            }
+        default:
+            try await sendOutput("Usage: /image[:save|:discard]")
+        }
+    }
+
+    /// Saves the current container's environment snapshot. Shared by /image:save and network toggle.
+    private static func saveEnvSnapshot(sessionID: String, sendOutput: (String) async throws -> Void) async throws {
+        guard let tarPath = await SessionManager.shared.persistEnvTarPath(sessionID: sessionID) else {
+            try await sendOutput("No session store — cannot save snapshot.")
+            return
+        }
+        try await sendOutput("Saving environment snapshot...")
+        try await SpawnerFactory.shared.saveEnvironment(sessionID: sessionID, outputPath: tarPath)
+        let attrs = try? FileManager.default.attributesOfItem(atPath: tarPath)
+        let size = attrs?[.size] as? Int64 ?? 0
+        let mb = Double(size) / 1_048_576
+        try await sendOutput(String(format: "Snapshot saved (%.1f MB).", mb))
     }
 
     static func handleChangesetCommand(sessionID: String, cmd: ParsedCommand, sendOutput: @escaping (String) async throws -> Void) async throws {

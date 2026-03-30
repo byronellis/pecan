@@ -44,18 +44,6 @@ func sendTypedProgress(
 func main() async throws {
     let args = CommandLine.arguments
 
-    // Fetch subcommand: pecan-agent fetch [curl/wget-style args]
-    // Connects to the running agent's HTTP proxy socket and routes the request through the server.
-    if args.count >= 2 && args[1] == "fetch" {
-        #if os(Linux)
-        runFetchSubcommand()
-        #else
-        fputs("fetch subcommand only supported on Linux\n", stderr)
-        exit(1)
-        #endif
-        exit(0)
-    }
-
     // Invoke subcommand: pecan-agent invoke <tool_name> [<json_args>]
     if args.count >= 3 && args[1] == "invoke" {
         let toolName = args[2]
@@ -139,9 +127,6 @@ func main() async throws {
         }
     }
 
-    // HTTP proxy socket: lets curl/wget shims route requests through the agent's gRPC connection
-    installHTTPShims()
-    Thread.detachNewThread { startHTTPProxySocket() }
 #endif
 
     // Setup gRPC Client
@@ -237,6 +222,7 @@ func main() async throws {
                         mount: resp.teamMount
                     )
                 }
+                logger.info("Registration: firing agent.registered hook")
 
                 await HookManager.shared.fire(event: "agent.registered", data: [
                     "agent_id": agentID,
@@ -244,12 +230,14 @@ func main() async throws {
                     "project": resp.projectName,
                     "team": resp.teamName,
                 ])
+                logger.info("Registration: hook done, configuring FUSE")
 
 #if os(Linux)
                 // Configure memory FUSE with project/team scope now that we know the context
                 await memFS.configure(hasProject: !resp.projectName.isEmpty, hasTeam: !resp.teamName.isEmpty)
                 // Populate skills FUSE lower layer from server in background
                 Task.detached { await skillsFS.configure() }
+                logger.info("Registration: FUSE configured, sending progress")
 #endif
 
                 // Immediately send a progress update that we are alive
@@ -258,14 +246,16 @@ func main() async throws {
                 prog.statusMessage = "Agent booted and registered!"
                 progMsg.progress = prog
                 try await writer.send(progMsg)
-                
+                logger.info("Registration: progress sent, requesting models")
+
                 // Ask for models
                 var modelsReqMsg = Pecan_AgentEvent()
                 var modelsReq = Pecan_GetModelsRequest()
                 modelsReq.requestID = UUID().uuidString
                 modelsReqMsg.getModels = modelsReq
                 try await writer.send(modelsReqMsg)
-                
+                logger.info("Registration: getModels sent, composing system prompt")
+
                 // Add a system prompt to context
                 var ctxMsg = Pecan_AgentEvent()
                 var ctxCmd = Pecan_ContextCommand()
@@ -280,6 +270,7 @@ func main() async throws {
                 ctxCmd.addMessage = addMsg
                 ctxMsg.contextCommand = ctxCmd
                 try await writer.send(ctxMsg)
+                logger.info("Registration: context sent, entering main loop")
 
             case .modelsResponse(let resp):
                 availableModels = resp.models.map { $0.key }
@@ -289,7 +280,7 @@ func main() async throws {
                 logger.debug("Agent received context response: \(resp.infoJson)")
                 
             case .processInput(let input):
-                logger.info("Received process_input from Server: \(input.text)")
+                logger.info("Received processInput, text length: \(input.text.count)")
                 
                 // Add user message to context
                 var ctxMsg = Pecan_AgentEvent()

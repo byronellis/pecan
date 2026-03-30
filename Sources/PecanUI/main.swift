@@ -352,29 +352,21 @@ actor TerminalManager {
 
     // MARK: - Throbber
 
+    /// Current prompt character — replaces ❯ with spinning braille frames while throbbing.
+    var currentPromptChar = "❯"
+    var isThrobbing = false
+
     func startThrobber(message: String) {
         stopThrobberSync()
-        // Draw separator + throbber line + status bar if not already visible
-        if !chromeVisible && !agents.isEmpty {
-            let width = terminalWidth()
-            let separator = "\(ansiDim)\(String(repeating: "─", count: width))\(ansiReset)"
-            print(separator + "\r", terminator: "\n")
-            // Throbber line (placeholder)
-            print("\r", terminator: "\n")
-            // Status bar
-            print(buildStatusBar(width: width), terminator: "")
-            chromeVisible = true
-            cursorChromeLine = 3
-        }
-
+        isThrobbing = true
         let frames = Self.throbberFrames
         throbberTask = Task {
             var i = 0
             while !Task.isCancelled {
-                let frame = frames[i % frames.count]
-                // Move up 1 line (to prompt/throbber line), clear it, print throbber, move back down
-                print("\u{1B}[1A\r\u{1B}[K\(ansiDim)\(frame) \(message)\(ansiReset)\u{1B}[1B\r", terminator: "")
-                fflush(stdout)
+                currentPromptChar = frames[i % frames.count]
+                if chromeVisible {
+                    redrawPrompt()
+                }
                 i += 1
                 try? await Task.sleep(nanoseconds: 80_000_000)
             }
@@ -386,12 +378,11 @@ actor TerminalManager {
     }
 
     private func stopThrobberSync() {
-        if let task = throbberTask {
-            task.cancel()
-            throbberTask = nil
-            print("\r\u{1B}[K", terminator: "")
-            fflush(stdout)
-        }
+        guard throbberTask != nil else { return }
+        throbberTask?.cancel()
+        throbberTask = nil
+        isThrobbing = false
+        currentPromptChar = "❯"
     }
 
     // MARK: - Chrome
@@ -498,7 +489,8 @@ actor TerminalManager {
         print(separator + "\r", terminator: "\n")
 
         // Line 2+: prompt with input buffer — may wrap across multiple visual rows
-        print("\(ansiCyan)\(promptChar)\(ansiReset) \(currentInputBuffer)\r", terminator: "\n")
+        let pc = isThrobbing ? "\(ansiDim)\(currentPromptChar)\(ansiReset)" : "\(ansiCyan)\(promptChar)\(ansiReset)"
+        print("\(pc) \(currentInputBuffer)\r", terminator: "\n")
 
         // Last line: status bar
         print(buildStatusBar(width: width), terminator: "")
@@ -1045,7 +1037,19 @@ func readInputLine(sessionState: SessionState) async -> String? {
                         await TerminalManager.shared.setInputBuffer(entry)
                     }
                 }
-            case .escape, .unknown:
+            case .escape:
+                let buf = await TerminalManager.shared.currentInputBuffer
+                if buf.isEmpty {
+                    // ESC with empty buffer — signal interrupt to outer loop
+                    await TerminalManager.shared.setInputActive(false)
+                    print("\r\u{1B}[K", terminator: "")
+                    fflush(stdout)
+                    return "\u{00}"
+                } else {
+                    // ESC with text — clear the input line
+                    await TerminalManager.shared.clearInput()
+                }
+            case .unknown:
                 break
             }
         } else {
@@ -1357,13 +1361,70 @@ func main() async throws {
     initialMsg.startTask = startTask
     try await call.requestStream.send(initialMsg)
     
+    // Helper: send an /exec command for the active session
+    func sendExec(_ command: String, sessionID: String) async throws {
+        var msg = Pecan_ClientMessage()
+        var input = Pecan_TaskInput()
+        input.sessionID = sessionID
+        input.text = "/exec \(command)"
+        msg.userInput = input
+        try await call.requestStream.send(msg)
+    }
+
     // Input Loop
     while true {
         guard let line = await readInputLine(sessionState: sessionState) else { break }
+
+        // ESC interrupt sentinel
+        if line == "\u{00}" {
+            if let sid = await sessionState.getActiveID() {
+                await TerminalManager.shared.printSystem("Interrupting agent...")
+                var msg = Pecan_ClientMessage()
+                var input = Pecan_TaskInput()
+                input.sessionID = sid
+                input.text = "Please stop what you are doing immediately and wait for my next instruction."
+                msg.userInput = input
+                try await call.requestStream.send(msg)
+            }
+            continue
+        }
+
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
-        
+
         if trimmed == "/quit" || trimmed == "exit" {
             break
+        }
+
+        // ! prefix — shell mode shortcut
+        if trimmed == "!" {
+            // Interactive shell sub-loop
+            guard let sid = await sessionState.getActiveID() else {
+                await TerminalManager.shared.printSystem("No active session.")
+                continue
+            }
+            await TerminalManager.shared.printSystem("Shell mode — type commands to run in container, empty line or 'exit' to return.")
+            while true {
+                guard let shellLine = await readInputLine(sessionState: sessionState) else { break }
+                if shellLine == "\u{00}" { break }
+                let shellCmd = shellLine.trimmingCharacters(in: .whitespacesAndNewlines)
+                if shellCmd.isEmpty || shellCmd == "exit" || shellCmd == "quit" { break }
+                await TerminalManager.shared.printUserInput("$ \(shellCmd)")
+                try await sendExec(shellCmd, sessionID: sid)
+            }
+            continue
+        }
+
+        if trimmed.hasPrefix("!") {
+            // Single exec command: !<cmd>
+            let cmd = String(trimmed.dropFirst()).trimmingCharacters(in: .whitespaces)
+            guard !cmd.isEmpty else { continue }
+            guard let sid = await sessionState.getActiveID() else {
+                await TerminalManager.shared.printSystem("No active session.")
+                continue
+            }
+            await TerminalManager.shared.printUserInput("$ \(cmd)")
+            try await sendExec(cmd, sessionID: sid)
+            continue
         }
 
         if !trimmed.isEmpty {
@@ -1380,6 +1441,12 @@ func main() async throws {
                   \(ansiCyan)/share\(ansiReset) \(ansiDim)[-rw] <path>[:<guest>]\(ansiReset)
                                     Share a host directory with the agent
                   \(ansiCyan)/unshare\(ansiReset) \(ansiDim)<path>\(ansiReset)  Remove a shared directory
+                  \(ansiCyan)/network\(ansiReset)          Show network status (default: off)
+                  \(ansiCyan)/network:on\(ansiReset)       Enable networking (snapshots image, restarts)
+                  \(ansiCyan)/network:off\(ansiReset)      Disable networking (snapshots image, restarts)
+                  \(ansiCyan)/image\(ansiReset)             Show image snapshot status
+                  \(ansiCyan)/image:save\(ansiReset)        Save container state as image snapshot
+                  \(ansiCyan)/image:discard\(ansiReset)     Discard image snapshot (use clean alpine)
                   \(ansiCyan)/changeset\(ansiReset)        Show agent's current overlay diff (/cs)
                   \(ansiCyan)/changeset:promote\(ansiReset) Apply changes to project directory
                   \(ansiCyan)/changeset:discard\(ansiReset) Wipe all changes from overlay
@@ -1412,7 +1479,13 @@ func main() async throws {
                   \(ansiCyan)/team:join\(ansiReset) \(ansiDim)<name>\(ansiReset)   Join a team
                   \(ansiCyan)/team:leave\(ansiReset)        Leave current team
 
+                \(ansiBold)Shell\(ansiReset)
+                  \(ansiCyan)!\(ansiReset)\(ansiDim)<cmd>\(ansiReset)             Run a shell command in the container
+                  \(ansiCyan)!\(ansiReset)                 Interactive shell mode (empty line to exit)
+
                 \(ansiBold)Keys\(ansiReset)
+                  \(ansiCyan)Esc\(ansiReset)               Interrupt the running agent
+                  \(ansiCyan)Esc\(ansiReset) \(ansiDim)(with text)\(ansiReset)    Clear input line
                   \(ansiCyan)↑\(ansiReset) / \(ansiCyan)↓\(ansiReset)            Command history (per agent)
                   \(ansiCyan)Tab\(ansiReset)               Agent picker (↑↓ or hotkey to select)
                   \(ansiCyan)^A\(ansiReset) / \(ansiCyan)^E\(ansiReset)          Beginning / end of line
@@ -1518,6 +1591,7 @@ func main() async throws {
             input.text = trimmed
             msg.userInput = input
 
+            await TerminalManager.shared.startThrobber(message: "Working...")
             try await call.requestStream.send(msg)
         }
     }

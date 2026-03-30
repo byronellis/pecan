@@ -126,7 +126,7 @@ func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
             logger.info("Spawn request for session \(req.sessionID)")
             response.sessionID = req.sessionID
             do {
-                try await spawner.spawnAgent(sessionID: req.sessionID, grpcSocketPath: req.grpcSocketPath, agentName: req.agentName, mounts: req.mounts)
+                try await spawner.spawnAgent(sessionID: req.sessionID, grpcSocketPath: req.grpcSocketPath, agentName: req.agentName, mounts: req.mounts, networkEnabled: req.networkEnabled, envMountPath: req.envMountPath)
                 response.success = true
             } catch {
                 logger.error("Spawn failed for \(req.sessionID): \(error)")
@@ -157,6 +157,20 @@ func handleConnection(fd: Int32, spawner: ContainerSpawner) async {
             writeLauncherResponse(fd: fd, response: response)
             // fd stays open — execShell relays stdio then closes it
             await spawner.execShell(sessionID: req.sessionID, command: Array(req.command), socketFD: fd)
+
+        case .saveEnv(let req):
+            logger.info("SaveEnv request for session \(req.sessionID) -> \(req.outputPath)")
+            response.sessionID = req.sessionID
+            do {
+                try await spawner.saveEnvironment(sessionID: req.sessionID, outputPath: req.outputPath)
+                response.success = true
+            } catch {
+                logger.error("SaveEnv failed for \(req.sessionID): \(error)")
+                response.success = false
+                response.errorMessage = error.localizedDescription
+            }
+            writeLauncherResponse(fd: fd, response: response)
+            close(fd)
 
         case nil:
             logger.error("Empty launcher request")

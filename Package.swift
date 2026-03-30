@@ -59,6 +59,8 @@ let package = Package(
             dependencies: [
                 "PecanShared",
                 .product(name: "Containerization", package: "containerization"),
+                .product(name: "ContainerizationEXT4", package: "containerization"),
+                .product(name: "ContainerizationArchive", package: "containerization"),
                 .product(name: "Logging", package: "swift-log"),
             ]),
         .executableTarget(
