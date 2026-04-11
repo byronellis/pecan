@@ -39,6 +39,13 @@ actor SessionManager {
     // Network state per session (default: off)
     private var networkEnabled: [String: Bool] = [:]
 
+    // Persistent sessions: container survives UI disconnect
+    private var persistentSessions: Set<String> = []
+
+    // Session start times and agent names for listing
+    private var sessionStartTimes: [String: Date] = [:]
+    private var sessionAgentNames: [String: String] = [:]
+
     func registerUI(sessionID: String, stream: GRPCAsyncResponseStreamWriter<Pecan_ServerMessage>) {
         uiStreams[sessionID] = stream
     }
@@ -60,6 +67,10 @@ actor SessionManager {
 
     func setStore(sessionID: String, store: SessionStore) {
         sessionStores[sessionID] = store
+        sessionStartTimes[sessionID] = sessionStartTimes[sessionID] ?? Date()
+        if let name = try? store.name {
+            sessionAgentNames[sessionID] = name
+        }
     }
 
     func getStore(sessionID: String) -> SessionStore? {
@@ -634,6 +645,54 @@ actor SessionManager {
         try store.completeTriggerDelivery(id: trigger.id!)
     }
 
+    func markPersistent(_ sessionID: String) {
+        persistentSessions.insert(sessionID)
+    }
+
+    func isPersistent(_ sessionID: String) -> Bool {
+        persistentSessions.contains(sessionID)
+    }
+
+    /// Disconnect the UI stream without terminating the container.
+    func detachUI(sessionID: String) {
+        uiStreams.removeValue(forKey: sessionID)
+    }
+
+    func getAgentName(sessionID: String) -> String? {
+        sessionAgentNames[sessionID]
+    }
+
+    func allLiveSessions() -> [Pecan_SessionInfo] {
+        let iso = ISO8601DateFormatter()
+        return sessionStores.keys.map { sid in
+            var info = Pecan_SessionInfo()
+            info.sessionID = sid
+            info.agentName = sessionAgentNames[sid] ?? ""
+            info.projectName = sessionProjects[sid] ?? ""
+            info.teamName = sessionTeams[sid] ?? ""
+            info.isBusy = agentBusy[sid] ?? false
+            if let t = sessionStartTimes[sid] { info.startedAt = iso.string(from: t) }
+            return info
+        }.sorted { $0.startedAt < $1.startedAt }
+    }
+
+    /// Build the running-sessions index for pecan-shell name lookup.
+    func flushRunningIndex() {
+        let iso = ISO8601DateFormatter()
+        let metas = sessionStores.keys.map { sid -> SessionMeta in
+            SessionMeta(
+                sessionID: sid,
+                agentName: sessionAgentNames[sid] ?? "",
+                projectName: sessionProjects[sid] ?? "",
+                teamName: sessionTeams[sid] ?? "",
+                networkEnabled: networkEnabled[sid] ?? false,
+                persistent: persistentSessions.contains(sid),
+                startedAt: sessionStartTimes[sid].map { iso.string(from: $0) } ?? ""
+            )
+        }
+        SessionMeta.writeRunningIndex(metas)
+    }
+
     func removeSession(sessionID: String) async {
         uiStreams.removeValue(forKey: sessionID)
         agentStreams.removeValue(forKey: sessionID)
@@ -644,6 +703,13 @@ actor SessionManager {
         mergingIDs.removeValue(forKey: sessionID)
         gitBaseCommits.removeValue(forKey: sessionID)
         networkEnabled.removeValue(forKey: sessionID)
+        persistentSessions.remove(sessionID)
+        sessionStartTimes.removeValue(forKey: sessionID)
+        sessionAgentNames.removeValue(forKey: sessionID)
+
+        // Remove persisted metadata so this session won't be respawned after restart
+        SessionMeta.delete(sessionID: sessionID)
+        flushRunningIndex()
 
         do {
             try await SpawnerFactory.shared.terminate(sessionID: sessionID)
@@ -774,6 +840,9 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
 
                     await SessionManager.shared.setStore(sessionID: sessionID, store: store)
                     await SessionManager.shared.registerUI(sessionID: sessionID, stream: responseStream)
+                    if startReq.persistent {
+                        await SessionManager.shared.markPersistent(sessionID)
+                    }
 
                     // Set up project and team if specified
                     var projectName = startReq.projectName
@@ -820,6 +889,19 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     started.teamName = teamName
                     response.sessionStarted = started
                     try await responseStream.send(response)
+
+                    // Persist session metadata (enables respawn after server restart for persistent sessions)
+                    let sessionMeta = SessionMeta(
+                        sessionID: sessionID,
+                        agentName: agentName,
+                        projectName: projectName,
+                        teamName: teamName,
+                        networkEnabled: false,
+                        persistent: startReq.persistent,
+                        startedAt: ISO8601DateFormatter().string(from: Date())
+                    )
+                    sessionMeta.save()
+                    await SessionManager.shared.flushRunningIndex()
 
                     // Spawn the agent using the Pluggable VM architecture
                     let envMountPath = await SessionManager.shared.persistEnvTarPath(sessionID: sessionID) ?? ""
@@ -883,6 +965,50 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                 case .toolApproval(let req):
                     logger.info("Received tool approval: \(req.approved) for \(req.toolCallID)")
                     await Self.handleToolApproval(req)
+
+                case .listSessions(_):
+                    var msg = Pecan_ServerMessage()
+                    var list = Pecan_SessionList()
+                    list.sessions = await SessionManager.shared.allLiveSessions()
+                    msg.sessionList = list
+                    try await responseStream.send(msg)
+
+                case .detachSession(let req):
+                    let sid = req.sessionID
+                    guard activeSessions.contains(sid) else { continue }
+                    await SessionManager.shared.markPersistent(sid)
+                    // Update meta.json so the server can respawn after restart
+                    if var meta = SessionMeta.load(sessionID: sid) {
+                        meta.persistent = true
+                        meta.save()
+                    }
+                    await SessionManager.shared.flushRunningIndex()
+                    logger.info("Session \(sid) marked persistent via /detach")
+
+                case .reattach(let req):
+                    let sid = req.sessionID
+                    guard await SessionManager.shared.getStore(sessionID: sid) != nil else {
+                        var errorMsg = Pecan_ServerMessage()
+                        var out = Pecan_AgentOutput()
+                        out.sessionID = sid
+                        out.text = "Session '\(sid)' is not running. It may have been stopped or the server restarted."
+                        errorMsg.agentOutput = out
+                        try await responseStream.send(errorMsg)
+                        continue
+                    }
+                    activeSessions.insert(sid)
+                    await SessionManager.shared.registerUI(sessionID: sid, stream: responseStream)
+                    // Tell the TUI about the session so its state is set up correctly
+                    var startedMsg = Pecan_ServerMessage()
+                    var started = Pecan_SessionStarted()
+                    started.sessionID = sid
+                    started.agentName = await SessionManager.shared.getAgentName(sessionID: sid) ?? ""
+                    started.projectName = await SessionManager.shared.getProjectName(sessionID: sid) ?? ""
+                    started.teamName = await SessionManager.shared.getTeamName(sessionID: sid) ?? ""
+                    startedMsg.sessionStarted = started
+                    try await responseStream.send(startedMsg)
+                    logger.info("UI reattached to session \(sid)")
+
                 case nil:
                     break
                 }
@@ -892,7 +1018,12 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
         }
         
         for sid in activeSessions {
-            await SessionManager.shared.removeSession(sessionID: sid)
+            if await SessionManager.shared.isPersistent(sid) {
+                await SessionManager.shared.detachUI(sessionID: sid)
+                logger.info("Session \(sid) detached — container remains running.")
+            } else {
+                await SessionManager.shared.removeSession(sessionID: sid)
+            }
         }
         logger.info("UI Client disconnected.")
     }
@@ -2306,6 +2437,71 @@ func ensureBuiltinSkills(skillsDir: String) {
     }
 }
 
+/// Scan ~/.pecan/sessions/ for persistent session metadata and respawn their containers.
+/// Called once at startup after the launcher and gRPC servers are ready.
+func respawnPersistentSessions(config: Config) async {
+    let metas = SessionMeta.allPersistent()
+    guard !metas.isEmpty else { return }
+    logger.info("Respawning \(metas.count) persistent session(s)...")
+
+    for meta in metas {
+        do {
+            let store = try SessionStore(sessionID: meta.sessionID, name: meta.agentName)
+            await SessionManager.shared.setStore(sessionID: meta.sessionID, store: store)
+            await SessionManager.shared.markPersistent(meta.sessionID)
+
+            var shareMounts: [MountSpec] = []
+
+            if !meta.projectName.isEmpty {
+                let projectStore = try ProjectStore(name: meta.projectName)
+                await SessionManager.shared.setProjectForSession(
+                    sessionID: meta.sessionID, projectName: meta.projectName, store: projectStore)
+                if let dir = projectStore.directory {
+                    shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
+                    await SessionManager.shared.setGitBase(
+                        sessionID: meta.sessionID, commit: gitHead(for: dir))
+                }
+                await ProjectToolRegistry.shared.registerSession(
+                    sessionID: meta.sessionID, projectName: meta.projectName,
+                    projectDirectory: projectStore.directory ?? "")
+
+                if !meta.teamName.isEmpty && meta.teamName != "default" {
+                    let teamStore = try TeamStore(teamName: meta.teamName, projectName: meta.projectName)
+                    await SessionManager.shared.setTeamForSession(
+                        sessionID: meta.sessionID, teamName: meta.teamName,
+                        projectName: meta.projectName, store: teamStore)
+                    shareMounts.append(MountSpec(
+                        source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
+                }
+            }
+
+            // Re-add user shares persisted in the session store
+            if let shares = try? store.getShares() {
+                for share in shares {
+                    shareMounts.append(MountSpec(
+                        source: share.hostPath, destination: share.guestPath,
+                        readOnly: share.mode == "ro"))
+                }
+            }
+
+            let envMountPath = await SessionManager.shared.persistEnvTarPath(
+                sessionID: meta.sessionID) ?? ""
+            try await SpawnerFactory.shared.spawn(
+                sessionID: meta.sessionID,
+                agentName: meta.agentName,
+                workspacePath: store.workspacePath.path,
+                shares: shareMounts,
+                networkEnabled: meta.networkEnabled,
+                envMountPath: envMountPath
+            )
+            logger.info("Respawned session \(meta.sessionID) (\(meta.agentName))")
+        } catch {
+            logger.error("Failed to respawn session \(meta.sessionID) (\(meta.agentName)): \(error)")
+        }
+    }
+    await SessionManager.shared.flushRunningIndex()
+}
+
 func main() async throws {
 
     let config = try Config.load()
@@ -2395,6 +2591,9 @@ func main() async throws {
     let skillsDir = homeDir.appendingPathComponent(".pecan/skills")
     try? FileManager.default.createDirectory(at: skillsDir, withIntermediateDirectories: true)
     ensureBuiltinSkills(skillsDir: skillsDir.path)
+
+    // Respawn persistent sessions from previous server run
+    Task { await respawnPersistentSessions(config: config) }
 
     // Background trigger timer: check for due triggers every 10 seconds
     Task {

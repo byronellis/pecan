@@ -1194,6 +1194,7 @@ func main() async throws {
     // Parse CLI arguments
     var cliProjectName: String? = nil
     var cliTeamName: String? = nil
+    var cliPersistent: Bool = false
     do {
         var i = 1
         while i < CommandLine.arguments.count {
@@ -1204,6 +1205,8 @@ func main() async throws {
             case "--team":
                 i += 1
                 if i < CommandLine.arguments.count { cliTeamName = CommandLine.arguments[i] }
+            case "--keep", "-k":
+                cliPersistent = true
             default: break
             }
             i += 1
@@ -1256,6 +1259,27 @@ func main() async throws {
     }
 
     let client = Pecan_ClientServiceAsyncClient(channel: channel)
+
+    /// Bridges the async receiver loop and the synchronous startup flow.
+    actor SessionListWaiter {
+        private var cont: CheckedContinuation<[Pecan_SessionInfo], Never>?
+        private var delivered = false
+        private var result: [Pecan_SessionInfo] = []
+
+        func deliver(_ sessions: [Pecan_SessionInfo]) {
+            guard !delivered else { return }
+            delivered = true
+            result = sessions
+            cont?.resume(returning: sessions)
+            cont = nil
+        }
+
+        func wait() async -> [Pecan_SessionInfo] {
+            if delivered { return result }
+            return await withCheckedContinuation { c in cont = c }
+        }
+    }
+    let sessionListWaiter = SessionListWaiter()
 
     // Open Bidirectional Stream
     let call = client.makeStreamEventsCall()
@@ -1343,6 +1367,9 @@ func main() async throws {
                         await TerminalManager.shared.updateProjectTeam(project: projectDisplay, team: teamDisplay)
                     }
 
+                case .sessionList(let list):
+                    await sessionListWaiter.deliver(list.sessions)
+
                 case nil:
                     break
                 }
@@ -1351,15 +1378,79 @@ func main() async throws {
             await TerminalManager.shared.printSystem("Disconnected from server: \(error)")
         }
     }
-    
-    // Send an initial task to kick things off
-    var initialMsg = Pecan_ClientMessage()
-    var startTask = Pecan_StartTaskRequest()
-    startTask.initialPrompt = "Initialize new session"
-    if let p = cliProjectName { startTask.projectName = p }
-    if let t = cliTeamName { startTask.teamName = t }
-    initialMsg.startTask = startTask
-    try await call.requestStream.send(initialMsg)
+
+    // Ask server for any running sessions, then decide to reattach or start new
+    var listReq = Pecan_ClientMessage()
+    listReq.listSessions = Pecan_ListSessionsRequest()
+    try await call.requestStream.send(listReq)
+
+    // Wait up to 1.5s for the session list before falling through to start-new
+    let liveSessions = await withTaskGroup(of: [Pecan_SessionInfo].self) { group in
+        group.addTask { await sessionListWaiter.wait() }
+        group.addTask {
+            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            await sessionListWaiter.deliver([])
+            return []
+        }
+        let r = await group.next()!
+        group.cancelAll()
+        return r
+    }
+
+    if !liveSessions.isEmpty {
+        let iso = ISO8601DateFormatter()
+        iso.formatOptions = [.withInternetDateTime]
+        func relativeAge(_ isoString: String) -> String {
+            guard let date = iso.date(from: isoString) else { return "" }
+            let secs = Int(-date.timeIntervalSinceNow)
+            if secs < 60 { return "just now" }
+            if secs < 3600 { return "\(secs / 60)m ago" }
+            if secs < 86400 { return "\(secs / 3600)h ago" }
+            return "\(secs / 86400)d ago"
+        }
+
+        await TerminalManager.shared.printSystem("Running agents:")
+        for (i, s) in liveSessions.enumerated() {
+            var label = "  \(i + 1).  \(s.agentName)"
+            if !s.projectName.isEmpty { label += "  [\(s.projectName)]" }
+            label += s.isBusy ? "  · busy" : "  · idle"
+            if !s.startedAt.isEmpty { label += "  · \(relativeAge(s.startedAt))" }
+            await TerminalManager.shared.printSystem(label)
+        }
+        await TerminalManager.shared.printSystem("")
+        await TerminalManager.shared.printSystem("Enter a number to reattach, or press Enter to start a new agent:")
+
+        let choice = await readInputLine(sessionState: sessionState)
+        let trimmedChoice = choice?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+        if let idx = Int(trimmedChoice), idx >= 1, idx <= liveSessions.count {
+            let target = liveSessions[idx - 1]
+            var reattachMsg = Pecan_ClientMessage()
+            var reattach = Pecan_ReattachRequest()
+            reattach.sessionID = target.sessionID
+            reattachMsg.reattach = reattach
+            try await call.requestStream.send(reattachMsg)
+        } else {
+            // Fall through to start a new agent
+            var initialMsg = Pecan_ClientMessage()
+            var startTask = Pecan_StartTaskRequest()
+            startTask.initialPrompt = "Initialize new session"
+            if let p = cliProjectName { startTask.projectName = p }
+            if let t = cliTeamName { startTask.teamName = t }
+            startTask.persistent = cliPersistent
+            initialMsg.startTask = startTask
+            try await call.requestStream.send(initialMsg)
+        }
+    } else {
+        var initialMsg = Pecan_ClientMessage()
+        var startTask = Pecan_StartTaskRequest()
+        startTask.initialPrompt = "Initialize new session"
+        if let p = cliProjectName { startTask.projectName = p }
+        if let t = cliTeamName { startTask.teamName = t }
+        startTask.persistent = cliPersistent
+        initialMsg.startTask = startTask
+        try await call.requestStream.send(initialMsg)
+    }
     
     // Helper: send an /exec command for the active session
     func sendExec(_ command: String, sessionID: String) async throws {
@@ -1392,6 +1483,18 @@ func main() async throws {
         let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if trimmed == "/quit" || trimmed == "exit" {
+            break
+        }
+
+        if trimmed == "/detach" {
+            if let sid = await sessionState.getActiveID() {
+                var msg = Pecan_ClientMessage()
+                msg.detachSession = Pecan_DetachSession.with { $0.sessionID = sid }
+                try await call.requestStream.send(msg)
+                await TerminalManager.shared.printSystem("Detached — agent continues running. Reconnect with: pecan")
+            } else {
+                await TerminalManager.shared.printSystem("No active session to detach.")
+            }
             break
         }
 
@@ -1454,7 +1557,8 @@ func main() async throws {
                   \(ansiCyan)/mergequeue\(ansiReset)       List merge queue (/mq)
                   \(ansiCyan)/mq:approve\(ansiReset) \(ansiDim)<id>\(ansiReset)  Approve and promote changeset
                   \(ansiCyan)/mq:reject\(ansiReset) \(ansiDim)<id>\(ansiReset)   Reject changeset
-                  \(ansiCyan)/quit\(ansiReset)             Exit Pecan
+                  \(ansiCyan)/detach\(ansiReset)           Disconnect UI, keep agent running
+                  \(ansiCyan)/quit\(ansiReset)             Exit Pecan and stop the agent
 
                 \(ansiBold)Tasks\(ansiReset) \(ansiDim)(/t = /task, /ts = /tasks)\(ansiReset)
                   \(ansiCyan)/t\(ansiReset) \(ansiDim)<text>\(ansiReset)          Create a new task

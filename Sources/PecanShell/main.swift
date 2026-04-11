@@ -4,6 +4,43 @@ import PecanShared
 import Darwin
 #endif
 
+// MARK: - Running sessions index
+
+struct SessionEntry: Codable {
+    var sessionID: String
+    var agentName: String
+    var projectName: String
+    var teamName: String
+    var networkEnabled: Bool
+    var persistent: Bool
+    var startedAt: String
+
+    enum CodingKeys: String, CodingKey {
+        case sessionID = "session_id"
+        case agentName = "agent_name"
+        case projectName = "project_name"
+        case teamName = "team_name"
+        case networkEnabled = "network_enabled"
+        case persistent
+        case startedAt = "started_at"
+    }
+}
+
+func readSessionsIndex() -> [SessionEntry] {
+    let path = FileManager.default.currentDirectoryPath + "/.run/sessions.json"
+    guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)) else { return [] }
+    return (try? JSONDecoder().decode([SessionEntry].self, from: data)) ?? []
+}
+
+func resolveSessionID(_ nameOrID: String) -> String? {
+    let sessions = readSessionsIndex()
+    // Exact session ID match
+    if sessions.contains(where: { $0.sessionID == nameOrID }) { return nameOrID }
+    // Agent name match (case-insensitive, first match)
+    let lower = nameOrID.lowercased()
+    return sessions.first { $0.agentName.lowercased() == lower }?.sessionID
+}
+
 // MARK: - Socket helpers
 
 func connectToLauncher() -> Int32 {
@@ -68,12 +105,38 @@ func readResponse(fd: Int32) throws -> Pecan_LauncherResponse {
 // MARK: - Main
 
 let args = CommandLine.arguments
+
+// pecan-shell list
+if args.count >= 2 && args[1] == "list" {
+    let sessions = readSessionsIndex()
+    if sessions.isEmpty {
+        print("No running sessions.")
+    } else {
+        print(String(format: "%-20s  %-36s  %-15s  %s", "NAME", "SESSION ID", "PROJECT", "STARTED"))
+        print(String(repeating: "-", count: 90))
+        for s in sessions {
+            let proj = s.projectName.isEmpty ? "-" : s.projectName
+            let started = String(s.startedAt.prefix(19)).replacingOccurrences(of: "T", with: " ")
+            print(String(format: "%-20s  %-36s  %-15s  %s",
+                s.agentName, s.sessionID, proj, started))
+        }
+    }
+    exit(0)
+}
+
 guard args.count >= 2 else {
-    fputs("Usage: pecan-shell <session-id> [command ...]\n", stderr)
+    fputs("Usage: pecan-shell list\n", stderr)
+    fputs("       pecan-shell <name|session-id> [command ...]\n", stderr)
     exit(1)
 }
 
-let sessionID = args[1]
+let nameOrID = args[1]
+guard let sessionID = resolveSessionID(nameOrID) else {
+    fputs("error: no running session named '\(nameOrID)'\n", stderr)
+    fputs("Run 'pecan-shell list' to see running sessions.\n", stderr)
+    exit(1)
+}
+
 let command = Array(args.dropFirst(2))
 
 // Build exec request
@@ -99,7 +162,7 @@ do {
     exit(1)
 }
 
-print("[pecan-shell] connected to \(sessionID)")
+print("[pecan-shell] connected to \(sessionID) (\(nameOrID))")
 
 // Stdin → socket
 let stdinTask = Task.detached {
