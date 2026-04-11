@@ -125,6 +125,51 @@ Pecan supports organizing work across projects and teams with persistent stores 
 
 **Teams** layer shared workspaces (`/team/`) and memories on top of projects, enabling multiple agents to collaborate on the same codebase with explicit changeset handoffs.
 
+### Project Build & Test Tools
+
+When an agent is started with a project context, the server automatically detects the project's build system and registers the appropriate tools with the agent. The LLM can then call `build`, `test`, and similar tools just like any other tool — no skill activation or special instructions required.
+
+**Auto-detected build systems:**
+
+| Indicator | Tools registered |
+|---|---|
+| `Package.swift` | `build`, `build_release`, `test` |
+| `*.xcodeproj` / `*.xcworkspace` | `build`, `test` (via `xcodebuild`) |
+| `package.json` | One tool per npm script; well-known names (`build`, `test`, `dev`, `lint`, etc.) keep their name, others are prefixed. Detects npm/yarn/pnpm from lock file. |
+| `go.mod` | `build`, `test`, `vet` |
+| `Cargo.toml` | `build`, `build_release`, `test`, `check`, `clippy` |
+| `CMakeLists.txt` | `cmake_configure`, `build`, `test` (ctest) |
+| `Makefile` | `build`, `test`, `make_clean` (build/test only added if not already covered) |
+
+Tools execute on the **host** in the project directory, not inside the container. The actual command is never sent to the agent — only the tool name, description, and parameter schema are exposed, so the LLM can't observe or manipulate your build commands.
+
+**Long output:** When output exceeds 8 KB, the full output is written to `.pecan/tool-output/` inside the project directory and the agent receives a trimmed view (first 30 + last 60 lines) with a pointer to the file at `/project/.pecan/tool-output/`. The agent can read the full file with `read_file` if it needs to.
+
+**Custom tools:** Add or override any tool by creating `~/.pecan/projects/{projectName}/tools.json`:
+
+```json
+{
+    "tools": [
+        {
+            "name": "build",
+            "description": "Build with strict concurrency checking",
+            "command": ["swift", "build", "-Xswiftc", "-strict-concurrency=complete"],
+            "working_directory": ".",
+            "environment": {},
+            "timeout": 600
+        },
+        {
+            "name": "lint",
+            "description": "Run SwiftLint",
+            "command": ["swiftlint"],
+            "timeout": 60
+        }
+    ]
+}
+```
+
+Custom tools override auto-detected tools of the same name; others are appended alongside them.
+
 ### Changeset Workflow
 
 The changeset is the set of writes the agent has made to `/project/` that haven't yet been merged back to the host. All changeset commands are issued from the TUI:

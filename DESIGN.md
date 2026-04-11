@@ -104,8 +104,27 @@ Tools carry tags that control whether they are sent to the LLM as structured too
 - `web` -- Always active: `web_fetch`, `web_search` (proxied through server).
 - `skills` -- Always active: `activate_skill` for loading Agent Skills.
 - `invoke_only` -- Registered in `ToolManager` but never sent to the LLM. Accessible to skill scripts via `pecan-agent invoke <tool> '<json>'`. Includes: `http_request`, `create_lua_tool`, all task tools, all trigger tools.
+- `project` -- Build and test tools registered dynamically when the agent has a project context. Sent to the LLM alongside core tools.
 
-The `PromptComposer` maintains the active tag set (`core`, `web`, `skills`) and only includes matching tools in LLM requests. This keeps the tool count at 9, reducing token overhead per turn.
+The `PromptComposer` maintains the active tag set (`core`, `web`, `skills`) and only includes matching tools in LLM requests. When a project context is active, the `project` tag is also included. This keeps the base tool count at 9, rising to 9 + N project tools when working in a project.
+
+### Project Tools
+
+Project tools bridge the gap between agent and host build system. They are discovered server-side and registered with the agent at startup so the LLM can call them as first-class tools.
+
+**Flow:**
+1. Agent registration response includes a list of `ProjectToolDefinition` messages (name, description, JSON schema — command is never sent to the agent)
+2. Agent creates a `ProjectTool` instance for each definition and registers it in `ToolManager`
+3. When the LLM calls a project tool, `ProjectTool.execute()` sends a `ToolExecutionRequest` to the server via the same gRPC stream used for all other host operations
+4. Server looks up the full command in `ProjectToolRegistry`, runs the process on the host in the project directory, and returns the result via `ToolExecutionResponse`
+
+**Auto-detection** (`ProjectToolRegistry.detectTools(in:)`) scans the project directory for well-known indicator files and constructs an appropriate tool set. Custom tools can be added or override detected ones via `~/.pecan/projects/{name}/tools.json`.
+
+**Long output handling:** Output exceeding 8 KB is written to `{projectDirectory}/.pecan/tool-output/{tool}-{id}.txt`. The agent receives a trimmed view (first 30 + last 60 lines) and the path at `/project/.pecan/tool-output/...` via the COW overlay lower layer. On write failure, the full output is returned inline.
+
+**Key files:**
+- `Sources/PecanServer/ProjectToolRegistry.swift` -- Auto-detection, custom tool loading, host-side process execution
+- `Sources/PecanAgent/ProjectToolClient.swift` -- `ProjectToolClient` actor (same continuation pattern as `TaskClient`) and `ProjectTool` struct
 
 ### Lua Tool Specification
 
@@ -233,6 +252,7 @@ Each session is stored at `~/.pecan/sessions/{sessionID}/`:
 7. Register built-in prompt fragments
 8. Load user prompt fragments from `~/.pecan/prompts/*.lua`
 9. Connect to server via gRPC
-10. Send registration; server responds with project/team context
-11. Compose system prompt (reads CORE.md files from FUSE at this point) and send to server context store
-12. Enter event loop
+10. Send registration; server responds with project/team context and available project tools
+11. Register any project tools received from server into `ToolManager`
+12. Compose system prompt (reads CORE.md files from FUSE at this point) and send to server context store
+13. Enter event loop
