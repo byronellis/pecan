@@ -90,6 +90,10 @@ actor SessionManager {
         return projectStores[name]
     }
 
+    func getProjectDirectory(sessionID: String) -> String? {
+        getProjectStore(sessionID: sessionID)?.directory
+    }
+
     func getTeamStore(sessionID: String) -> TeamStore? {
         guard let projectName = sessionProjects[sessionID],
               let teamName = sessionTeams[sessionID] else { return nil }
@@ -1720,9 +1724,23 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     if let projectName = await SessionManager.shared.getProjectName(sessionID: reg.sessionID) {
                         resp.projectName = projectName
                         if let projectStore = await SessionManager.shared.getProjectStore(sessionID: reg.sessionID) {
-                            resp.projectDirectory = projectStore.directory ?? ""
-                            if projectStore.directory != nil {
+                            let projectDir = projectStore.directory ?? ""
+                            resp.projectDirectory = projectDir
+                            if !projectDir.isEmpty {
                                 resp.projectMount = "/project"
+                                // Auto-detect and load project tools
+                                await ProjectToolRegistry.shared.registerSession(
+                                    sessionID: reg.sessionID,
+                                    projectName: projectName,
+                                    projectDirectory: projectDir
+                                )
+                                resp.projectTools = await ProjectToolRegistry.shared.getAllTools(sessionID: reg.sessionID).map { tool in
+                                    var def = Pecan_ProjectToolDefinition()
+                                    def.name = tool.name
+                                    def.description_p = tool.description
+                                    def.parametersJsonSchema = tool.parametersSchema ?? ""
+                                    return def
+                                }
                             }
                         }
                     }
@@ -1897,12 +1915,24 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     }
 
                 case .toolRequest(let req):
-                    logger.info("Tool Request from agent: \(req.toolName)")
-                    // Server-side tools to be implemented later if needed.
+                    guard let sid = activeSessionID else { continue }
+                    logger.info("Project tool request: '\(req.toolName)' for session \(sid)")
                     var cmdMsg = Pecan_HostCommand()
-                    var toolResp = Pecan_ToolExecutionResponse()
-                    toolResp.requestID = req.requestID
-                    toolResp.errorMessage = "Server-side tools are not currently implemented. Agent should execute tools locally."
+                    let projectDir = await SessionManager.shared.getProjectDirectory(sessionID: sid)
+                    let toolResp: Pecan_ToolExecutionResponse
+                    if let projectDir, !projectDir.isEmpty {
+                        toolResp = await ProjectToolRegistry.shared.executeTool(
+                            sessionID: sid,
+                            name: req.toolName,
+                            projectDirectory: projectDir,
+                            requestID: req.requestID
+                        )
+                    } else {
+                        var r = Pecan_ToolExecutionResponse()
+                        r.requestID = req.requestID
+                        r.errorMessage = "No project directory associated with this session. Project tools require a project context."
+                        toolResp = r
+                    }
                     cmdMsg.toolResponse = toolResp
                     try await responseStream.send(cmdMsg)
 

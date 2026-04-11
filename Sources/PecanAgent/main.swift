@@ -190,6 +190,9 @@ func main() async throws {
     await SkillsClient.shared.configure { msg in
         try await writer.send(msg)
     }
+    await ProjectToolClient.shared.configure { msg in
+        try await writer.send(msg)
+    }
 
     // Register
     var regMsg = Pecan_AgentEvent()
@@ -222,6 +225,16 @@ func main() async throws {
                         mount: resp.teamMount
                     )
                 }
+
+                // Register project tools received from server
+                if !resp.projectTools.isEmpty {
+                    for toolDef in resp.projectTools {
+                        let tool = ProjectTool(definition: toolDef)
+                        await ToolManager.shared.register(tool: tool)
+                    }
+                    logger.info("Registered \(resp.projectTools.count) project tool(s): \(resp.projectTools.map(\.name).joined(separator: ", "))")
+                }
+
                 logger.info("Registration: firing agent.registered hook")
 
                 await HookManager.shared.fire(event: "agent.registered", data: [
@@ -522,7 +535,7 @@ func main() async throws {
                 await HttpClient.shared.handleResponse(resp)
 
             case .toolResponse(let resp):
-                logger.info("Received tool_response from server for \(resp.requestID) - currently unused by local tool execution flow")
+                await ProjectToolClient.shared.handleResponse(resp)
                 
             case .execCommand(let cmd):
                 logger.info("Received exec command: \(cmd.command)")
