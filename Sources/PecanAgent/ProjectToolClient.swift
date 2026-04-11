@@ -68,16 +68,18 @@ public struct ProjectTool: PecanTool, Sendable {
 
     public func execute(argumentsJSON: String) async throws -> String {
         let raw = try await ProjectToolClient.shared.execute(toolName: name, argumentsJSON: argumentsJSON)
-        // Parse result JSON and format for the agent
-        if let data = raw.data(using: .utf8),
-           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
-        {
-            let output = obj["output"] as? String ?? ""
-            let exitCode = obj["exit_code"] as? Int ?? -1
-            let success = obj["success"] as? Bool ?? false
-            let header = success ? "✓ exit 0" : "✗ exit \(exitCode)"
-            return "[\(header)]\n\(output)"
+        guard let data = raw.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return raw }
+
+        let output = obj["output"] as? String ?? ""
+        let exitCode = obj["exit_code"] as? Int ?? -1
+        let success = obj["success"] as? Bool ?? false
+        let header = success ? "exit 0" : "exit \(exitCode)"
+
+        if let filePath = obj["output_file"] as? String {
+            return "[\(header) — full output at \(filePath)]\n\(output)"
         }
-        return raw
+        return "[\(header)]\n\(output)"
     }
 }

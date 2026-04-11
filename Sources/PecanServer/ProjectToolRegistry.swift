@@ -126,11 +126,16 @@ actor ProjectToolRegistry {
             let output = String(data: outputData, encoding: .utf8) ?? ""
             let exitCode = process.terminationStatus
 
-            let result: [String: Any] = [
-                "output": output,
+            let (displayOutput, outputFile) = Self.processOutput(
+                output, toolName: name, requestID: requestID, projectDirectory: projectDirectory
+            )
+
+            var result: [String: Any] = [
+                "output": displayOutput,
                 "exit_code": Int(exitCode),
                 "success": exitCode == 0,
             ]
+            if let outputFile { result["output_file"] = outputFile }
             let resultData = try JSONSerialization.data(withJSONObject: result)
             resp.resultJson = String(data: resultData, encoding: .utf8) ?? "{}"
         } catch {
@@ -138,6 +143,63 @@ actor ProjectToolRegistry {
         }
 
         return resp
+    }
+
+    // MARK: - Output processing
+
+    /// If output exceeds the inline threshold, writes it to a file in the project's
+    /// `.pecan/tool-output/` directory and returns a truncated summary + the agent-side path.
+    /// Returns (displayOutput, agentFilePath?).
+    private static let inlineThreshold = 8 * 1024  // 8 KB
+    private static let headLines = 30
+    private static let tailLines = 60
+
+    private static func processOutput(
+        _ output: String,
+        toolName: String,
+        requestID: String,
+        projectDirectory: String
+    ) -> (display: String, filePath: String?) {
+        guard output.utf8.count > inlineThreshold else {
+            return (output, nil)
+        }
+
+        // Write full output to .pecan/tool-output/ inside the project directory
+        let outputDir = URL(fileURLWithPath: projectDirectory).appendingPathComponent(".pecan/tool-output")
+        let fileName = "\(toolName)-\(requestID.prefix(8)).txt"
+        let outputFile = outputDir.appendingPathComponent(fileName)
+        let agentPath = "/project/.pecan/tool-output/\(fileName)"
+
+        do {
+            try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+            try output.write(to: outputFile, atomically: true, encoding: .utf8)
+        } catch {
+            registryLogger.warning("Could not write tool output file: \(error)")
+            // Fall back to returning the full output rather than silently dropping it
+            return (output, nil)
+        }
+
+        let lines = output.components(separatedBy: "\n")
+        let totalLines = lines.count
+        let head = lines.prefix(headLines).joined(separator: "\n")
+        let tail = lines.suffix(tailLines).joined(separator: "\n")
+        let skipped = max(0, totalLines - headLines - tailLines)
+
+        let display: String
+        if skipped > 0 {
+            display = """
+            \(head)
+
+            ... [\(skipped) lines omitted — full output (\(output.utf8.count) bytes) at \(agentPath)] ...
+
+            \(tail)
+            """
+        } else {
+            // head + tail together cover all lines (small file just over threshold)
+            display = output
+        }
+
+        return (display, agentPath)
     }
 
     // MARK: - Loading
