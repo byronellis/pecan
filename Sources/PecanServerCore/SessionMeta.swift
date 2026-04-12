@@ -3,16 +3,16 @@ import Foundation
 /// Lightweight metadata persisted alongside each session's SQLite store.
 /// Written to ~/.pecan/sessions/{id}/meta.json so sessions marked persistent
 /// can be respawned after a server restart.
-struct SessionMeta: Codable, Sendable {
-    var sessionID: String
-    var agentName: String
-    var projectName: String
-    var teamName: String
-    var networkEnabled: Bool
-    var persistent: Bool
-    var startedAt: String   // ISO 8601
+public struct SessionMeta: Codable, Sendable {
+    public var sessionID: String
+    public var agentName: String
+    public var projectName: String
+    public var teamName: String
+    public var networkEnabled: Bool
+    public var persistent: Bool
+    public var startedAt: String   // ISO 8601
 
-    enum CodingKeys: String, CodingKey {
+    public enum CodingKeys: String, CodingKey {
         case sessionID = "session_id"
         case agentName = "agent_name"
         case projectName = "project_name"
@@ -22,33 +22,44 @@ struct SessionMeta: Codable, Sendable {
         case startedAt = "started_at"
     }
 
+    public init(sessionID: String, agentName: String, projectName: String,
+                teamName: String, networkEnabled: Bool, persistent: Bool, startedAt: String) {
+        self.sessionID = sessionID
+        self.agentName = agentName
+        self.projectName = projectName
+        self.teamName = teamName
+        self.networkEnabled = networkEnabled
+        self.persistent = persistent
+        self.startedAt = startedAt
+    }
+
     // MARK: - Per-session file
 
-    static func url(sessionID: String) -> URL {
+    public static func url(sessionID: String) -> URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".pecan/sessions/\(sessionID)/meta.json")
     }
 
-    func save() {
+    public func save() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
         guard let data = try? encoder.encode(self) else { return }
         try? data.write(to: Self.url(sessionID: sessionID))
     }
 
-    static func load(sessionID: String) -> SessionMeta? {
+    public static func load(sessionID: String) -> SessionMeta? {
         guard let data = try? Data(contentsOf: url(sessionID: sessionID)) else { return nil }
         return try? JSONDecoder().decode(SessionMeta.self, from: data)
     }
 
-    static func delete(sessionID: String) {
+    public static func delete(sessionID: String) {
         try? FileManager.default.removeItem(at: url(sessionID: sessionID))
     }
 
     // MARK: - All persistent sessions
 
     /// Scans ~/.pecan/sessions/ for meta.json files flagged persistent=true.
-    static func allPersistent() -> [SessionMeta] {
+    public static func allPersistent() -> [SessionMeta] {
         let sessionsDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".pecan/sessions")
         guard let entries = try? FileManager.default.contentsOfDirectory(atPath: sessionsDir.path) else {
@@ -64,12 +75,12 @@ struct SessionMeta: Codable, Sendable {
 
     /// Path to the running-sessions index written by the server.
     /// pecan-shell reads this for name-based session lookup.
-    static func runningIndexURL() -> URL {
+    public static func runningIndexURL() -> URL {
         URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
             .appendingPathComponent(".run/sessions.json")
     }
 
-    static func writeRunningIndex(_ sessions: [SessionMeta]) {
+    public static func writeRunningIndex(_ sessions: [SessionMeta]) {
         let encoder = JSONEncoder()
         encoder.outputFormatting = .prettyPrinted
         guard let data = try? encoder.encode(sessions) else { return }
@@ -79,7 +90,7 @@ struct SessionMeta: Codable, Sendable {
         try? data.write(to: url)
     }
 
-    static func readRunningIndex() -> [SessionMeta] {
+    public static func readRunningIndex() -> [SessionMeta] {
         guard let data = try? Data(contentsOf: runningIndexURL()) else { return [] }
         return (try? JSONDecoder().decode([SessionMeta].self, from: data)) ?? []
     }

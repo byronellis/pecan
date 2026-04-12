@@ -165,7 +165,7 @@ do {
 print("[pecan-shell] connected to \(sessionID) (\(nameOrID))")
 
 // Enter raw mode if stdin is a TTY so the container PTY gets clean byte I/O
-var savedTermios = termios()
+nonisolated(unsafe) var savedTermios = termios()
 let stdinIsTTY = isatty(STDIN_FILENO) != 0
 if stdinIsTTY {
     tcgetattr(STDIN_FILENO, &savedTermios)

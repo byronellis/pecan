@@ -1,5 +1,5 @@
 {
-  "originHash" : "60469f7fb094997de493ed9f7c819d9b4d430cae2719435f82e021184991d4f0",
+  "originHash" : "4d5235e712fc09ce54a89bd5cc8415c5eec1a5a8ba1c62085c5045ed368422cb",
   "pins" : [
     {
       "identity" : "ansiterminal",
@@ -61,7 +61,7 @@
       "location" : "https://github.com/byronellis/pecan-shared.git",
       "state" : {
         "branch" : "main",
-        "revision" : "bcf8e713bb341717d870be10fe5d8ef4bf0c124e"
+        "revision" : "fceff13eb30a41245f6bd8009ba3e55c54da14c0"
       }
     },
     {

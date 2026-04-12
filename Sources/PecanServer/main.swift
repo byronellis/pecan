@@ -2,6 +2,7 @@ import Foundation
 import GRPC
 import NIO
 import PecanShared
+import PecanServerCore
 import Logging
 
 let logger = Logger(label: "com.pecan.server")

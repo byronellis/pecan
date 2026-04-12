@@ -15,6 +15,8 @@ let package = Package(
         .executable(name: "pecan", targets: ["PecanUI"]),
         .executable(name: "pecan-agent", targets: ["PecanAgent"]),
         .executable(name: "pecan-shell", targets: ["PecanShell"]),
+        .executable(name: "pecan-mock-llm", targets: ["PecanMockLLM"]),
+        .library(name: "PecanServerCore", targets: ["PecanServerCore"]),
     ],
     dependencies: [
         .package(url: "https://github.com/byronellis/pecan-shared.git", branch: "main"),
@@ -23,8 +25,25 @@ let package = Package(
         .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
         .package(url: "https://github.com/apple/containerization.git", branch: "main"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
+        .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.27.0"),
+        .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
     ],
     targets: [
+        // MARK: - Testable core library (pure logic, no gRPC/container deps)
+        .target(
+            name: "PecanServerCore",
+            dependencies: [],
+            path: "Sources/PecanServerCore"
+        ),
+
+        // MARK: - Mock LLM server for integration testing
+        .executableTarget(
+            name: "PecanMockLLM",
+            dependencies: [],
+            path: "Sources/PecanMockLLM"
+        ),
+
+        // MARK: - Production targets
         .executableTarget(
             name: "PecanTestClient",
             dependencies: [
@@ -35,6 +54,7 @@ let package = Package(
             dependencies: [
                 .product(name: "PecanShared", package: "pecan-shared"),
                 .product(name: "GRDB", package: "GRDB.swift"),
+                "PecanServerCore",
             ]),
         .executableTarget(
             name: "PecanVMLauncher",
@@ -62,5 +82,21 @@ let package = Package(
             dependencies: [
                 .product(name: "PecanShared", package: "pecan-shared"),
             ]),
+
+        // MARK: - Test targets
+        .testTarget(
+            name: "PecanCoreTests",
+            dependencies: ["PecanServerCore"],
+            path: "Tests/PecanCoreTests"
+        ),
+        .testTarget(
+            name: "PecanIntegrationTests",
+            dependencies: [
+                .product(name: "PecanShared", package: "pecan-shared"),
+                .product(name: "GRPC", package: "grpc-swift"),
+                .product(name: "NIO", package: "swift-nio"),
+            ],
+            path: "Tests/PecanIntegrationTests"
+        ),
     ]
 )

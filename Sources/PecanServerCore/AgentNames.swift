@@ -1,7 +1,7 @@
 import Foundation
 
-struct AgentNames {
-    static let names = [
+public struct AgentNames {
+    public static let names = [
         // Tron
         "tron", "clu", "flynn", "quorra", "rinzler", "sark", "yori", "ram",
         // Famous robots
@@ -10,7 +10,7 @@ struct AgentNames {
         "baymax", "chappie", "marvin", "kryten", "dot", "gir"
     ]
 
-    static func randomName() -> String {
+    public static func randomName() -> String {
         names.randomElement()!
     }
 }
