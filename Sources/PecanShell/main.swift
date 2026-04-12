@@ -112,12 +112,12 @@ if args.count >= 2 && args[1] == "list" {
     if sessions.isEmpty {
         print("No running sessions.")
     } else {
-        print(String(format: "%-20s  %-36s  %-15s  %s", "NAME", "SESSION ID", "PROJECT", "STARTED"))
+        print(String(format: "%-20@  %-36@  %-15@  %@", "NAME", "SESSION ID", "PROJECT", "STARTED"))
         print(String(repeating: "-", count: 90))
         for s in sessions {
             let proj = s.projectName.isEmpty ? "-" : s.projectName
             let started = String(s.startedAt.prefix(19)).replacingOccurrences(of: "T", with: " ")
-            print(String(format: "%-20s  %-36s  %-15s  %s",
+            print(String(format: "%-20@  %-36@  %-15@  %@",
                 s.agentName, s.sessionID, proj, started))
         }
     }
