@@ -494,7 +494,8 @@ actor ContainerSpawner {
         let handle = FileHandle(fileDescriptor: socketFD, closeOnDealloc: false)
         let writer = LoggingWriter(inner: FileWriter(handle: handle), sessionID: sessionID)
         let reader = SocketReaderStream(fd: socketFD)
-        let cmd = command.isEmpty ? ["/bin/sh", "-i"] : command
+        let interactive = command.isEmpty
+        let cmd = interactive ? ["/bin/sh"] : command
 
         do {
             logger.info("execShell: calling container.exec for session \(sessionID)")
@@ -505,7 +506,7 @@ actor ContainerSpawner {
                 config.stdin = reader
                 config.stdout = writer
                 config.stderr = writer
-                config.terminal = false
+                config.terminal = interactive
             }
             logger.info("execShell: container.exec returned, calling process.start")
             try await process.start()

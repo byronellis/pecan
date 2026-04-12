@@ -164,6 +164,20 @@ do {
 
 print("[pecan-shell] connected to \(sessionID) (\(nameOrID))")
 
+// Enter raw mode if stdin is a TTY so the container PTY gets clean byte I/O
+var savedTermios = termios()
+let stdinIsTTY = isatty(STDIN_FILENO) != 0
+if stdinIsTTY {
+    tcgetattr(STDIN_FILENO, &savedTermios)
+    var raw = savedTermios
+    cfmakeraw(&raw)
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw)
+}
+
+func restoreTerminal() {
+    if stdinIsTTY { tcsetattr(STDIN_FILENO, TCSAFLUSH, &savedTermios) }
+}
+
 // Stdin → socket
 let stdinTask = Task.detached {
     let buf = UnsafeMutableRawPointer.allocate(byteCount: 4096, alignment: 1)
@@ -195,5 +209,6 @@ while true {
 }
 
 stdinTask.cancel()
-print("[pecan-shell] disconnected")
+restoreTerminal()
+print("\r\n[pecan-shell] disconnected")
 close(fd)
