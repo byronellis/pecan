@@ -18,6 +18,7 @@ let package = Package(
         .executable(name: "pecan-mock-llm", targets: ["PecanMockLLM"]),
         .library(name: "PecanServerCore", targets: ["PecanServerCore"]),
         .library(name: "PecanOverlayCore", targets: ["PecanOverlayCore"]),
+        .library(name: "SwiftAgent", targets:["SwiftAgent"]),
     ],
     dependencies: [
         .package(url: "https://github.com/byronellis/pecan-shared.git", branch: "main"),
@@ -30,6 +31,11 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
     ],
     targets: [
+        .target(
+            name:"SwiftAgent",
+            dependencies: [],
+            path: "Sources/SwiftAgent"
+        ),
         // MARK: - Testable core library (pure logic, no gRPC/container deps)
         .target(
             name: "PecanServerCore",
@@ -96,6 +102,7 @@ let package = Package(
                 .product(name: "PecanShared", package: "pecan-shared"),
                 "PecanAgentCore",
                 "PecanOverlayCore",
+                "SwiftAgent",
             ]),
         .executableTarget(
             name: "PecanShell",
@@ -104,6 +111,11 @@ let package = Package(
             ]),
 
         // MARK: - Test targets
+        .testTarget(
+            name: "SwiftAgentTests",
+            dependencies:["SwiftAgent"],
+            path:"Tests/SwiftAgentTests"
+        ),
         .testTarget(
             name: "PecanCoreTests",
             dependencies: ["PecanServerCore"],
