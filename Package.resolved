@@ -1,5 +1,5 @@
 {
-  "originHash" : "4d5235e712fc09ce54a89bd5cc8415c5eec1a5a8ba1c62085c5045ed368422cb",
+  "originHash" : "6f08d1a3040df885bc4278984fd6b00e569467a3a3c6d7953a09dab5f758fac4",
   "pins" : [
     {
       "identity" : "ansiterminal",
@@ -62,6 +62,15 @@
       "state" : {
         "branch" : "main",
         "revision" : "fceff13eb30a41245f6bd8009ba3e55c54da14c0"
+      }
+    },
+    {
+      "identity" : "swift-agent",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/byronellis/swift-agent.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "ddff83514129b2884470a06cc4275106a00d29f5"
       }
     },
     {
