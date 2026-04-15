@@ -3,8 +3,8 @@ import PecanShared
 
 /// gRPC client for skills directory access. The server serves files from ~/.pecan/skills/;
 /// this actor sends SkillsCommand requests and routes SkillsResponse replies.
-actor SkillsClient {
-    static let shared = SkillsClient()
+public actor SkillsClient {
+    public static let shared = SkillsClient()
 
     struct DirEntry: Sendable {
         let name: String
@@ -15,11 +15,11 @@ actor SkillsClient {
     private var pendingRequests: [String: CheckedContinuation<Pecan_SkillsResponse, Error>] = [:]
     private var sendCallback: (@Sendable (Pecan_AgentEvent) async throws -> Void)?
 
-    func configure(send: @escaping @Sendable (Pecan_AgentEvent) async throws -> Void) {
+    public func configure(send: @escaping @Sendable (Pecan_AgentEvent) async throws -> Void) {
         self.sendCallback = send
     }
 
-    func handleResponse(_ response: Pecan_SkillsResponse) {
+    public func handleResponse(_ response: Pecan_SkillsResponse) {
         guard let continuation = pendingRequests.removeValue(forKey: response.requestID) else { return }
         if !response.errorMessage.isEmpty {
             continuation.resume(throwing: NSError(

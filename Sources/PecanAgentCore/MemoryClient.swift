@@ -3,17 +3,17 @@ import PecanShared
 
 /// gRPC client for memory operations. The server handles DB reads/writes;
 /// this actor sends MemoryCommand requests and routes MemoryResponse replies.
-actor MemoryClient {
-    static let shared = MemoryClient()
+public actor MemoryClient {
+    public static let shared = MemoryClient()
 
     private var pendingRequests: [String: CheckedContinuation<Pecan_MemoryResponse, Error>] = [:]
     private var sendCallback: (@Sendable (Pecan_AgentEvent) async throws -> Void)?
 
-    func configure(send: @escaping @Sendable (Pecan_AgentEvent) async throws -> Void) {
+    public func configure(send: @escaping @Sendable (Pecan_AgentEvent) async throws -> Void) {
         self.sendCallback = send
     }
 
-    func handleResponse(_ response: Pecan_MemoryResponse) {
+    public func handleResponse(_ response: Pecan_MemoryResponse) {
         guard let continuation = pendingRequests.removeValue(forKey: response.requestID) else { return }
         if !response.errorMessage.isEmpty {
             continuation.resume(throwing: NSError(

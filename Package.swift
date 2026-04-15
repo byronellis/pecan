@@ -17,6 +17,7 @@ let package = Package(
         .executable(name: "pecan-shell", targets: ["PecanShell"]),
         .executable(name: "pecan-mock-llm", targets: ["PecanMockLLM"]),
         .library(name: "PecanServerCore", targets: ["PecanServerCore"]),
+        .library(name: "PecanOverlayCore", targets: ["PecanOverlayCore"]),
     ],
     dependencies: [
         .package(url: "https://github.com/byronellis/pecan-shared.git", branch: "main"),
@@ -34,6 +35,24 @@ let package = Package(
             name: "PecanServerCore",
             dependencies: [],
             path: "Sources/PecanServerCore"
+        ),
+
+        // MARK: - Testable overlay filesystem logic (no FUSE dependencies)
+        .target(
+            name: "PecanOverlayCore",
+            dependencies: [],
+            path: "Sources/PecanOverlayCore"
+        ),
+
+        // MARK: - Testable agent core (tools, hooks, prompt, event handler; no gRPC/FUSE deps)
+        .target(
+            name: "PecanAgentCore",
+            dependencies: [
+                .product(name: "PecanShared", package: "pecan-shared"),
+                .product(name: "Lua", package: "LuaSwift"),
+                .product(name: "Logging", package: "swift-log"),
+            ],
+            path: "Sources/PecanAgentCore"
         ),
 
         // MARK: - Mock LLM server for integration testing
@@ -75,7 +94,8 @@ let package = Package(
             name: "PecanAgent",
             dependencies: [
                 .product(name: "PecanShared", package: "pecan-shared"),
-                .product(name: "Lua", package: "LuaSwift"),
+                "PecanAgentCore",
+                "PecanOverlayCore",
             ]),
         .executableTarget(
             name: "PecanShell",
@@ -90,6 +110,11 @@ let package = Package(
             path: "Tests/PecanCoreTests"
         ),
         .testTarget(
+            name: "PecanOverlayCoreTests",
+            dependencies: ["PecanOverlayCore"],
+            path: "Tests/PecanOverlayCoreTests"
+        ),
+        .testTarget(
             name: "PecanIntegrationTests",
             dependencies: [
                 .product(name: "PecanShared", package: "pecan-shared"),
@@ -97,6 +122,14 @@ let package = Package(
                 .product(name: "NIO", package: "swift-nio"),
             ],
             path: "Tests/PecanIntegrationTests"
+        ),
+        .testTarget(
+            name: "PecanAgentTests",
+            dependencies: [
+                "PecanAgentCore",
+                .product(name: "PecanShared", package: "pecan-shared"),
+            ],
+            path: "Tests/PecanAgentTests"
         ),
     ]
 )

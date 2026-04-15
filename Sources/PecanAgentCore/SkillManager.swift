@@ -199,49 +199,4 @@ public actor SkillManager {
         return resources.sorted()
     }
 
-    /// Detect whether a Lua script returns a module table with an `execute` function.
-    private struct LuaModuleInfo {
-        var name: String?
-        var description: String?
-        var schema: String?
-    }
-
-    private func detectLuaModule(script: String, fallbackName: String) -> LuaModuleInfo? {
-        let L = LuaState(libraries: .all)
-        defer { L.close() }
-
-        do {
-            try L.load(string: script, name: fallbackName)
-            try L.pcall(nargs: 0, nret: 1)
-        } catch {
-            return nil
-        }
-
-        guard L.type(-1) == .table else { return nil }
-
-        L.push("execute")
-        L.rawget(-2)
-        let hasExecute = L.type(-1) == .function
-        L.pop(1)
-        guard hasExecute else { return nil }
-
-        var info = LuaModuleInfo()
-
-        L.push("name")
-        L.rawget(-2)
-        if let n = L.tostring(-1) { info.name = n }
-        L.pop(1)
-
-        L.push("description")
-        L.rawget(-2)
-        if let d = L.tostring(-1) { info.description = d }
-        L.pop(1)
-
-        L.push("schema")
-        L.rawget(-2)
-        if let s = L.tostring(-1) { info.schema = s }
-        L.pop(1)
-
-        return info
-    }
 }

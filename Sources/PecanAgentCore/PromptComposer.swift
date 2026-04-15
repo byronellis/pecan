@@ -10,6 +10,7 @@ public actor PromptComposer {
     private var focusedTask: PromptContext.TaskInfo? = nil
     private var projectInfo: PromptContext.ProjectInfo? = nil
     private var teamInfo: PromptContext.TeamInfo? = nil
+    private let pool = LuaStatePool()
 
     public func register(fragment: any PromptFragment) {
         fragments[fragment.id] = fragment
@@ -62,8 +63,15 @@ public actor PromptComposer {
         var sections: [String] = []
 
         for fragment in sorted {
-            if let rendered = await fragment.render(context: context) {
-                sections.append(rendered)
+            let rendered: String?
+            if let luaFrag = fragment as? LuaPromptFragment {
+                // Reuse the pooled LuaState to avoid per-call init/close overhead.
+                rendered = pool.execute { L in luaFrag.renderSync(context: context, lua: L) }
+            } else {
+                rendered = await fragment.render(context: context)
+            }
+            if let text = rendered {
+                sections.append(text)
             }
         }
 
@@ -114,47 +122,6 @@ public actor PromptComposer {
         }
     }
 
-    // MARK: - Lua Module Detection
-
-    private struct LuaPromptModuleInfo {
-        var name: String?
-        var priority: Int?
-    }
-
-    private func detectLuaPromptModule(script: String, name: String) -> LuaPromptModuleInfo? {
-        let L = LuaState(libraries: .all)
-        defer { L.close() }
-
-        do {
-            try L.load(string: script, name: name)
-            try L.pcall(nargs: 0, nret: 1)
-        } catch {
-            return nil
-        }
-
-        guard L.type(-1) == .table else { return nil }
-
-        // Must have "render" function
-        L.push("render")
-        L.rawget(-2)
-        let hasRender = L.type(-1) == .function
-        L.pop(1)
-        guard hasRender else { return nil }
-
-        var info = LuaPromptModuleInfo()
-
-        L.push("name")
-        L.rawget(-2)
-        if let n = L.tostring(-1) { info.name = n }
-        L.pop(1)
-
-        L.push("priority")
-        L.rawget(-2)
-        if let p = L.tointeger(-1) { info.priority = Int(p) }
-        L.pop(1)
-
-        return info
-    }
 }
 
 // MARK: - LuaPromptFragment
@@ -173,15 +140,11 @@ public struct LuaPromptFragment: PromptFragment, Sendable {
         self.script = script
     }
 
-    public func render(context: PromptContext) async -> String? {
-        let scriptStr = self.script
-        let nameStr = self.name
-
-        let L = LuaState(libraries: .all)
-        defer { L.close() }
-
+    /// Render using a provided (pooled) LuaState. Stack must be clean on entry;
+    /// caller resets the stack after this returns.
+    func renderSync(context: PromptContext, lua L: LuaState) -> String? {
         do {
-            try L.load(string: scriptStr, name: nameStr)
+            try L.load(string: script, name: name)
             try L.pcall(nargs: 0, nret: 1)
 
             guard L.type(-1) == .table else { return nil }
@@ -190,7 +153,6 @@ public struct LuaPromptFragment: PromptFragment, Sendable {
             L.rawget(-2)
             guard L.type(-1) == .function else { return nil }
 
-            // Push context table
             L.newtable()
 
             L.push("agent_id")
@@ -215,8 +177,15 @@ public struct LuaPromptFragment: PromptFragment, Sendable {
 
             return L.tostring(-1)
         } catch {
-            print("[LuaPromptFragment] Error rendering '\(nameStr)': \(error)")
+            print("[LuaPromptFragment] Error rendering '\(name)': \(error)")
             return nil
         }
+    }
+
+    /// PromptFragment protocol conformance — creates its own LuaState (used when no pool available).
+    public func render(context: PromptContext) async -> String? {
+        let L = LuaState(libraries: .all)
+        defer { L.close() }
+        return renderSync(context: context, lua: L)
     }
 }
