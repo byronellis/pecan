@@ -249,6 +249,11 @@ actor ContainerSpawner {
         restartCounters[sessionID] = counter
         let containerName = counter == 1 ? sessionID : "\(sessionID)-\(counter)"
 
+        // Delete any stale container with the same name left over from a previous server run.
+        // manager.delete is a no-op if the name doesn't exist, but it may throw if the
+        // container is in an unexpected state — ignore errors here, create will fail loudly.
+        try? manager.delete(containerName)
+
         let imageReference = "docker.io/library/alpine:3.19"
         logger.info("Creating container \(containerName) from \(imageReference)...")
 

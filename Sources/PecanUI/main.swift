@@ -126,9 +126,8 @@ func main() async throws {
                 case .sessionStarted(let started):
                     let name = started.agentName.isEmpty ? "agent" : started.agentName
                     await sessionState.addSession(id: started.sessionID, name: name, projectName: started.projectName, teamName: started.teamName)
-                    let agents = await sessionState.agentList()
-                    await TerminalManager.shared.updateAgents(agents)
-                    // Update breadcrumb with project/team
+                    let tabs = await sessionState.agentTabList()
+                    await TerminalManager.shared.updateAgentTabs(tabs)
                     let projectDisplay = await sessionState.getActiveProjectName()
                     let teamDisplay = await sessionState.getActiveTeamName()
                     await TerminalManager.shared.updateProjectTeam(project: projectDisplay, team: teamDisplay)
@@ -224,6 +223,19 @@ func main() async throws {
     }
 
     if !liveSessions.isEmpty {
+        // Pre-populate all known sessions so the status bar, /agents, and /switch
+        // work immediately — even before the user has reattached to a specific one.
+        for s in liveSessions {
+            await sessionState.registerSession(
+                id: s.sessionID,
+                name: s.agentName.isEmpty ? "agent" : s.agentName,
+                projectName: s.projectName,
+                teamName: s.teamName
+            )
+        }
+        let initialTabs = await sessionState.agentTabList()
+        await TerminalManager.shared.updateAgentTabs(initialTabs)
+
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime]
         func relativeAge(_ isoString: String) -> String {
@@ -422,6 +434,11 @@ func main() async throws {
                   \(ansiCyan)^K\(ansiReset) / \(ansiCyan)^U\(ansiReset)          Kill to end / start of line
                   \(ansiCyan)^W\(ansiReset)                Kill word backward
                   \(ansiCyan)^Y\(ansiReset)                Yank (paste killed text)
+
+                \(ansiBold)Agent navigation\(ansiReset) \(ansiDim)(Alt = Esc then key)\(ansiReset)
+                  \(ansiCyan)Alt+n\(ansiReset) / \(ansiCyan)Alt+p\(ansiReset)    Next / prev agent within team
+                  \(ansiCyan)Alt+1..9\(ansiReset)          Jump to agent N within team
+                  \(ansiCyan)Alt+t\(ansiReset)             Team picker (←→ or key to select)
                 """
                 await TerminalManager.shared.printOutput(help)
                 continue
@@ -429,14 +446,30 @@ func main() async throws {
 
             // /agents — list all agents
             if trimmed == "/agents" {
-                let agents = await sessionState.agentList()
-                if agents.isEmpty {
+                let tabs = await sessionState.agentTabList()
+                if tabs.isEmpty {
                     await TerminalManager.shared.printSystem("No agents.")
                 } else {
                     var lines = "\(ansiBold)Agents\(ansiReset)\r\n"
-                    for agent in agents {
-                        let marker = agent.isActive ? "\(ansiCyan) ← active\(ansiReset)" : ""
-                        lines += "  \(agent.isActive ? "\(ansiBold)\(agent.name)\(ansiReset)" : "\(ansiDim)\(agent.name)\(ansiReset)")\(marker)\r\n"
+                    // Group by team
+                    var teamOrder: [String] = []
+                    var teamGroups: [String: [AgentTabInfo]] = [:]
+                    for tab in tabs {
+                        if teamGroups[tab.teamKey] == nil {
+                            teamOrder.append(tab.teamKey)
+                            teamGroups[tab.teamKey] = []
+                        }
+                        teamGroups[tab.teamKey]!.append(tab)
+                    }
+                    for teamKey in teamOrder {
+                        guard let group = teamGroups[teamKey] else { continue }
+                        let header = teamKey.isEmpty ? "  \(ansiDim)(no team)\(ansiReset)\r\n" : "  \(ansiDim)\(teamKey):\(ansiReset)\r\n"
+                        lines += header
+                        for tab in group {
+                            let marker = tab.isActive ? "\(ansiCyan) ← active\(ansiReset)" : ""
+                            let unread = tab.hasUnread ? " \(ansiDim)*\(ansiReset)" : ""
+                            lines += "    \(tab.isActive ? "\(ansiBold)\(tab.name)\(ansiReset)" : "\(ansiDim)\(tab.name)\(ansiReset)")\(marker)\(unread)\r\n"
+                        }
                     }
                     await TerminalManager.shared.printOutput(lines)
                 }
@@ -477,34 +510,15 @@ func main() async throws {
                 continue
             }
 
-            // /switch <name> — switch active tab by agent name
+            // /switch <name> — switch active agent by name
             if trimmed.hasPrefix("/switch ") {
                 let name = String(trimmed.dropFirst("/switch ".count)).trimmingCharacters(in: .whitespaces)
-                if await sessionState.setActiveByName(name) {
-                    let agents = await sessionState.agentList()
-                    await TerminalManager.shared.updateAgents(agents)
-                    // Update breadcrumbs to reflect the switched-to session's project/team
-                    let projectDisplay = await sessionState.getActiveProjectName()
-                    let teamDisplay = await sessionState.getActiveTeamName()
-                    await TerminalManager.shared.updateProjectTeam(project: projectDisplay, team: teamDisplay)
-                    let focusedTask = await sessionState.getActiveFocusedTask()
-                    await TerminalManager.shared.updateFocusedTask(focusedTask)
+                let tabs = await sessionState.agentTabList()
+                if let target = tabs.first(where: { $0.name == name }) {
+                    await switchToAgent(id: target.id, sessionState: sessionState)
                     await TerminalManager.shared.printSystem("Switched to \(name)")
-                    // Replay any buffered output from while this agent was in the background
-                    if let sid = await sessionState.getActiveID() {
-                        let buffered = await sessionState.drainBuffer(sid)
-                        if !buffered.isEmpty {
-                            await TerminalManager.shared.printSystem("--- buffered output ---")
-                            for rawText in buffered {
-                                if let rendered = renderAgentOutput(rawText) {
-                                    await TerminalManager.shared.printOutput(rendered)
-                                }
-                            }
-                            await TerminalManager.shared.printSystem("--- end buffered output ---")
-                        }
-                    }
                 } else {
-                    let all = await sessionState.allSessions().map(\.name).joined(separator: ", ")
+                    let all = tabs.map(\.name).joined(separator: ", ")
                     await TerminalManager.shared.printSystem("No agent named '\(name)'. Available: \(all)")
                 }
                 continue

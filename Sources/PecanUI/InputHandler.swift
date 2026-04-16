@@ -12,23 +12,24 @@ import PecanShared
 enum InputKey {
     case ctrlC
     case ctrlD
-    case ctrlA  // beginning of line
-    case ctrlE  // end of line
-    case ctrlK  // kill to end of line
-    case ctrlU  // kill to beginning of line
-    case ctrlW  // kill word backward
-    case ctrlY  // yank (paste kill buffer)
-    case ctrlB  // back one char
-    case ctrlF  // forward one char
+    case ctrlA
+    case ctrlE
+    case ctrlK
+    case ctrlU
+    case ctrlW
+    case ctrlY
+    case ctrlB
+    case ctrlF
     case tab
     case enter
     case backspace
-    case delete // forward delete
+    case delete
     case escape
     case arrowLeft
     case arrowRight
     case arrowUp
     case arrowDown
+    case alt(Character)   // Alt+printable (ESC + char, detected by tight timing)
     case character(Character)
     case unknown(UInt8)
 }
@@ -53,8 +54,15 @@ func nextKey() -> InputKey? {
     case 25: return .ctrlY
     case 127: return .backspace
     case 27:
-        // ESC sequence
-        let next1 = readChar()
+        // Peek for follow-up byte: spin ~1ms to distinguish bare ESC from Alt+key.
+        // Alt sequences (ESC + char) arrive within microseconds; human presses take >100ms.
+        var peekChar: Character? = nil
+        for _ in 0..<2000 {
+            if keyPressed() { peekChar = readChar(); break }
+        }
+        guard let next1 = peekChar else {
+            return .escape  // bare ESC
+        }
         if next1 == "[" {
             let next2 = readChar()
             switch next2 {
@@ -62,32 +70,48 @@ func nextKey() -> InputKey? {
             case "B": return .arrowDown
             case "C": return .arrowRight
             case "D": return .arrowLeft
+            case "1":
+                // Could be ESC[1;3x — Alt+Arrow from some terminals
+                let next3 = readChar()
+                if next3 == ";" {
+                    let next4 = readChar()
+                    if next4 == "3" {
+                        let next5 = readChar()
+                        switch next5 {
+                        case "C": return .alt(Character(UnicodeScalar(UInt8(ascii: "f"))))  // Alt+Right → treat as Alt+f (forward team)
+                        case "D": return .alt(Character(UnicodeScalar(UInt8(ascii: "b"))))  // Alt+Left → treat as Alt+b (backward team)
+                        default: break
+                        }
+                    }
+                }
+                return .unknown(ascii)
             case "3":
-                // Delete key: ESC [ 3 ~
                 let next3 = readChar()
                 if next3 == "~" { return .delete }
                 return .unknown(ascii)
-            default: return .unknown(ascii)
+            default:
+                return .unknown(ascii)
             }
+        } else if let altAscii = next1.asciiValue, altAscii >= 32 {
+            // ESC + printable char = Alt+key
+            return .alt(next1)
         }
         return .escape
     case 32...126:
         return .character(char)
     default:
-        // Attempt to pass through other printable characters (e.g. unicode)
-        if char.isASCII == false {
-            return .character(char)
-        }
+        if char.isASCII == false { return .character(char) }
         return .unknown(ascii)
     }
 }
 
-/// Handle the agent picker interaction. Returns the index of selected agent, or nil if cancelled.
-func handleAgentPicker() async -> Int? {
+// MARK: - Agent Picker (Tab key)
+
+func handleAgentPicker(sessionState: SessionState) async -> String? {
     await TerminalManager.shared.showAgentPicker()
 
     let hotkeys = "0123456789abcdefghijklmnopqrstuvwxyz"
-    let agentCount = await TerminalManager.shared.agents.count
+    let agentCount = await TerminalManager.shared.agentTabs.count
 
     while true {
         if let key = nextKey() {
@@ -97,8 +121,9 @@ func handleAgentPicker() async -> Int? {
                 return nil
             case .enter:
                 let selection = await TerminalManager.shared.pickerSelection
+                let tabs = await TerminalManager.shared.agentTabs
                 await TerminalManager.shared.dismissPicker()
-                return selection
+                return selection < tabs.count ? tabs[selection].id : nil
             case .arrowUp, .ctrlB:
                 await TerminalManager.shared.pickerMoveUp()
             case .arrowDown, .ctrlF:
@@ -107,15 +132,15 @@ func handleAgentPicker() async -> Int? {
                 if let idx = hotkeys.firstIndex(of: c) {
                     let i = hotkeys.distance(from: hotkeys.startIndex, to: idx)
                     if i < agentCount {
+                        let tabs = await TerminalManager.shared.agentTabs
                         await TerminalManager.shared.dismissPicker()
-                        return i
+                        return i < tabs.count ? tabs[i].id : nil
                     }
                 }
             case .ctrlC:
                 await TerminalManager.shared.dismissPicker()
                 return nil
-            default:
-                break
+            default: break
             }
         } else {
             try? await Task.sleep(nanoseconds: 10_000_000)
@@ -123,59 +148,118 @@ func handleAgentPicker() async -> Int? {
     }
 }
 
+// MARK: - Team Picker (Alt+t)
+
+/// Shows the team picker in the status bar and returns the selected team key, or nil if cancelled.
+func handleTeamPicker(sessionState: SessionState) async -> String? {
+    let teams = await sessionState.teamList()
+    guard !teams.isEmpty else { return nil }
+
+    await TerminalManager.shared.showTeamPicker(teams: teams)
+
+    let hotkeys = "123456789abcdefghijklmnopqrstuvwxyz"
+
+    while true {
+        if let key = nextKey() {
+            switch key {
+            case .escape:
+                await TerminalManager.shared.dismissTeamPicker()
+                return nil
+            case .alt(let c) where c == "t":
+                await TerminalManager.shared.dismissTeamPicker()
+                return nil
+            case .ctrlC:
+                await TerminalManager.shared.dismissTeamPicker()
+                return nil
+            case .enter:
+                let teamKey = await TerminalManager.shared.selectedTeamKey()
+                await TerminalManager.shared.dismissTeamPicker()
+                return teamKey
+            case .arrowLeft, .ctrlB:
+                await TerminalManager.shared.teamPickerMoveLeft()
+            case .arrowRight, .ctrlF:
+                await TerminalManager.shared.teamPickerMoveRight()
+            case .character(let c):
+                if let idx = hotkeys.firstIndex(of: c) {
+                    let i = hotkeys.distance(from: hotkeys.startIndex, to: idx)
+                    let items = await TerminalManager.shared.teamPickerItems
+                    if i < items.count {
+                        await TerminalManager.shared.dismissTeamPicker()
+                        return items[i].key
+                    }
+                }
+            default: break
+            }
+        } else {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+}
+
+// MARK: - Agent switching helper
+
+/// Switch the active agent to `id`, clear its unread, replay buffered output, refresh chrome.
+func switchToAgent(id: String, sessionState: SessionState) async {
+    await sessionState.setActive(id)
+    let tabs = await sessionState.agentTabList()
+    await TerminalManager.shared.updateAgentTabs(tabs)
+    let focusedTitle = await sessionState.getActiveFocusedTask()
+    await TerminalManager.shared.updateFocusedTask(focusedTitle)
+    let projectDisplay = await sessionState.getActiveProjectName()
+    let teamDisplay = await sessionState.getActiveTeamName()
+    await TerminalManager.shared.updateProjectTeam(project: projectDisplay, team: teamDisplay)
+
+    let buffered = await sessionState.drainBuffer(id)  // also clears unread
+    if !buffered.isEmpty {
+        for rawText in buffered {
+            if let rendered = renderAgentOutput(rawText) {
+                await TerminalManager.shared.printOutput(rendered)
+            }
+        }
+    }
+    await TerminalManager.shared.redrawPrompt()
+}
+
 // MARK: - Command History
 
 actor CommandHistory {
     static let shared = CommandHistory()
 
-    /// Per-session command history (sessionID -> entries, newest last)
     private var history: [String: [String]] = [:]
-    /// Current browse index per session (nil = not browsing)
     private var browseIndex: [String: Int] = [:]
-    /// Saved in-progress input when user starts browsing
     private var savedInput: [String: String] = [:]
 
     func add(_ command: String, sessionID: String) {
         let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        // Don't duplicate consecutive entries
         if history[sessionID]?.last == trimmed { return }
         history[sessionID, default: []].append(trimmed)
-        // Reset browse position
         browseIndex.removeValue(forKey: sessionID)
         savedInput.removeValue(forKey: sessionID)
     }
 
-    /// Move up in history. Returns the history entry to display, or nil if at top.
     func navigateUp(sessionID: String, currentInput: String) -> String? {
         let entries = history[sessionID] ?? []
         guard !entries.isEmpty else { return nil }
-
         let idx: Int
         if let current = browseIndex[sessionID] {
             idx = current - 1
         } else {
-            // Starting to browse — save current input
             savedInput[sessionID] = currentInput
             idx = entries.count - 1
         }
-
         guard idx >= 0 else { return nil }
         browseIndex[sessionID] = idx
         return entries[idx]
     }
 
-    /// Move down in history. Returns the entry to display, or the saved input if past the end.
     func navigateDown(sessionID: String) -> String? {
         guard let current = browseIndex[sessionID] else { return nil }
         let entries = history[sessionID] ?? []
-
         let idx = current + 1
         if idx >= entries.count {
-            // Past the end — restore saved input
             browseIndex.removeValue(forKey: sessionID)
-            let saved = savedInput.removeValue(forKey: sessionID) ?? ""
-            return saved
+            return savedInput.removeValue(forKey: sessionID) ?? ""
         }
         browseIndex[sessionID] = idx
         return entries[idx]
@@ -187,12 +271,16 @@ actor CommandHistory {
     }
 }
 
+// MARK: - Main input loop
+
 func readInputLine(sessionState: SessionState) async -> String? {
     await TerminalManager.shared.setInputActive(true)
 
     while true {
         if let key = nextKey() {
             switch key {
+
+            // MARK: Control keys
             case .ctrlC:
                 await TerminalManager.shared.setInputActive(false)
                 return nil
@@ -205,30 +293,21 @@ func readInputLine(sessionState: SessionState) async -> String? {
                     await TerminalManager.shared.deleteForward()
                 }
             case .tab:
-                // Show agent picker
-                if let selectedIdx = await handleAgentPicker() {
-                    let agents = await sessionState.allSessions()
-                    if selectedIdx < agents.count {
-                        let selected = agents[selectedIdx]
-                        await sessionState.setActive(selected.id)
-                        let agentList = await sessionState.agentList()
-                        await TerminalManager.shared.updateAgents(agentList)
-                        let focusedTitle = await sessionState.getActiveFocusedTask()
-                        await TerminalManager.shared.updateFocusedTask(focusedTitle)
-                    }
+                if let selectedID = await handleAgentPicker(sessionState: sessionState) {
+                    await switchToAgent(id: selectedID, sessionState: sessionState)
                 }
                 await TerminalManager.shared.redrawPrompt()
+
             case .enter:
                 let text = await TerminalManager.shared.getAndClearInput()
                 await TerminalManager.shared.setInputActive(false)
-                // Save to history
                 if let sid = await sessionState.getActiveID() {
                     await CommandHistory.shared.add(text, sessionID: sid)
                 }
-                // Clear the prompt line — caller will echo the input
                 print("\r\u{1B}[K", terminator: "")
                 fflush(stdout)
                 return text
+
             case .backspace:
                 await TerminalManager.shared.backspace()
             case .delete:
@@ -249,12 +328,10 @@ func readInputLine(sessionState: SessionState) async -> String? {
                 await TerminalManager.shared.killWordBackward()
             case .ctrlY:
                 await TerminalManager.shared.yank()
-            case .character(let c):
-                await TerminalManager.shared.insertChar(c)
             case .arrowUp:
                 if let sid = await sessionState.getActiveID() {
-                    let currentBuf = await TerminalManager.shared.currentInputBuffer
-                    if let entry = await CommandHistory.shared.navigateUp(sessionID: sid, currentInput: currentBuf) {
+                    let cur = await TerminalManager.shared.currentInputBuffer
+                    if let entry = await CommandHistory.shared.navigateUp(sessionID: sid, currentInput: cur) {
                         await TerminalManager.shared.setInputBuffer(entry)
                     }
                 }
@@ -267,21 +344,52 @@ func readInputLine(sessionState: SessionState) async -> String? {
             case .escape:
                 let buf = await TerminalManager.shared.currentInputBuffer
                 if buf.isEmpty {
-                    // ESC with empty buffer — signal interrupt to outer loop
                     await TerminalManager.shared.setInputActive(false)
                     print("\r\u{1B}[K", terminator: "")
                     fflush(stdout)
                     return "\u{00}"
                 } else {
-                    // ESC with text — clear the input line
                     await TerminalManager.shared.clearInput()
                 }
-            case .unknown:
+
+            // MARK: Alt keys — agent and team navigation
+            case .alt(let c):
+                switch c {
+                case "n":
+                    // Next agent within current team
+                    if let nextID = await sessionState.nextAgentInTeam() {
+                        await switchToAgent(id: nextID, sessionState: sessionState)
+                    }
+                case "p":
+                    // Previous agent within current team
+                    if let prevID = await sessionState.prevAgentInTeam() {
+                        await switchToAgent(id: prevID, sessionState: sessionState)
+                    }
+                case "t":
+                    // Team picker (status-bar takeover)
+                    if let teamKey = await handleTeamPicker(sessionState: sessionState) {
+                        if let agentID = await sessionState.agentForTeam(teamKey) {
+                            await switchToAgent(id: agentID, sessionState: sessionState)
+                        }
+                    }
+                case "1"..."9":
+                    // Jump to Nth agent within current team (1-indexed)
+                    let idx = Int(String(c))! - 1
+                    if let agentID = await sessionState.agentByIndexInTeam(idx) {
+                        await switchToAgent(id: agentID, sessionState: sessionState)
+                    }
+                default:
+                    break
+                }
+
+            case .character(let c):
+                await TerminalManager.shared.insertChar(c)
+
+            default:
                 break
             }
         } else {
-            try? await Task.sleep(nanoseconds: 10_000_000) // 10ms
+            try? await Task.sleep(nanoseconds: 10_000_000)
         }
     }
 }
-

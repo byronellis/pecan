@@ -9,3 +9,12 @@ let ansiBoldOff     = "\u{001B}[22m"
 let ansiItalicOff   = "\u{001B}[23m"
 let ansiDimOff      = "\u{001B}[22m"
 let ansiUserInputBg = "\u{001B}[48;5;236m"
+
+/// A snapshot of one agent for status-bar and picker rendering.
+struct AgentTabInfo: Sendable {
+    let id: String
+    let name: String
+    let teamKey: String   // "" = no team / default team
+    let isActive: Bool
+    let hasUnread: Bool
+}
