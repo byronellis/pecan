@@ -28,7 +28,6 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.27.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
-        .package(url: "https://github.com/byronellis/swift-agent.git", branch: "main"),
     ],
     targets: [
         // MARK: - Testable core library (pure logic, no gRPC/container deps)
@@ -97,7 +96,6 @@ let package = Package(
                 .product(name: "PecanShared", package: "pecan-shared"),
                 "PecanAgentCore",
                 "PecanOverlayCore",
-                .product(name: "SwiftAgent", package: "swift-agent"),
             ]),
         .executableTarget(
             name: "PecanShell",

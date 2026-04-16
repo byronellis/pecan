@@ -173,33 +173,49 @@ func respawnPersistentSessions(config: Config) async {
 
     for meta in metas {
         do {
-            let store = try SessionStore(sessionID: meta.sessionID, name: meta.agentName)
+            let store = try SessionStore(sessionID: meta.sessionID)
             await SessionManager.shared.setStore(sessionID: meta.sessionID, store: store)
             await SessionManager.shared.markPersistent(meta.sessionID)
 
             var shareMounts: [MountSpec] = []
 
-            if !meta.projectName.isEmpty {
-                let projectStore = try ProjectStore(name: meta.projectName)
-                await SessionManager.shared.setProjectForSession(
-                    sessionID: meta.sessionID, projectName: meta.projectName, store: projectStore)
-                if let dir = projectStore.directory {
+            // Use teamName as the primary key (team = project workspace in flat model).
+            // Fall back to projectName for sessions created before this model change.
+            let teamKey = meta.teamName.isEmpty ? meta.projectName : meta.teamName
+            if !teamKey.isEmpty && teamKey != "default" {
+                // Try flat team first, then legacy nested team
+                let teamStore: TeamStore
+                let flatPath = FileManager.default.homeDirectoryForCurrentUser
+                    .appendingPathComponent(".pecan/teams/\(teamKey)/team.db").path
+                if FileManager.default.fileExists(atPath: flatPath) {
+                    teamStore = try TeamStore(name: teamKey)
+                } else if !meta.projectName.isEmpty {
+                    // Legacy: nested under project
+                    teamStore = try TeamStore(teamName: teamKey, projectName: meta.projectName)
+                } else {
+                    teamStore = try TeamStore(name: teamKey)
+                }
+                await SessionManager.shared.setTeamForSession(
+                    sessionID: meta.sessionID, teamName: teamKey, store: teamStore)
+                if let dir = teamStore.projectDirectory {
                     shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
                     await SessionManager.shared.setGitBase(
                         sessionID: meta.sessionID, commit: gitHead(for: dir))
+                    await ProjectToolRegistry.shared.registerSession(
+                        sessionID: meta.sessionID, projectName: teamKey, projectDirectory: dir)
+                } else if !meta.projectName.isEmpty {
+                    // Legacy fallback: get directory from ProjectStore
+                    if let projectStore = try? ProjectStore(name: meta.projectName),
+                       let dir = projectStore.directory {
+                        shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
+                        await SessionManager.shared.setGitBase(
+                            sessionID: meta.sessionID, commit: gitHead(for: dir))
+                        await ProjectToolRegistry.shared.registerSession(
+                            sessionID: meta.sessionID, projectName: meta.projectName, projectDirectory: dir)
+                    }
                 }
-                await ProjectToolRegistry.shared.registerSession(
-                    sessionID: meta.sessionID, projectName: meta.projectName,
-                    projectDirectory: projectStore.directory ?? "")
-
-                if !meta.teamName.isEmpty && meta.teamName != "default" {
-                    let teamStore = try TeamStore(teamName: meta.teamName, projectName: meta.projectName)
-                    await SessionManager.shared.setTeamForSession(
-                        sessionID: meta.sessionID, teamName: meta.teamName,
-                        projectName: meta.projectName, store: teamStore)
-                    shareMounts.append(MountSpec(
-                        source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
-                }
+                shareMounts.append(MountSpec(
+                    source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
             }
 
             // Re-add user shares persisted in the session store

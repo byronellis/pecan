@@ -72,38 +72,30 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                         await SessionManager.shared.markPersistent(sessionID)
                     }
 
-                    // Set up project and team if specified
-                    var projectName = startReq.projectName
-                    var teamName = startReq.teamName
+                    // Set up team if specified. In the flat model, team IS the project workspace.
+                    // --project foo and --team foo are equivalent; project_name is auto-mapped to team_name.
+                    var teamName = startReq.teamName.isEmpty ? startReq.projectName : startReq.teamName
+                    var projectName = teamName  // project name == team name
 
-                    if !projectName.isEmpty {
+                    if !teamName.isEmpty {
                         do {
-                            let projectStore = try ProjectStore(name: projectName)
-                            await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: projectName, store: projectStore)
+                            let teamStore = try TeamStore(name: teamName)
+                            await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: teamName, store: teamStore)
 
-                            // Mount project directory as read-only lower layer; agent mounts COW overlay at /project
-                            if let dir = projectStore.directory {
+                            // Mount team's project directory if set
+                            if let dir = teamStore.projectDirectory {
                                 shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
                                 await SessionManager.shared.setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
                             }
 
-                            // If no team specified, use default team
-                            if teamName.isEmpty {
-                                teamName = "default"
-                            }
-
-                            let teamStore = try TeamStore(teamName: teamName, projectName: projectName)
-                            await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: teamName, projectName: projectName, store: teamStore)
-
-                            // Add team workspace mount
+                            // Team workspace mount
                             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
 
-                            logger.info("Session \(sessionID) assigned to project '\(projectName)' team '\(teamName)'")
+                            logger.info("Session \(sessionID) joined team '\(teamName)'")
                         } catch {
-                            logger.error("Failed to set up project/team: \(error)")
+                            logger.error("Failed to set up team: \(error)")
                         }
                     } else {
-                        // Clear for the SessionStarted message
                         projectName = ""
                         teamName = ""
                     }
@@ -345,6 +337,7 @@ extension ClientServiceProvider {
     }
 
     /// Handle /project (or /p) commands.
+    /// In the flat model, /project is an alias for /team — projects and teams are the same concept.
     static func handleProjectCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
         switch cmd.subcmd {
         case "create":
@@ -355,78 +348,74 @@ extension ClientServiceProvider {
             }
             let directory = argParts.count > 1 ? argParts[1] : nil
             do {
-                let _ = try ProjectStore(name: name, directory: directory)
-                var msg = "Created project '\(name)'."
+                let _ = try TeamStore(name: name, projectDirectory: directory)
+                var msg = "Created team/project '\(name)'."
                 if let dir = directory { msg += " Directory: \(dir)" }
                 try await sendOutput(msg)
             } catch {
-                try await sendOutput("Failed to create project: \(error.localizedDescription)")
+                try await sendOutput("Failed to create team/project: \(error.localizedDescription)")
             }
 
         case "switch":
+            // /project:switch is now an alias for switching teams
             let name = cmd.args.trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else {
                 try await sendOutput("Usage: /project:switch <name>")
                 return
             }
-            let available = ProjectRegistry.listProjectNames()
+            let available = TeamRegistry.listAllTeamNames()
             guard available.contains(name) else {
-                try await sendOutput("Project '\(name)' not found. Available: \(available.joined(separator: ", "))")
+                try await sendOutput("Team/project '\(name)' not found. Available: \(available.isEmpty ? "(none)" : available.joined(separator: ", "))")
                 return
             }
             if (try? await Self.hasOpenChangeset(sessionID: sessionID)) == true {
-                try await sendOutput("Cannot switch projects: there is an open changeset. Submit (/changeset:submit) or discard (/changeset:discard) it first.")
+                try await sendOutput("Cannot switch: there is an open changeset. Submit (/changeset:submit) or discard (/changeset:discard) it first.")
                 return
             }
             do {
-                let store = try ProjectStore(name: name)
-                await SessionManager.shared.setProjectForSession(sessionID: sessionID, projectName: name, store: store)
-                await SessionManager.shared.clearTeamForSession(sessionID: sessionID)
-                logger.info("Restarting container for project switch to '\(name)'...")
+                let store = try TeamStore(name: name)
+                await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: name, store: store)
+                logger.info("Restarting container for team switch to '\(name)'...")
                 try await SessionManager.shared.restartContainer(sessionID: sessionID)
                 try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
-                try await sendOutput("Switched to project '\(name)'. Agent restarted with project mounted.")
+                try await sendOutput("Switched to team/project '\(name)'. Agent restarted.")
             } catch {
-                logger.error("Project switch failed at: \(error)")
-                try await sendOutput("Failed to switch project: \(error.localizedDescription)")
+                logger.error("Team switch failed: \(error)")
+                try await sendOutput("Failed to switch team/project: \(error.localizedDescription)")
             }
 
         case "list":
-            let names = ProjectRegistry.listProjectNames()
+            let names = TeamRegistry.listAllTeamNames()
             if names.isEmpty {
-                try await sendOutput("No projects found. Use /project:create <name> [directory] to create one.")
+                try await sendOutput("No teams/projects found. Use /project:create <name> [directory] to create one.")
                 return
             }
-            let currentProject = await SessionManager.shared.getProjectName(sessionID: sessionID)
-            var lines = "**Projects**\n"
+            let currentTeam = await SessionManager.shared.getTeamName(sessionID: sessionID)
+            var lines = "**Teams/Projects**\n"
             for name in names {
-                let marker = (name == currentProject) ? " <- active" : ""
+                let marker = (name == currentTeam) ? " <- active" : ""
                 lines += "  \(name)\(marker)\n"
             }
             try await sendOutput(lines)
 
         case nil:
-            // Check if user used old space-separated syntax: /project create, /project switch
             let firstWord = cmd.args.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
             if ["create", "switch", "list"].contains(firstWord) {
                 try await sendOutput("Did you mean /project:\(firstWord)? Use colon syntax: /p:\(firstWord) \(cmd.args.dropFirst(firstWord.count).trimmingCharacters(in: .whitespaces))")
                 return
             }
 
-            // /project with no subcommand — show current project info
-            guard let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID),
-                  let store = await SessionManager.shared.getProjectStore(sessionID: sessionID) else {
-                try await sendOutput("No project assigned. Use /project:switch <name> or --project <name> at startup.")
+            // /project with no subcommand — show current team/project info
+            guard let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID),
+                  let store = await SessionManager.shared.getTeamStore(sessionID: sessionID) else {
+                try await sendOutput("No team/project assigned. Use /project:switch <name> or --project <name> at startup.")
                 return
             }
-            var info = "**Project: \(projectName)**\n"
-            if let dir = store.directory {
+            var info = "**Project: \(teamName)**\n"
+            if let dir = store.projectDirectory {
                 info += "  Directory: \(dir)\n"
             }
-            let teams = TeamRegistry.listTeamNames(projectName: projectName)
-            if !teams.isEmpty {
-                info += "  Teams: \(teams.joined(separator: ", "))\n"
-            }
+            info += "  Workspace: \(store.workspacePath.path)\n"
             let taskCount = try store.listTasks().count
             let memCount = try store.listMemories().count
             info += "  Tasks: \(taskCount)  Memories: \(memCount)"
@@ -438,40 +427,34 @@ extension ClientServiceProvider {
     }
 
     /// Handle /team commands.
+    /// In the flat model, teams are standalone workspaces — no longer nested under projects.
     static func handleTeamCommand(sessionID: String, cmd: ParsedCommand, sendOutput: (String) async throws -> Void) async throws {
-        let projectName = await SessionManager.shared.getProjectName(sessionID: sessionID)
-
         switch cmd.subcmd {
         case "create":
-            guard let projectName = projectName else {
-                try await sendOutput("No project assigned — teams require a project.")
+            let argParts = cmd.args.split(separator: " ", maxSplits: 1).map(String.init)
+            guard let name = argParts.first, !name.isEmpty else {
+                try await sendOutput("Usage: /team:create <name> [directory]")
                 return
             }
-            let name = cmd.args.trimmingCharacters(in: .whitespaces)
-            guard !name.isEmpty else {
-                try await sendOutput("Usage: /team:create <name>")
-                return
-            }
+            let directory = argParts.count > 1 ? argParts[1] : nil
             do {
-                let _ = try TeamStore(teamName: name, projectName: projectName)
-                try await sendOutput("Created team '\(name)' in project '\(projectName)'.")
+                let _ = try TeamStore(name: name, projectDirectory: directory)
+                var msg = "Created team '\(name)'."
+                if let dir = directory { msg += " Directory: \(dir)" }
+                try await sendOutput(msg)
             } catch {
                 try await sendOutput("Failed to create team: \(error.localizedDescription)")
             }
 
         case "join":
-            guard let projectName = projectName else {
-                try await sendOutput("No project assigned — teams require a project.")
-                return
-            }
             let name = cmd.args.trimmingCharacters(in: .whitespaces)
             guard !name.isEmpty else {
                 try await sendOutput("Usage: /team:join <name>")
                 return
             }
-            let available = TeamRegistry.listTeamNames(projectName: projectName)
+            let available = TeamRegistry.listAllTeamNames()
             guard available.contains(name) else {
-                try await sendOutput("Team '\(name)' not found in project '\(projectName)'. Available: \(available.joined(separator: ", "))")
+                try await sendOutput("Team '\(name)' not found. Available: \(available.isEmpty ? "(none)" : available.joined(separator: ", "))")
                 return
             }
             if (try? await Self.hasOpenChangeset(sessionID: sessionID)) == true {
@@ -479,8 +462,8 @@ extension ClientServiceProvider {
                 return
             }
             do {
-                let store = try TeamStore(teamName: name, projectName: projectName)
-                await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: name, projectName: projectName, store: store)
+                let store = try TeamStore(name: name)
+                await SessionManager.shared.setTeamForSession(sessionID: sessionID, teamName: name, store: store)
                 try await SessionManager.shared.restartContainer(sessionID: sessionID)
                 try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
                 try await sendOutput("Joined team '\(name)'. Agent restarted with team workspace mounted.")
@@ -507,39 +490,55 @@ extension ClientServiceProvider {
             }
 
         case "list":
-            guard let projectName = projectName else {
-                try await sendOutput("No project assigned — teams require a project.")
-                return
-            }
-            let names = TeamRegistry.listTeamNames(projectName: projectName)
+            let names = TeamRegistry.listAllTeamNames()
             if names.isEmpty {
-                try await sendOutput("No teams in project '\(projectName)'. Use /team:create <name> to create one.")
+                try await sendOutput("No teams found. Use /team:create <name> [directory] to create one.")
                 return
             }
             let currentTeam = await SessionManager.shared.getTeamName(sessionID: sessionID)
-            var lines = "**Teams** (project: \(projectName))\n"
+            var lines = "**Teams**\n"
             for name in names {
                 let marker = (name == currentTeam) ? " <- active" : ""
                 lines += "  \(name)\(marker)\n"
             }
             try await sendOutput(lines)
 
+        case "set-directory":
+            let dir = cmd.args.trimmingCharacters(in: .whitespaces)
+            guard !dir.isEmpty else {
+                try await sendOutput("Usage: /team:set-directory <path>")
+                return
+            }
+            guard let store = await SessionManager.shared.getTeamStore(sessionID: sessionID) else {
+                try await sendOutput("No team assigned. Use /team:join <name> first.")
+                return
+            }
+            do {
+                try store.setProjectDirectory(dir)
+                try await SessionManager.shared.restartContainer(sessionID: sessionID)
+                try await SessionManager.shared.sendSessionUpdateToUI(sessionID: sessionID)
+                try await sendOutput("Team directory set to '\(dir)'. Agent restarted.")
+            } catch {
+                try await sendOutput("Failed to set directory: \(error.localizedDescription)")
+            }
+
         case nil:
-            // Check if user used old space-separated syntax
             let firstWord = cmd.args.split(separator: " ", maxSplits: 1).first.map(String.init) ?? ""
-            if ["create", "join", "leave", "list"].contains(firstWord) {
+            if ["create", "join", "leave", "list", "set-directory"].contains(firstWord) {
                 try await sendOutput("Did you mean /team:\(firstWord)? Use colon syntax: /team:\(firstWord) \(cmd.args.dropFirst(firstWord.count).trimmingCharacters(in: .whitespaces))")
                 return
             }
 
             // /team with no subcommand — show current team info
-            guard let projectName = projectName,
-                  let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID),
+            guard let teamName = await SessionManager.shared.getTeamName(sessionID: sessionID),
                   let store = await SessionManager.shared.getTeamStore(sessionID: sessionID) else {
                 try await sendOutput("No team assigned. Use /team:join <name> or --team <name> at startup.")
                 return
             }
-            var info = "**Team: \(teamName)** (project: \(projectName))\n"
+            var info = "**Team: \(teamName)**\n"
+            if let dir = store.projectDirectory {
+                info += "  Directory: \(dir)\n"
+            }
             info += "  Workspace: \(store.workspacePath.path)\n"
             let taskCount = try store.listTasks().count
             let memCount = try store.listMemories().count
@@ -547,7 +546,7 @@ extension ClientServiceProvider {
             try await sendOutput(info)
 
         default:
-            try await sendOutput("Unknown team command ':\(cmd.subcmd ?? "")'. Use :create, :join, :leave, :list")
+            try await sendOutput("Unknown team command ':\(cmd.subcmd ?? "")'. Use :create, :join, :leave, :list, :set-directory")
         }
     }
 

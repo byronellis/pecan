@@ -49,35 +49,35 @@ public actor MemoryClient {
     }
 
     /// Returns all distinct tags in the store for the given scope.
-    func listTags(scope: String) async throws -> [String] {
+    public func listTags(scope: String) async throws -> [String] {
         let resp = try await sendCommand(action: "list_tags", scope: scope)
         return resp.content.isEmpty ? [] : resp.content.components(separatedBy: "\n").filter { !$0.isEmpty }
     }
 
     /// Returns the rendered markdown content for all memories with the given tag.
-    func readTag(scope: String, tag: String) async throws -> String {
+    public func readTag(scope: String, tag: String) async throws -> String {
         let resp = try await sendCommand(action: "read_tag", scope: scope, tag: tag)
         return resp.content
     }
 
     /// Replaces all memories for a tag by applying a diff from the full file content.
     /// The content should be in <!-- memory:N --> block format.
-    func writeTag(scope: String, tag: String, content: String) async throws {
+    public func writeTag(scope: String, tag: String, content: String) async throws {
         _ = try await sendCommand(action: "write_tag", scope: scope, tag: tag, content: content)
     }
 
     /// Appends a new memory entry for the given tag.
-    func appendTag(scope: String, tag: String, content: String) async throws {
+    public func appendTag(scope: String, tag: String, content: String) async throws {
         _ = try await sendCommand(action: "append_tag", scope: scope, tag: tag, content: content)
     }
 
     /// Deletes all memories for the given tag.
-    func unlinkTag(scope: String, tag: String) async throws {
+    public func unlinkTag(scope: String, tag: String) async throws {
         _ = try await sendCommand(action: "unlink_tag", scope: scope, tag: tag)
     }
 
     /// Renames a tag across all memories that have it.
-    func renameTag(scope: String, from: String, to: String) async throws {
+    public func renameTag(scope: String, from: String, to: String) async throws {
         _ = try await sendCommand(action: "rename_tag", scope: scope, tag: from, newTag: to)
     }
 }

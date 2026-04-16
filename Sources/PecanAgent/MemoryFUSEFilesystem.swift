@@ -1,5 +1,6 @@
 #if os(Linux)
 import Foundation
+import PecanAgentCore
 #if canImport(Glibc)
 import Glibc
 #elseif canImport(Musl)

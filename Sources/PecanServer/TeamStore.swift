@@ -1,17 +1,52 @@
 import Foundation
 import GRDB
 
-/// Manages a team's SQLite database at ~/.pecan/projects/{projectName}/teams/{teamName}/team.db
-/// Teams belong to projects and have their own workspace, tasks, memories, and shares.
+/// Manages a team's SQLite database.
+///
+/// New model (flat): stored at ~/.pecan/teams/{name}/team.db — team IS the project workspace.
+/// Legacy model: stored at ~/.pecan/projects/{projectName}/teams/{teamName}/team.db
+///
+/// Teams own an optional project directory (e.g. a git repo root) rather than belonging to a project.
 final class TeamStore: ScopedStore, Sendable {
     let teamName: String
     let projectName: String
     let teamDir: URL
     let workspacePath: URL
+    /// The project directory this team is associated with (e.g. a git repo root), if any.
+    let projectDirectory: String?
     var dbPath: String { teamDir.appendingPathComponent("team.db").path }
     let dbQueue: DatabaseQueue
 
-    /// Create or open a team store within a project.
+    /// Create or open a team using the flat model: ~/.pecan/teams/{name}/
+    /// In this model, the team IS the project workspace. `projectDirectory` is stored in metadata.
+    init(name: String, projectDirectory: String? = nil) throws {
+        self.teamName = name
+        self.projectName = name  // team name == project name in flat model
+        let homeDir = FileManager.default.homeDirectoryForCurrentUser
+        let teamDir = homeDir.appendingPathComponent(".pecan/teams/\(name)")
+        self.teamDir = teamDir
+        self.workspacePath = teamDir.appendingPathComponent("workspace")
+
+        let fm = FileManager.default
+        try fm.createDirectory(at: workspacePath, withIntermediateDirectories: true)
+
+        let dbPath = teamDir.appendingPathComponent("team.db").path
+        let isNew = !fm.fileExists(atPath: dbPath)
+        self.dbQueue = try DatabaseQueue(path: dbPath)
+
+        if isNew {
+            self.projectDirectory = projectDirectory
+            try migrate()
+            try writeMetadata(projectDirectory: projectDirectory)
+        } else {
+            self.projectDirectory = try dbQueue.read { db in
+                try MetadataRecord.fetchOne(db, key: "project_directory")?.value
+            }
+        }
+    }
+
+    /// Create or open a team store within a project (legacy nested model).
+    /// Stored at ~/.pecan/projects/{projectName}/teams/{teamName}/team.db
     init(teamName: String, projectName: String) throws {
         self.teamName = teamName
         self.projectName = projectName
@@ -26,10 +61,11 @@ final class TeamStore: ScopedStore, Sendable {
         let dbPath = teamDir.appendingPathComponent("team.db").path
         let isNew = !fm.fileExists(atPath: dbPath)
         self.dbQueue = try DatabaseQueue(path: dbPath)
+        self.projectDirectory = nil  // legacy model: directory comes from ProjectStore
 
         if isNew {
             try migrate()
-            try writeMetadata()
+            try writeLegacyMetadata()
         }
     }
 
@@ -39,11 +75,33 @@ final class TeamStore: ScopedStore, Sendable {
         }
     }
 
-    private func writeMetadata() throws {
+    private func writeMetadata(projectDirectory: String?) throws {
+        try dbQueue.write { db in
+            try MetadataRecord(key: "name", value: teamName).insert(db)
+            try MetadataRecord(key: "created_at", value: ISO8601DateFormatter().string(from: Date())).insert(db)
+            if let dir = projectDirectory {
+                try MetadataRecord(key: "project_directory", value: dir).insert(db)
+            }
+        }
+    }
+
+    private func writeLegacyMetadata() throws {
         try dbQueue.write { db in
             try MetadataRecord(key: "name", value: teamName).insert(db)
             try MetadataRecord(key: "project", value: projectName).insert(db)
             try MetadataRecord(key: "created_at", value: ISO8601DateFormatter().string(from: Date())).insert(db)
+        }
+    }
+
+    /// Update the project directory associated with this team.
+    func setProjectDirectory(_ path: String) throws {
+        try dbQueue.write { db in
+            let existing = try MetadataRecord.fetchOne(db, key: "project_directory")
+            if existing != nil {
+                try db.execute(sql: "UPDATE metadata SET value = ? WHERE key = 'project_directory'", arguments: [path])
+            } else {
+                try MetadataRecord(key: "project_directory", value: path).insert(db)
+            }
         }
     }
 
@@ -165,15 +223,32 @@ final class TeamStore: ScopedStore, Sendable {
 
 // MARK: - TeamRegistry
 
-/// Scans teams within a project directory.
 struct TeamRegistry {
-    static func teamsDir(projectName: String) -> URL {
+    /// Flat teams directory (new model: team = project workspace).
+    static var teamsDir: URL {
+        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/teams")
+    }
+
+    /// List all teams in the flat ~/.pecan/teams/ directory.
+    static func listAllTeamNames() -> [String] {
+        let fm = FileManager.default
+        let dir = teamsDir
+        guard let contents = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
+        return contents.filter { name in
+            let dbPath = dir.appendingPathComponent(name).appendingPathComponent("team.db").path
+            return fm.fileExists(atPath: dbPath)
+        }.sorted()
+    }
+
+    /// Legacy: scan teams within a project directory.
+    static func legacyTeamsDir(projectName: String) -> URL {
         FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/projects/\(projectName)/teams")
     }
 
+    /// Legacy: list team names nested under a project.
     static func listTeamNames(projectName: String) -> [String] {
         let fm = FileManager.default
-        let dir = teamsDir(projectName: projectName)
+        let dir = legacyTeamsDir(projectName: projectName)
         guard let contents = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
         return contents.filter { name in
             let dbPath = dir.appendingPathComponent(name).appendingPathComponent("team.db").path

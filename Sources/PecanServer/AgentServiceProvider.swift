@@ -34,33 +34,37 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     var resp = Pecan_RegistrationResponse()
                     resp.success = true
 
-                    // Include project/team context
-                    if let projectName = await SessionManager.shared.getProjectName(sessionID: reg.sessionID) {
-                        resp.projectName = projectName
-                        if let projectStore = await SessionManager.shared.getProjectStore(sessionID: reg.sessionID) {
-                            let projectDir = projectStore.directory ?? ""
-                            resp.projectDirectory = projectDir
-                            if !projectDir.isEmpty {
-                                resp.projectMount = "/project"
-                                // Auto-detect and load project tools
-                                await ProjectToolRegistry.shared.registerSession(
-                                    sessionID: reg.sessionID,
-                                    projectName: projectName,
-                                    projectDirectory: projectDir
-                                )
-                                resp.projectTools = await ProjectToolRegistry.shared.getAllTools(sessionID: reg.sessionID).map { tool in
-                                    var def = Pecan_ProjectToolDefinition()
-                                    def.name = tool.name
-                                    def.description_p = tool.description
-                                    def.parametersJsonSchema = tool.parametersSchema ?? ""
-                                    return def
-                                }
-                            }
-                        }
-                    }
+                    // Include project/team context. In the flat model, team = project workspace.
                     if let teamName = await SessionManager.shared.getTeamName(sessionID: reg.sessionID) {
                         resp.teamName = teamName
+                        resp.projectName = teamName
                         resp.teamMount = "/team"
+                        // Get project directory from team store (flat model) or legacy project store
+                        let projectDir = await SessionManager.shared.getProjectDirectory(sessionID: reg.sessionID) ?? ""
+                        resp.projectDirectory = projectDir
+                        if !projectDir.isEmpty {
+                            resp.projectMount = "/project"
+                            await ProjectToolRegistry.shared.registerSession(
+                                sessionID: reg.sessionID,
+                                projectName: teamName,
+                                projectDirectory: projectDir
+                            )
+                            resp.projectTools = await ProjectToolRegistry.shared.getAllTools(sessionID: reg.sessionID).map { tool in
+                                var def = Pecan_ProjectToolDefinition()
+                                def.name = tool.name
+                                def.description_p = tool.description
+                                def.parametersJsonSchema = tool.parametersSchema ?? ""
+                                return def
+                            }
+                        }
+                    } else if let projectName = await SessionManager.shared.getProjectName(sessionID: reg.sessionID) {
+                        // Legacy: project without team
+                        resp.projectName = projectName
+                        let projectDir = await SessionManager.shared.getProjectDirectory(sessionID: reg.sessionID) ?? ""
+                        resp.projectDirectory = projectDir
+                        if !projectDir.isEmpty {
+                            resp.projectMount = "/project"
+                        }
                     }
 
                     cmdMsg.registrationResponse = resp

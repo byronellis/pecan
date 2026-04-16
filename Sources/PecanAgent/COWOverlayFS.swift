@@ -207,7 +207,13 @@ actor COWOverlayFilesystem: FUSEFilesystem {
             let name = (relPath as NSString).lastPathComponent
             let dir = (relPath as NSString).deletingLastPathComponent
             let parentDir = dir.isEmpty ? "/" : dir
-            if relPath != "/" && await core.isWhitedOut(name, inDir: parentDir) {
+            let isWhited: Bool
+            if relPath != "/" {
+                isWhited = await core.isWhitedOut(name, inDir: parentDir)
+            } else {
+                isWhited = false
+            }
+            if isWhited {
                 return .failure(FUSEErrno(-ENOENT))
             }
             let uPath = await core.upperPath(relPath)

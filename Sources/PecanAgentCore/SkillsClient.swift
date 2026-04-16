@@ -6,10 +6,10 @@ import PecanShared
 public actor SkillsClient {
     public static let shared = SkillsClient()
 
-    struct DirEntry: Sendable {
-        let name: String
-        let isDir: Bool
-        let isExecutable: Bool
+    public struct DirEntry: Sendable {
+        public let name: String
+        public let isDir: Bool
+        public let isExecutable: Bool
     }
 
     private var pendingRequests: [String: CheckedContinuation<Pecan_SkillsResponse, Error>] = [:]
@@ -49,7 +49,7 @@ public actor SkillsClient {
     }
 
     /// Lists entries in a skills directory path (e.g. "/" for top-level, "/web" for a skill bundle).
-    func listDir(path: String) async throws -> [DirEntry] {
+    public func listDir(path: String) async throws -> [DirEntry] {
         let resp = try await sendCommand(action: "list_dir", path: path)
         guard let data = resp.content.data(using: .utf8),
               let array = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return [] }
@@ -64,7 +64,7 @@ public actor SkillsClient {
     }
 
     /// Reads the content of a skills file (e.g. "/web/SKILL.md" or "/web/scripts/http_request").
-    func readFile(path: String) async throws -> (content: Data, isExecutable: Bool) {
+    public func readFile(path: String) async throws -> (content: Data, isExecutable: Bool) {
         let resp = try await sendCommand(action: "read_file", path: path)
         let data = resp.content.data(using: .utf8) ?? Data()
         return (content: data, isExecutable: resp.isExecutable)

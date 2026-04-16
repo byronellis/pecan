@@ -37,7 +37,7 @@ actor SessionManager {
 
     // Shared stores keyed by name (multiple sessions can reference the same project/team)
     private var projectStores: [String: ProjectStore] = [:]
-    private var teamStores: [String: TeamStore] = [:]  // keyed as "project/team"
+    private var teamStores: [String: TeamStore] = [:]  // keyed by team name (flat model)
 
     // MARK: - Stream registration
 
@@ -87,9 +87,18 @@ actor SessionManager {
         projectStores[projectName] = store
     }
 
+    /// Set the team for a session (flat model: team IS the project workspace).
+    func setTeamForSession(sessionID: String, teamName: String, store: TeamStore) {
+        sessions[sessionID]?.teamName = teamName
+        sessions[sessionID]?.projectName = teamName  // team name == project name
+        teamStores[teamName] = store
+    }
+
+    /// Legacy overload — kept for call sites that still pass projectName.
     func setTeamForSession(sessionID: String, teamName: String, projectName: String, store: TeamStore) {
         sessions[sessionID]?.teamName = teamName
-        teamStores["\(projectName)/\(teamName)"] = store
+        sessions[sessionID]?.projectName = teamName  // team name IS the project now
+        teamStores[teamName] = store
     }
 
     func getProjectName(sessionID: String) -> String? {
@@ -106,13 +115,15 @@ actor SessionManager {
     }
 
     func getProjectDirectory(sessionID: String) -> String? {
-        getProjectStore(sessionID: sessionID)?.directory
+        // In the flat model, the project directory is stored in the team store.
+        if let dir = getTeamStore(sessionID: sessionID)?.projectDirectory { return dir }
+        // Fall back to legacy ProjectStore.
+        return getProjectStore(sessionID: sessionID)?.directory
     }
 
     func getTeamStore(sessionID: String) -> TeamStore? {
-        guard let projectName = sessions[sessionID]?.projectName,
-              let teamName = sessions[sessionID]?.teamName else { return nil }
-        return teamStores["\(projectName)/\(teamName)"]
+        guard let teamName = sessions[sessionID]?.teamName else { return nil }
+        return teamStores[teamName]
     }
 
     func clearProjectForSession(sessionID: String) {
@@ -125,20 +136,14 @@ actor SessionManager {
     }
 
     /// Resolve a store for a given scope, with optional explicit target name.
-    /// scope "t" or "team" -> team store (optionally for a specific team name)
-    /// scope "p" or "project" -> project store (optionally for a specific project name)
+    /// scope "t", "team", "p", or "project" -> team store (team IS the project workspace)
     /// empty or "agent" -> session store
     func resolveStore(sessionID: String, scope: String, target: String? = nil) -> ScopedStore? {
         switch scope {
-        case "p", "project":
+        case "p", "project", "t", "team":
             if let target = target, !target.isEmpty {
-                return projectStores[target]
-            }
-            return getProjectStore(sessionID: sessionID)
-        case "t", "team":
-            if let target = target, !target.isEmpty {
-                guard let projectName = sessions[sessionID]?.projectName else { return nil }
-                return teamStores["\(projectName)/\(target)"]
+                // Look up the named team store directly
+                return teamStores[target]
             }
             return getTeamStore(sessionID: sessionID)
         default:
@@ -149,9 +154,8 @@ actor SessionManager {
     /// Returns the appropriate store for the given scope relative to a session.
     func storeForScope(sessionID: String, scope: String) -> ScopedStore? {
         switch scope {
-        case "project":
-            return getProjectStore(sessionID: sessionID)
-        case "team":
+        case "project", "team":
+            // Team IS the project workspace in the flat model.
             return getTeamStore(sessionID: sessionID)
         default:
             return sessions[sessionID]?.store
@@ -241,11 +245,14 @@ actor SessionManager {
     // MARK: - Env snapshot paths
 
     /// Returns (creating if needed) the host directory mounted read-only at /tmp/pecan-mounts.
-    /// Contains env.tar if a snapshot has been saved. Per-project when active; per-session otherwise.
+    /// Contains env.tar if a snapshot has been saved. Per-team when active; per-session otherwise.
     func persistEnvDir(sessionID: String) -> String? {
         let fm = FileManager.default
         let path: String
-        if let projectStore = getProjectStore(sessionID: sessionID) {
+        if let teamStore = getTeamStore(sessionID: sessionID) {
+            path = teamStore.teamDir.appendingPathComponent("env").path
+        } else if let projectStore = getProjectStore(sessionID: sessionID) {
+            // Legacy fallback
             path = projectStore.projectDir.appendingPathComponent("env").path
         } else if let store = sessions[sessionID]?.store {
             path = store.workspacePath.appendingPathComponent(".pecan/env").path
@@ -325,24 +332,24 @@ actor SessionManager {
         switch action {
         case "project_create":
             guard let name = payload["name"] as? String, !name.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing project name"])
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing project/team name"])
             }
             let directory = payload["directory"] as? String
-            let store = try ProjectStore(name: name, directory: directory)
-            projectStores[name] = store
+            let store = try TeamStore(name: name, projectDirectory: directory)
+            teamStores[name] = store
             let result: [String: Any] = ["name": name, "directory": directory ?? "", "ok": true]
             let data = try JSONSerialization.data(withJSONObject: result)
             return String(data: data, encoding: .utf8) ?? "{}"
 
         case "project_list":
-            let names = ProjectRegistry.listProjectNames()
+            let names = TeamRegistry.listAllTeamNames()
             var projects: [[String: Any]] = []
             for name in names {
                 var info: [String: Any] = ["name": name]
-                if let store = projectStores[name] {
-                    info["directory"] = store.directory ?? ""
-                } else if let store = try? ProjectStore(name: name) {
-                    info["directory"] = store.directory ?? ""
+                if let store = teamStores[name] {
+                    info["directory"] = store.projectDirectory ?? ""
+                } else if let store = try? TeamStore(name: name) {
+                    info["directory"] = store.projectDirectory ?? ""
                 }
                 projects.append(info)
             }
@@ -351,10 +358,10 @@ actor SessionManager {
 
         case "project_get":
             guard let name = payload["name"] as? String, !name.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing project name"])
+                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing project/team name"])
             }
-            let store = try ProjectStore(name: name)
-            let result: [String: Any] = ["name": name, "directory": store.directory ?? ""]
+            let store = try TeamStore(name: name)
+            let result: [String: Any] = ["name": name, "directory": store.projectDirectory ?? ""]
             let data = try JSONSerialization.data(withJSONObject: result)
             return String(data: data, encoding: .utf8) ?? "{}"
 
@@ -362,22 +369,16 @@ actor SessionManager {
             guard let teamName = payload["name"] as? String, !teamName.isEmpty else {
                 throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing team name"])
             }
-            guard let projectName = sessions[sessionID]?.projectName ?? payload["project"] as? String, !projectName.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "No project context for team creation"])
-            }
-            let store = try TeamStore(teamName: teamName, projectName: projectName)
-            teamStores["\(projectName)/\(teamName)"] = store
-            let result: [String: Any] = ["name": teamName, "project": projectName, "ok": true]
+            let directory = payload["directory"] as? String
+            let store = try TeamStore(name: teamName, projectDirectory: directory)
+            teamStores[teamName] = store
+            let result: [String: Any] = ["name": teamName, "ok": true]
             let data = try JSONSerialization.data(withJSONObject: result)
             return String(data: data, encoding: .utf8) ?? "{}"
 
         case "team_list":
-            let projectName = sessions[sessionID]?.projectName ?? payload["project"] as? String ?? ""
-            guard !projectName.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "No project context for team listing"])
-            }
-            let names = TeamRegistry.listTeamNames(projectName: projectName)
-            let teams = names.map { ["name": $0, "project": projectName] as [String: Any] }
+            let names = TeamRegistry.listAllTeamNames()
+            let teams = names.map { ["name": $0] as [String: Any] }
             let data = try JSONSerialization.data(withJSONObject: teams)
             return String(data: data, encoding: .utf8) ?? "[]"
 
@@ -385,12 +386,8 @@ actor SessionManager {
             guard let teamName = payload["name"] as? String, !teamName.isEmpty else {
                 throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "Missing team name"])
             }
-            let projectName = sessions[sessionID]?.projectName ?? payload["project"] as? String ?? ""
-            guard !projectName.isEmpty else {
-                throw NSError(domain: "TaskCommand", code: 2, userInfo: [NSLocalizedDescriptionKey: "No project context"])
-            }
-            let store = try TeamStore(teamName: teamName, projectName: projectName)
-            let result: [String: Any] = ["name": teamName, "project": projectName, "workspace": store.workspacePath.path]
+            let store = try TeamStore(name: teamName)
+            let result: [String: Any] = ["name": teamName, "directory": store.projectDirectory ?? "", "workspace": store.workspacePath.path]
             let data = try JSONSerialization.data(withJSONObject: result)
             return String(data: data, encoding: .utf8) ?? "{}"
 
@@ -523,6 +520,7 @@ actor SessionManager {
             allTasks.append(contentsOf: tasks.map { taskToDict($0, scope: "agent") })
         }
 
+        // Team IS the project workspace — query once under the "team" scope label.
         if let store = getTeamStore(sessionID: sessionID) {
             let tasks = try store.listTasks(
                 status: payload["status"] as? String,
@@ -530,15 +528,6 @@ actor SessionManager {
                 search: payload["search"] as? String
             )
             allTasks.append(contentsOf: tasks.map { taskToDict($0, scope: "team") })
-        }
-
-        if let store = getProjectStore(sessionID: sessionID) {
-            let tasks = try store.listTasks(
-                status: payload["status"] as? String,
-                label: payload["label"] as? String,
-                search: payload["search"] as? String
-            )
-            allTasks.append(contentsOf: tasks.map { taskToDict($0, scope: "project") })
         }
 
         let data = try JSONSerialization.data(withJSONObject: allTasks)
@@ -736,15 +725,20 @@ actor SessionManager {
         let shares = try store.getShares()
         var shareMounts = shares.map { MountSpec(source: $0.hostPath, destination: $0.guestPath, readOnly: $0.mode == "ro") }
 
-        if let projectStore = getProjectStore(sessionID: sessionID) {
-            if let dir = projectStore.directory {
+        if let teamStore = getTeamStore(sessionID: sessionID) {
+            if let dir = teamStore.projectDirectory {
                 shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
-                // Record git HEAD for 3-way merge conflict detection at submit time
+                setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
+            } else if let projectStore = getProjectStore(sessionID: sessionID), let dir = projectStore.directory {
+                // Legacy fallback: directory from ProjectStore
+                shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
                 setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
             }
-        }
-        if let teamStore = getTeamStore(sessionID: sessionID) {
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
+        } else if let projectStore = getProjectStore(sessionID: sessionID), let dir = projectStore.directory {
+            // Legacy: project without a team
+            shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
+            setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
         }
 
         // Clear stale agent stream and any pending commands so the new agent starts fresh
