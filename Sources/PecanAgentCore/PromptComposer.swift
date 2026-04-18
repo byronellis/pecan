@@ -1,10 +1,12 @@
 import Foundation
 import Lua
 
-/// Composes the system prompt from independent fragments and manages active tool tags.
+/// Composes the system prompt from a role and optional extension fragments.
+/// Manages active tool tags, focused task, and context for the current session.
 public actor PromptComposer {
     public static let shared = PromptComposer()
 
+    private var activeRole: (any AgentRole)?
     private var fragments: [String: any PromptFragment] = [:]
     private var activeToolTags: Set<String> = ["core", "web", "skills"]
     private var focusedTask: PromptContext.TaskInfo? = nil
@@ -12,9 +14,19 @@ public actor PromptComposer {
     private var teamInfo: PromptContext.TeamInfo? = nil
     private let pool = LuaStatePool()
 
+    // MARK: - Role
+
+    public func setRole(_ role: any AgentRole) {
+        activeRole = role
+    }
+
+    // MARK: - Fragment extensions (e.g. Lua user fragments)
+
     public func register(fragment: any PromptFragment) {
         fragments[fragment.id] = fragment
     }
+
+    // MARK: - Context setters
 
     public func setActiveToolTags(_ tags: Set<String>) {
         activeToolTags = tags
@@ -48,24 +60,42 @@ public actor PromptComposer {
         teamInfo
     }
 
-    /// Compose the full system prompt by rendering all fragments in priority order.
+    // MARK: - Composition
+
+    /// Compose the full system prompt: role first, then extension fragments in priority order.
+    /// The skills catalog is pre-fetched so roles can use it synchronously.
     public func compose(agentID: String, sessionID: String) async -> String {
+        // Pre-fetch async data into context
+        let rawSkills = await SkillManager.shared.catalog()
+        let skillEntries = rawSkills.map { PromptContext.SkillEntry(name: $0.name, description: $0.description) }
+
+        let rawProjectTools = await ToolManager.shared.allToolDescriptions(tags: ["project"])
+        let projectToolEntries = rawProjectTools.map { PromptContext.ToolEntry(name: $0.name, description: $0.description) }
+
         let context = PromptContext(
             activeToolTags: activeToolTags,
             focusedTask: focusedTask,
             agentID: agentID,
             sessionID: sessionID,
             project: projectInfo,
-            team: teamInfo
+            team: teamInfo,
+            skillsCatalog: skillEntries,
+            projectTools: projectToolEntries
         )
 
-        let sorted = fragments.values.sorted { $0.priority < $1.priority }
         var sections: [String] = []
 
+        // Render the active role
+        if let role = activeRole {
+            let rolePrompt = role.render(context: context)
+            if !rolePrompt.isEmpty { sections.append(rolePrompt) }
+        }
+
+        // Render extension fragments (user Lua fragments, etc.) in priority order
+        let sorted = fragments.values.sorted { $0.priority < $1.priority }
         for fragment in sorted {
             let rendered: String?
             if let luaFrag = fragment as? LuaPromptFragment {
-                // Reuse the pooled LuaState to avoid per-call init/close overhead.
                 rendered = pool.execute { L in luaFrag.renderSync(context: context, lua: L) }
             } else {
                 rendered = await fragment.render(context: context)
@@ -78,17 +108,20 @@ public actor PromptComposer {
         return sections.joined(separator: "\n\n")
     }
 
-    /// Register all built-in prompt fragments.
-    public func registerBuiltinFragments() {
-        register(fragment: BaseIdentityFragment())
-        register(fragment: ProjectTeamContextFragment())
-        register(fragment: GuidelinesFragment())
-        register(fragment: MemoryFragment())
-        register(fragment: FocusedTaskFragment())
-        register(fragment: SkillCatalogFragment())
+    // MARK: - Setup helpers
+
+    /// Configure this composer with the default coding role.
+    /// Call this instead of `registerBuiltinFragments()` for new sessions.
+    public func useDefaultRole() {
+        setRole(CodingRole())
     }
 
-    /// Scan ~/.pecan/prompts/*.lua for user-defined prompt fragments.
+    /// Register all built-in prompt fragments (legacy path; prefer `useDefaultRole()`).
+    public func registerBuiltinFragments() {
+        setRole(CodingRole())
+    }
+
+    /// Scan ~/.pecan/prompts/*.lua for user-defined extension fragments.
     public func loadUserFragments() {
         let fm = FileManager.default
         let homeDir = fm.homeDirectoryForCurrentUser

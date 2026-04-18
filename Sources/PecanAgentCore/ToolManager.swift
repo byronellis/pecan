@@ -70,7 +70,6 @@ public actor ToolManager {
         register(tool: WebFetchTool())
         register(tool: WebSearchTool())
         register(tool: HttpRequestTool())
-        register(tool: CreateLuaToolTool())
         register(tool: TaskCreateTool())
         register(tool: TaskListTool())
         register(tool: TaskGetTool())
