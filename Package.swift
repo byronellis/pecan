@@ -28,6 +28,7 @@ let package = Package(
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
         .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.27.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
+        .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
     ],
     targets: [
         // MARK: - Testable core library (pure logic, no gRPC/container deps)
@@ -51,6 +52,7 @@ let package = Package(
                 .product(name: "PecanShared", package: "pecan-shared"),
                 .product(name: "Lua", package: "LuaSwift"),
                 .product(name: "Logging", package: "swift-log"),
+                .product(name: "Markdown", package: "swift-markdown"),
             ],
             path: "Sources/PecanAgentCore"
         ),
@@ -73,6 +75,7 @@ let package = Package(
             dependencies: [
                 .product(name: "PecanShared", package: "pecan-shared"),
                 .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "Markdown", package: "swift-markdown"),
                 "PecanServerCore",
             ]),
         .executableTarget(
