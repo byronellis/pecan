@@ -4,6 +4,7 @@ import Foundation
 /// Produces a system prompt for a general-purpose coding agent.
 public struct CodingRole: AgentRole {
     public let roleName = "coding"
+    public let description = "General-purpose coding agent with file, shell, and web tools."
 
     public init() {}
 
@@ -82,6 +83,13 @@ public struct CodingRole: AgentRole {
             Section("Available Skills") {
                 BulletList(context.skillsCatalog.map { "**\($0.name)**: \($0.description)" })
                 Paragraph("When a request matches a skill's description, use `activate_skill` to load its full instructions before proceeding.")
+            }
+        }
+
+        if !context.personasCatalog.isEmpty {
+            Section("Available Personas") {
+                BulletList(context.personasCatalog.map { "**\($0.name)**: \($0.description)" })
+                Paragraph("For tasks that benefit from a focused mindset, use `enter_persona` to adopt that persona. Use `leave_persona` to return to coding mode.")
             }
         }
     }

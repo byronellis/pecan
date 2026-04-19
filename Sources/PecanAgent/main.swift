@@ -136,6 +136,7 @@ func main() async throws {
     await MemoryClient.shared.configure { msg in try await writer.send(msg) }
     await SkillsClient.shared.configure { msg in try await writer.send(msg) }
     await ProjectToolClient.shared.configure { msg in try await writer.send(msg) }
+    await SubagentPool.shared.configure(sink: writer)
 
     // Send registration
     var regMsg = Pecan_AgentEvent()

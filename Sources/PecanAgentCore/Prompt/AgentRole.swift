@@ -8,12 +8,18 @@ public protocol AgentRole: Sendable {
     /// Short name identifying this role, e.g. `"coding"`.
     var roleName: String { get }
 
+    /// One-line description shown in persona/role catalogs.
+    var description: String { get }
+
     /// Builds the system prompt for this role given the current session context.
     @PromptBuilder
     func buildPrompt(context: PromptContext) -> any PromptNode
 }
 
 extension AgentRole {
+    /// Default description falls back to the role name.
+    public var description: String { roleName }
+
     /// Renders the role's prompt to a Markdown string.
     public func render(context: PromptContext) -> String {
         buildPrompt(context: context).render()

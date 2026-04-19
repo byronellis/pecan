@@ -81,6 +81,10 @@ public actor ToolManager {
         register(tool: TriggerCancelTool())
         // Skills tools
         register(tool: ActivateSkillTool())
+        // Meta tools (persona + subagent)
+        register(tool: EnterPersonaTool())
+        register(tool: LeavePersonaTool())
+        register(tool: RunAgentTool())
     }
 
     public func formatToolResult(name: String, result: String) -> String? {

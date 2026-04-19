@@ -6,19 +6,33 @@ import Lua
 public actor PromptComposer {
     public static let shared = PromptComposer()
 
-    private var activeRole: (any AgentRole)?
+    private var baseRole: (any AgentRole)?
+    private var activePersona: (any AgentRole)?
     private var fragments: [String: any PromptFragment] = [:]
-    private var activeToolTags: Set<String> = ["core", "web", "skills"]
+    private var activeToolTags: Set<String> = ["core", "web", "skills", "meta"]
     private var focusedTask: PromptContext.TaskInfo? = nil
     private var projectInfo: PromptContext.ProjectInfo? = nil
     private var teamInfo: PromptContext.TeamInfo? = nil
     private let pool = LuaStatePool()
 
-    // MARK: - Role
+    // MARK: - Role & Persona
 
     public func setRole(_ role: any AgentRole) {
-        activeRole = role
+        baseRole = role
     }
+
+    /// Activate a persona, replacing the base role for the next `compose` call.
+    public func setPersona(_ persona: any AgentRole) {
+        activePersona = persona
+    }
+
+    /// Clear the active persona, reverting to the base role.
+    public func clearPersona() {
+        activePersona = nil
+    }
+
+    /// The active role: persona if set, otherwise the base role.
+    private var activeRole: (any AgentRole)? { activePersona ?? baseRole }
 
     // MARK: - Fragment extensions (e.g. Lua user fragments)
 
@@ -63,7 +77,7 @@ public actor PromptComposer {
     // MARK: - Composition
 
     /// Compose the full system prompt: role first, then extension fragments in priority order.
-    /// The skills catalog is pre-fetched so roles can use it synchronously.
+    /// All async data (skills, personas, project tools) is pre-fetched into `PromptContext`.
     public func compose(agentID: String, sessionID: String) async -> String {
         // Pre-fetch async data into context
         let rawSkills = await SkillManager.shared.catalog()
@@ -71,6 +85,9 @@ public actor PromptComposer {
 
         let rawProjectTools = await ToolManager.shared.allToolDescriptions(tags: ["project"])
         let projectToolEntries = rawProjectTools.map { PromptContext.ToolEntry(name: $0.name, description: $0.description) }
+
+        let rawPersonas = await PersonaManager.shared.catalog()
+        let personaEntries = rawPersonas.map { PromptContext.PersonaEntry(name: $0.name, description: $0.description) }
 
         let context = PromptContext(
             activeToolTags: activeToolTags,
@@ -80,7 +97,8 @@ public actor PromptComposer {
             project: projectInfo,
             team: teamInfo,
             skillsCatalog: skillEntries,
-            projectTools: projectToolEntries
+            projectTools: projectToolEntries,
+            personasCatalog: personaEntries
         )
 
         var sections: [String] = []

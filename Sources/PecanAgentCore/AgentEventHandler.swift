@@ -192,6 +192,12 @@ public actor AgentEventHandler {
     // MARK: - Completion response + tool loop
 
     private func onCompletionResponse(_ resp: Pecan_LLMCompletionResponse) async throws {
+        // Route subagent completions before any main-agent handling
+        if await CompletionRouter.shared.fulfill(requestID: resp.requestID, response: resp) {
+            logger.debug("Completion \(resp.requestID) routed to subagent")
+            return
+        }
+
         logger.info("Received completion_response for request \(resp.requestID)")
 
         var finalText = ""
@@ -310,6 +316,24 @@ public actor AgentEventHandler {
             }
         }
 
+        // Persona activation: update PromptComposer and replace the server-side system prompt
+        if name == "enter_persona" {
+            // Result is "entered:<personaName>" on success
+            let personaName = resultStr.hasPrefix("entered:") ? String(resultStr.dropFirst("entered:".count)) : nil
+            if let personaName = personaName,
+               let persona = await PersonaManager.shared.persona(named: personaName) {
+                await deps.promptComposer.setPersona(persona)
+                try? await replaceSystemPrompt()
+                logger.info("Entered persona: \(personaName)")
+            }
+        }
+
+        if name == "leave_persona" {
+            await deps.promptComposer.clearPersona()
+            try? await replaceSystemPrompt()
+            logger.info("Left persona, restored base role")
+        }
+
         await deps.hookManager.fire(event: "tool.after", data: [
             "name": name,
             "arguments": arguments,
@@ -392,6 +416,36 @@ public actor AgentEventHandler {
         var resolveEvent = Pecan_AgentEvent()
         resolveEvent.mergeResolution = resolution
         try? await sink.send(resolveEvent)
+    }
+
+    // MARK: - System prompt replacement
+
+    /// Replace the server-side system prompt with the current PromptComposer output.
+    /// Uses compact(.SYSTEM, keepRecent: 0) + add_message(.SYSTEM) — no proto changes needed.
+    private func replaceSystemPrompt() async throws {
+        // 1. Delete all existing system messages
+        var compactEvent = Pecan_AgentEvent()
+        var compactCmd = Pecan_ContextCommand()
+        compactCmd.requestID = UUID().uuidString
+        var compact = Pecan_CompactContext()
+        compact.section = .system
+        compact.keepRecentMessages = 0
+        compactCmd.compact = compact
+        compactEvent.contextCommand = compactCmd
+        try await sink.send(compactEvent)
+
+        // 2. Add the recomposed system prompt
+        let newPrompt = await deps.promptComposer.compose(agentID: agentID, sessionID: sessionID)
+        var addEvent = Pecan_AgentEvent()
+        var addCmd = Pecan_ContextCommand()
+        addCmd.requestID = UUID().uuidString
+        var addMsg = Pecan_AddContextMessage()
+        addMsg.section = .system
+        addMsg.role = "system"
+        addMsg.content = newPrompt
+        addCmd.addMessage = addMsg
+        addEvent.contextCommand = addCmd
+        try await sink.send(addEvent)
     }
 
     // MARK: - LLM request helper
