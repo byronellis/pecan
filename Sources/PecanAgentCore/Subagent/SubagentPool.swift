@@ -36,13 +36,13 @@ public actor SubagentPool {
             )
         }
 
-        // Resolve role: named persona or CodingRole fallback
-        let role: any AgentRole
+        // Resolve persona: named override or CodingPersona fallback
+        let persona: any AgentPersona
         if let personaName = personaName,
-           let persona = await PersonaManager.shared.persona(named: personaName) {
-            role = persona
+           let named = await PersonaManager.shared.persona(named: personaName) {
+            persona = named
         } else {
-            role = CodingRole()
+            persona = CodingPersona()
         }
 
         // Build context from the current session state
@@ -62,7 +62,7 @@ public actor SubagentPool {
             personasCatalog: []
         )
 
-        let systemPrompt = role.render(context: context)
+        let systemPrompt = persona.render(context: context)
         let resolvedToolTags = toolTags ?? ["core", "web", "skills"]
 
         let session = SubagentSession(

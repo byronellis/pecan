@@ -1,9 +1,9 @@
 import Foundation
 
-/// The default agent role. Applied to all teams unless overridden.
+/// The default agent persona. Applied to all teams unless overridden.
 /// Produces a system prompt for a general-purpose coding agent.
-public struct CodingRole: AgentRole {
-    public let roleName = "coding"
+public struct CodingPersona: AgentPersona {
+    public let personaName = "coding"
     public let description = "General-purpose coding agent with file, shell, and web tools."
 
     public init() {}

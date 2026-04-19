@@ -6,8 +6,8 @@ import Lua
 public actor PromptComposer {
     public static let shared = PromptComposer()
 
-    private var baseRole: (any AgentRole)?
-    private var activePersona: (any AgentRole)?
+    private var basePersona: (any AgentPersona)?
+    private var activePersona: (any AgentPersona)?
     private var fragments: [String: any PromptFragment] = [:]
     private var activeToolTags: Set<String> = ["core", "web", "skills", "meta"]
     private var focusedTask: PromptContext.TaskInfo? = nil
@@ -15,24 +15,25 @@ public actor PromptComposer {
     private var teamInfo: PromptContext.TeamInfo? = nil
     private let pool = LuaStatePool()
 
-    // MARK: - Role & Persona
+    // MARK: - Persona management
 
-    public func setRole(_ role: any AgentRole) {
-        baseRole = role
+    /// Set the long-term base persona for this session.
+    public func setBasePersona(_ persona: any AgentPersona) {
+        basePersona = persona
     }
 
-    /// Activate a persona, replacing the base role for the next `compose` call.
-    public func setPersona(_ persona: any AgentRole) {
+    /// Activate a temporary persona, overriding the base for the next `compose` call.
+    public func enterPersona(_ persona: any AgentPersona) {
         activePersona = persona
     }
 
-    /// Clear the active persona, reverting to the base role.
-    public func clearPersona() {
+    /// Clear the temporary persona, reverting to the base.
+    public func leavePersona() {
         activePersona = nil
     }
 
-    /// The active role: persona if set, otherwise the base role.
-    private var activeRole: (any AgentRole)? { activePersona ?? baseRole }
+    /// The resolved persona: temporary override if set, otherwise the base.
+    private var resolvedPersona: (any AgentPersona)? { activePersona ?? basePersona }
 
     // MARK: - Fragment extensions (e.g. Lua user fragments)
 
@@ -103,10 +104,10 @@ public actor PromptComposer {
 
         var sections: [String] = []
 
-        // Render the active role
-        if let role = activeRole {
-            let rolePrompt = role.render(context: context)
-            if !rolePrompt.isEmpty { sections.append(rolePrompt) }
+        // Render the resolved persona
+        if let persona = resolvedPersona {
+            let personaPrompt = persona.render(context: context)
+            if !personaPrompt.isEmpty { sections.append(personaPrompt) }
         }
 
         // Render extension fragments (user Lua fragments, etc.) in priority order
@@ -128,15 +129,14 @@ public actor PromptComposer {
 
     // MARK: - Setup helpers
 
-    /// Configure this composer with the default coding role.
-    /// Call this instead of `registerBuiltinFragments()` for new sessions.
-    public func useDefaultRole() {
-        setRole(CodingRole())
+    /// Configure this composer with the default coding persona.
+    public func useDefaultPersona() {
+        setBasePersona(CodingPersona())
     }
 
-    /// Register all built-in prompt fragments (legacy path; prefer `useDefaultRole()`).
+    /// Legacy alias for `useDefaultPersona()`.
     public func registerBuiltinFragments() {
-        setRole(CodingRole())
+        setBasePersona(CodingPersona())
     }
 
     /// Scan ~/.pecan/prompts/*.lua for user-defined extension fragments.

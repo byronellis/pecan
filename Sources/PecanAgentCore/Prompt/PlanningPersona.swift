@@ -5,8 +5,8 @@ import Foundation
 /// Activate this persona for large or ambiguous tasks: it emphasises understanding
 /// scope, identifying risks, and producing an actionable task list before any code
 /// is written. Use `leave_persona` to return to coding mode when the plan is ready.
-public struct PlanningPersona: AgentRole {
-    public let roleName = "planning"
+public struct PlanningPersona: AgentPersona {
+    public let personaName = "planning"
     public let description = "Analyse scope and produce a structured plan before implementing."
 
     public init() {}

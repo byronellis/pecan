@@ -322,16 +322,16 @@ public actor AgentEventHandler {
             let personaName = resultStr.hasPrefix("entered:") ? String(resultStr.dropFirst("entered:".count)) : nil
             if let personaName = personaName,
                let persona = await PersonaManager.shared.persona(named: personaName) {
-                await deps.promptComposer.setPersona(persona)
+                await deps.promptComposer.enterPersona(persona)
                 try? await replaceSystemPrompt()
                 logger.info("Entered persona: \(personaName)")
             }
         }
 
         if name == "leave_persona" {
-            await deps.promptComposer.clearPersona()
+            await deps.promptComposer.leavePersona()
             try? await replaceSystemPrompt()
-            logger.info("Left persona, restored base role")
+            logger.info("Left persona, restored base persona")
         }
 
         await deps.hookManager.fire(event: "tool.after", data: [

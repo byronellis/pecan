@@ -43,7 +43,7 @@ func main() async throws {
     await HookManager.shared.loadHooks()
     await SkillManager.shared.discoverSkills()
     await SkillManager.shared.registerLuaTools()
-    await PromptComposer.shared.registerBuiltinFragments()
+    await PromptComposer.shared.useDefaultPersona()
     await PromptComposer.shared.loadUserFragments()
 
 #if os(Linux)
