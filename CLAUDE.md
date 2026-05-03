@@ -48,7 +48,7 @@ Workflow:
 
 ## Related repositories
 
-- **pecan-shared** (`~/Sources/pecan-shared`) — shared gRPC/proto + Config; push changes here first
+- **pecan-shared** (`~/Sources/pecan-shared`) — shared gRPC/proto definitions; push changes here first
 - **pecan-mlx** (`~/Sources/pecan-mlx`) — MLX inference server for Apple Silicon
 - **pecan-gb10** (`~/Sources/pecan-gb10`) — LLM inference server for NVIDIA DGX Spark
 
