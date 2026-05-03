@@ -543,6 +543,7 @@ public actor AgentEventHandler {
         var compReq = Pecan_LLMCompletionRequest()
         compReq.requestID = UUID().uuidString
         compReq.modelKey = ""
+        compReq.currentPersona = await deps.promptComposer.activePersonaName ?? ""
 
         let activeTags = await deps.promptComposer.getActiveToolTags()
         if let toolData = try? await deps.toolManager.getToolDefinitions(tags: activeTags),

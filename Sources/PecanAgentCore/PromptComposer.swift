@@ -35,6 +35,9 @@ public actor PromptComposer {
     /// The resolved persona: temporary override if set, otherwise the base.
     private var resolvedPersona: (any AgentPersona)? { activePersona ?? basePersona }
 
+    /// Name of the currently active persona (for server-side model resolution).
+    public var activePersonaName: String? { resolvedPersona?.personaName }
+
     // MARK: - Fragment extensions (e.g. Lua user fragments)
 
     public func register(fragment: any PromptFragment) {

@@ -3,6 +3,7 @@ import GRPC
 import NIO
 import PecanShared
 import PecanServerCore
+import PecanSettings
 import Logging
 
 let logger = Logger(label: "com.pecan.server")
@@ -10,7 +11,8 @@ let logger = Logger(label: "com.pecan.server")
 
 func main() async throws {
 
-    let config = try Config.load()
+    // Open the settings store (migrates from config.yaml automatically if present)
+    try await SettingsStore.shared.open()
 
     // Launch the vm-launcher subprocess and wait for it to be ready
     let launcher = try LauncherProcessManager()
@@ -24,29 +26,30 @@ func main() async throws {
         Task { await SpawnerFactory.shared.shutdownLauncher() }
     }
 
-    // Launch MLX server if any models use the mlx provider
-    let hasMLXModels = config.models.values.contains { $0.resolvedProvider.lowercased() == "mlx" }
-    if hasMLXModels {
+    // Launch MLX server if any providers use the mlx type
+    let mlxProviders = (try? await SettingsStore.shared.allProviders().filter {
+        $0.type.lowercased() == "mlx" && $0.enabled
+    }) ?? []
+    if !mlxProviders.isEmpty {
         do {
             let mlxManager = try MLXProcessManager()
             try mlxManager.waitForSocket()
             ProviderFactory.mlxManager = mlxManager
 
-            // Preload configured MLX models
-            for (alias, modelConfig) in config.models where modelConfig.resolvedProvider.lowercased() == "mlx" {
-                if let repo = modelConfig.huggingfaceRepo {
-                    logger.info("Preloading MLX model '\(alias)' from \(repo)")
+            for p in mlxProviders {
+                if let repo = p.huggingfaceRepo {
+                    logger.info("Preloading MLX model '\(p.id)' from \(repo)")
                     var req = Pecan_MLXRequest()
                     var loadReq = Pecan_MLXLoadModelRequest()
-                    loadReq.alias = alias
+                    loadReq.alias = p.id
                     loadReq.huggingfaceRepo = repo
                     loadReq.requestID = UUID().uuidString
                     req.loadModel = loadReq
                     let resp = try mlxManager.sendRequest(req, timeout: 300)
                     if case .error(let err) = resp.payload {
-                        logger.error("Failed to preload MLX model '\(alias)': \(err.errorMessage)")
+                        logger.error("Failed to preload MLX model '\(p.id)': \(err.errorMessage)")
                     } else {
-                        logger.info("MLX model '\(alias)' preloaded successfully")
+                        logger.info("MLX model '\(p.id)' preloaded successfully")
                     }
                 }
             }
@@ -56,7 +59,7 @@ func main() async throws {
     }
 
     let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-    let providers = [ClientServiceProvider(), AgentServiceProvider(config: config)] as [CallHandlerProvider]
+    let providers = [ClientServiceProvider(), AgentServiceProvider()] as [CallHandlerProvider]
 
     // TCP server for UI clients — bind port 0 so the OS picks a free port
     let tcpServer = try await Server.insecure(group: group)
@@ -90,7 +93,8 @@ func main() async throws {
     )
     try status.write()
 
-    logger.info("Pecan Server started on port \(boundPort) and Unix socket \(socketPath) with default model: \(config.defaultModel ?? "unknown")")
+    let defaultModel = (try? await SettingsStore.shared.globalDefault()) ?? "unknown"
+    logger.info("Pecan Server started on port \(boundPort) and Unix socket \(socketPath) with default model: \(defaultModel)")
 
     // Ensure skills directory exists and populate built-in skills
     let homeDir = FileManager.default.homeDirectoryForCurrentUser
@@ -99,7 +103,7 @@ func main() async throws {
     ensureBuiltinSkills(skillsDir: skillsDir.path)
 
     // Respawn persistent sessions from previous server run
-    Task { await respawnPersistentSessions(config: config) }
+    Task { await respawnPersistentSessions() }
 
     // Background trigger timer: check for due triggers every 10 seconds
     Task {

@@ -1,15 +1,19 @@
 import Foundation
 import PecanShared
+import PecanSettings
+import Logging
 
 public protocol LLMProvider {
     func complete(payloadJSON: String) async throws -> String
 }
 
 public class OpenAIProvider: LLMProvider {
-    let config: Config.ModelProvider
+    let provider: ProviderConfig
+    let modelID: String?  // specific model to inject into the payload
 
-    public init(config: Config.ModelProvider) {
-        self.config = config
+    public init(provider: ProviderConfig, modelID: String? = nil) {
+        self.provider = provider
+        self.modelID = modelID
     }
 
     public func complete(payloadJSON: String) async throws -> String {
@@ -17,15 +21,14 @@ public class OpenAIProvider: LLMProvider {
             throw NSError(domain: "OpenAIProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid payload JSON"])
         }
 
-        // Inject the model ID if present in config
-        if let modelId = config.modelId, !modelId.isEmpty {
-            payload["model"] = modelId
+        if let mid = modelID, !mid.isEmpty {
+            payload["model"] = mid
         } else if payload["model"] == nil {
             payload["model"] = "default"
         }
 
-        guard let baseURL = config.url, !baseURL.isEmpty else {
-            throw NSError(domain: "OpenAIProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "No URL configured for model"])
+        guard let baseURL = provider.url, !baseURL.isEmpty else {
+            throw NSError(domain: "OpenAIProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "No URL configured for provider '\(provider.id)'"])
         }
         let urlString = baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions"
 
@@ -36,7 +39,7 @@ public class OpenAIProvider: LLMProvider {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.timeoutInterval = 120
 
-        if let apiKey = config.apiKey, !apiKey.isEmpty, apiKey.lowercased() != "none" {
+        if let apiKey = provider.apiKey, !apiKey.isEmpty, apiKey.lowercased() != "none" {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
 
@@ -50,7 +53,8 @@ public class OpenAIProvider: LLMProvider {
 
         guard (200...299).contains(httpResponse.statusCode) else {
             let errorString = String(data: data, encoding: .utf8) ?? "Unknown error"
-            throw NSError(domain: "OpenAIProvider", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "HTTP Error \(httpResponse.statusCode): \(errorString)"])
+            throw NSError(domain: "OpenAIProvider", code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "HTTP Error \(httpResponse.statusCode): \(errorString)"])
         }
 
         return String(data: data, encoding: .utf8) ?? ""
@@ -69,10 +73,7 @@ public class MockProvider: LLMProvider {
             "choices": [
                 [
                     "index": 0,
-                    "message": [
-                        "role": "assistant",
-                        "content": "This is a mock response from the server."
-                    ],
+                    "message": ["role": "assistant", "content": "This is a mock response from the server."],
                     "finish_reason": "stop"
                 ]
             ]
@@ -92,7 +93,6 @@ public class MLXLLMProvider: LLMProvider {
     }
 
     public func complete(payloadJSON: String) async throws -> String {
-        // Parse the OpenAI-format payload to extract messages
         guard let payload = try JSONSerialization.jsonObject(with: Data(payloadJSON.utf8), options: []) as? [String: Any] else {
             throw NSError(domain: "MLXProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid payload JSON"])
         }
@@ -102,7 +102,6 @@ public class MLXLLMProvider: LLMProvider {
         genReq.requestID = UUID().uuidString
         genReq.alias = alias
 
-        // Extract messages from OpenAI format
         if let messages = payload["messages"] as? [[String: Any]] {
             genReq.messages = messages.compactMap { msg in
                 guard let role = msg["role"] as? String, let content = msg["content"] as? String else { return nil }
@@ -112,40 +111,27 @@ public class MLXLLMProvider: LLMProvider {
                 return chatMsg
             }
         }
-
-        if let temp = payload["temperature"] as? Double {
-            genReq.temperature = Float(temp)
-        }
-        if let maxTokens = payload["max_tokens"] as? Int {
-            genReq.maxTokens = Int32(maxTokens)
-        }
+        if let temp = payload["temperature"] as? Double { genReq.temperature = Float(temp) }
+        if let maxTokens = payload["max_tokens"] as? Int { genReq.maxTokens = Int32(maxTokens) }
 
         request.generate = genReq
-
         let response = try mlxManager.sendRequest(request, timeout: 120)
 
-        // Check for error
         if case .error(let err) = response.payload {
             throw NSError(domain: "MLXProvider", code: 1, userInfo: [NSLocalizedDescriptionKey: err.errorMessage])
         }
 
-        // Convert to OpenAI-compatible response format
         let genResponse = response.generate
         let openAIResponse: [String: Any] = [
             "id": "mlx-\(genReq.requestID)",
             "object": "chat.completion",
             "created": Int(Date().timeIntervalSince1970),
             "model": alias,
-            "choices": [
-                [
-                    "index": 0,
-                    "message": [
-                        "role": "assistant",
-                        "content": genResponse.text
-                    ],
-                    "finish_reason": "stop"
-                ]
-            ],
+            "choices": [[
+                "index": 0,
+                "message": ["role": "assistant", "content": genResponse.text],
+                "finish_reason": "stop"
+            ]],
             "usage": [
                 "prompt_tokens": genResponse.promptTokens,
                 "completion_tokens": genResponse.completionTokens,
@@ -158,13 +144,14 @@ public class MLXLLMProvider: LLMProvider {
 }
 
 public enum ProviderFactory {
-    /// Set by the server at startup if MLX models are configured.
     nonisolated(unsafe) public static var mlxManager: MLXProcessManager?
 
-    public static func create(config: Config.ModelProvider, alias: String = "") -> LLMProvider {
-        switch config.resolvedProvider.lowercased() {
+    /// Create a provider for a given `ProviderConfig`, optionally targeting a specific `modelID`.
+    /// `modelID` is the ID as returned by /v1/models (e.g. a llama.cpp filename).
+    public static func create(provider: ProviderConfig, modelID: String? = nil) -> LLMProvider {
+        switch provider.type.lowercased() {
         case "openai":
-            return OpenAIProvider(config: config)
+            return OpenAIProvider(provider: provider, modelID: modelID)
         case "mock":
             return MockProvider()
         case "mlx":
@@ -172,11 +159,9 @@ public enum ProviderFactory {
                 logger.error("MLX provider requested but MLX server is not running")
                 return MockProvider()
             }
-            let modelAlias = alias.isEmpty ? (config.huggingfaceRepo ?? "default") : alias
-            return MLXLLMProvider(mlxManager: mgr, alias: modelAlias)
+            return MLXLLMProvider(mlxManager: mgr, alias: provider.id)
         default:
-            // Fallback to OpenAI protocol for unknown providers
-            return OpenAIProvider(config: config)
+            return OpenAIProvider(provider: provider, modelID: modelID)
         }
     }
 }

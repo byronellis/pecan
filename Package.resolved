@@ -1,5 +1,5 @@
 {
-  "originHash" : "fa3292c1c719bf85b9b96da01193426f1e497d61991c32f008148ef160b286a8",
+  "originHash" : "29afbf6e3f786de7c04867089ae42738a42889c6671c3a1134544be7bfde15b8",
   "pins" : [
     {
       "identity" : "ansiterminal",
@@ -61,7 +61,7 @@
       "location" : "https://github.com/byronellis/pecan-shared.git",
       "state" : {
         "branch" : "main",
-        "revision" : "8d8e24ade5ccea57a67da6c69609a3c4772d2e3e"
+        "revision" : "bc9ab58fa478c3c26c67d463f2409ff25967075c"
       }
     },
     {
@@ -233,15 +233,6 @@
       "state" : {
         "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
         "version" : "1.6.4"
-      }
-    },
-    {
-      "identity" : "yams",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/jpsim/Yams.git",
-      "state" : {
-        "revision" : "3d6871d5b4a5cd519adf233fbb576e0a2af71c17",
-        "version" : "5.4.0"
       }
     },
     {

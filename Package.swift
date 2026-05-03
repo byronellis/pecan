@@ -45,6 +45,15 @@ let package = Package(
             path: "Sources/PecanOverlayCore"
         ),
 
+        // MARK: - Settings store (providers, model prefs; shared between server and UI)
+        .target(
+            name: "PecanSettings",
+            dependencies: [
+                .product(name: "GRDB", package: "GRDB.swift"),
+            ],
+            path: "Sources/PecanSettings"
+        ),
+
         // MARK: - Testable agent core (tools, hooks, prompt, event handler; no gRPC/FUSE deps)
         .target(
             name: "PecanAgentCore",
@@ -77,6 +86,7 @@ let package = Package(
                 .product(name: "GRDB", package: "GRDB.swift"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 "PecanServerCore",
+                "PecanSettings",
             ]),
         .executableTarget(
             name: "PecanVMLauncher",
@@ -92,6 +102,7 @@ let package = Package(
             dependencies: [
                 .product(name: "PecanShared", package: "pecan-shared"),
                 .product(name: "ANSITerminal", package: "ANSITerminal"),
+                "PecanSettings",
             ]),
         .executableTarget(
             name: "PecanAgent",

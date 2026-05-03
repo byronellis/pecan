@@ -166,7 +166,7 @@ func ensureBuiltinSkills(skillsDir: String) {
 
 /// Scan ~/.pecan/sessions/ for persistent session metadata and respawn their containers.
 /// Called once at startup after the launcher and gRPC servers are ready.
-func respawnPersistentSessions(config: Config) async {
+func respawnPersistentSessions() async {
     let metas = SessionMeta.allPersistent()
     guard !metas.isEmpty else { return }
     logger.info("Respawning \(metas.count) persistent session(s)...")

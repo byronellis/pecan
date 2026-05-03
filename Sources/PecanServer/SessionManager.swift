@@ -32,6 +32,7 @@ actor SessionManager {
         var lastPromptTokens: Int = 0
         var knownContextWindow: Int = 0
         var lastModelKey: String = ""
+        var modelOverride: String? = nil  // user-set override for this session
         var agentNumber: Int32 = 0
     }
 
@@ -242,6 +243,14 @@ actor SessionManager {
     func getTokenUsage(sessionID: String) -> (promptTokens: Int, contextWindow: Int) {
         guard let record = sessions[sessionID] else { return (0, 0) }
         return (record.lastPromptTokens, record.knownContextWindow)
+    }
+
+    func setModelOverride(sessionID: String, modelKey: String?) {
+        sessions[sessionID]?.modelOverride = modelKey
+    }
+
+    func getModelOverride(sessionID: String) -> String? {
+        return sessions[sessionID]?.modelOverride
     }
 
     // MARK: - Context inspection

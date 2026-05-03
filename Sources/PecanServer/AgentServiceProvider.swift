@@ -3,15 +3,12 @@ import GRPC
 import NIO
 import PecanShared
 import PecanServerCore
+import PecanSettings
 import Logging
 
 
 final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
-    let config: Config
-    
-    init(config: Config) {
-        self.config = config
-    }
+    init() {}
     
     func connect(
         requestStream: GRPCAsyncRequestStream<Pecan_AgentEvent>,
@@ -91,14 +88,18 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                     
                 case .getModels(let req):
                     logger.debug("Agent requested models list.")
+                    let allProviders = (try? await SettingsStore.shared.allProviders()) ?? []
+                    let cached = await ModelCache.shared.models(providers: allProviders)
                     var cmdMsg = Pecan_HostCommand()
                     var resp = Pecan_GetModelsResponse()
                     resp.requestID = req.requestID
-                    for (key, modelConfig) in config.models {
+                    for m in cached {
                         var info = Pecan_GetModelsResponse.ModelInfo()
-                        info.key = key
-                        info.name = modelConfig.name ?? key
-                        info.description_p = modelConfig.description ?? "No description"
+                        info.key = m.key
+                        info.name = m.displayName
+                        info.description_p = m.providerID
+                        info.contextWindow = Int32(m.contextWindow ?? 0)
+                        info.modelID = m.modelID
                         resp.models.append(info)
                     }
                     cmdMsg.modelsResponse = resp
@@ -123,70 +124,88 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
 
                 case .completionRequest(let req):
                     guard let sid = activeSessionID else { continue }
-                    let modelKey = req.modelKey.isEmpty ? (config.defaultModel ?? config.models.keys.first ?? "") : req.modelKey
-                    logger.info("LLM Request from agent: \(req.requestID) using model: \(modelKey)")
-                    
-                    if let modelConfig = config.models[modelKey] {
-                        let provider = ProviderFactory.create(config: modelConfig, alias: modelKey)
-                        do {
-                            let contextData = try await SessionManager.shared.getContext(sessionID: sid)
-                            var contextMessages: [[String: Any]] = []
-                            if let decoded = try JSONSerialization.jsonObject(with: contextData) as? [[String: Any]] {
-                                contextMessages = decoded
-                            }
-                            
-                            var payload: [String: Any] = ["messages": contextMessages]
-                            
-                            // Tools are now injected by the agent directly via paramsJson
-                            if !req.paramsJson.isEmpty {
-                                if let data = req.paramsJson.data(using: .utf8),
-                                   let params = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                                    for (k, v) in params {
-                                        payload[k] = v
-                                    }
-                                }
-                            }
-                            let payloadData = try JSONSerialization.data(withJSONObject: payload)
-                            let payloadString = String(data: payloadData, encoding: .utf8)!
-                            
-                            let responseString = try await provider.complete(payloadJSON: payloadString)
 
-                            // Track token usage for main-agent calls (subagents inject "messages" in paramsJson)
-                            if let paramsData = req.paramsJson.data(using: .utf8),
-                               let params = try? JSONSerialization.jsonObject(with: paramsData) as? [String: Any],
-                               params["messages"] == nil,
-                               let responseData = responseString.data(using: .utf8),
-                               let response = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
-                               let usage = response["usage"] as? [String: Any],
-                               let promptTokens = usage["prompt_tokens"] as? Int {
-                                let contextWindow = (response["context_window"] as? Int)
-                                    ?? (usage["context_window"] as? Int)
-                                    ?? config.models[modelKey]?.contextWindow
-                                    ?? 0
-                                await SessionManager.shared.updateTokenUsage(sessionID: sid, promptTokens: promptTokens, contextWindow: contextWindow, modelKey: modelKey)
-                            }
+                    // --- Model resolution chain ---
+                    let allProviders = (try? await SettingsStore.shared.allProviders().filter { $0.enabled }) ?? []
+                    let cachedModels = await ModelCache.shared.models(providers: allProviders)
 
-                            var cmdMsg = Pecan_HostCommand()
-                            var compResp = Pecan_LLMCompletionResponse()
-                            compResp.requestID = req.requestID
-                            compResp.responseJson = responseString
-                            cmdMsg.completionResponse = compResp
-                            try await responseStream.send(cmdMsg)
-                        } catch {
-                            logger.error("Provider error: \(error)")
-                            var cmdMsg = Pecan_HostCommand()
-                            var compResp = Pecan_LLMCompletionResponse()
-                            compResp.requestID = req.requestID
-                            compResp.errorMessage = error.localizedDescription
-                            cmdMsg.completionResponse = compResp
-                            try await responseStream.send(cmdMsg)
-                        }
+                    let resolvedKey: String
+                    if !req.modelKey.isEmpty {
+                        resolvedKey = req.modelKey
+                    } else if let sessionOverride = await SessionManager.shared.getModelOverride(sessionID: sid) {
+                        resolvedKey = sessionOverride
+                    } else if !req.currentPersona.isEmpty,
+                              let personaModel = try? await SettingsStore.shared.personaModel(for: req.currentPersona) {
+                        resolvedKey = personaModel
+                    } else if let globalDefault = try? await SettingsStore.shared.globalDefault() {
+                        resolvedKey = globalDefault
                     } else {
-                        logger.error("Error: No valid model configuration found for key \(modelKey).")
+                        resolvedKey = cachedModels.first?.key ?? ""
+                    }
+
+                    logger.info("LLM Request from agent: \(req.requestID) persona='\(req.currentPersona)' resolved model='\(resolvedKey)'")
+
+                    guard let (providerConfig, modelID) = Self.resolveModel(
+                        key: resolvedKey, providers: allProviders, cachedModels: cachedModels
+                    ) else {
+                        let errMsg = "No provider found for model key '\(resolvedKey)'. Run 'pecan configure' to set up a provider."
+                        logger.error("\(errMsg)")
                         var cmdMsg = Pecan_HostCommand()
                         var compResp = Pecan_LLMCompletionResponse()
                         compResp.requestID = req.requestID
-                        compResp.errorMessage = "No valid model configuration found for key \(modelKey)."
+                        compResp.errorMessage = errMsg
+                        cmdMsg.completionResponse = compResp
+                        try await responseStream.send(cmdMsg)
+                        continue
+                    }
+
+                    let llmProvider = ProviderFactory.create(provider: providerConfig, modelID: modelID)
+                    do {
+                        let contextData = try await SessionManager.shared.getContext(sessionID: sid)
+                        var contextMessages: [[String: Any]] = []
+                        if let decoded = try JSONSerialization.jsonObject(with: contextData) as? [[String: Any]] {
+                            contextMessages = decoded
+                        }
+
+                        var payload: [String: Any] = ["messages": contextMessages]
+                        if !req.paramsJson.isEmpty,
+                           let data = req.paramsJson.data(using: .utf8),
+                           let params = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
+                            for (k, v) in params { payload[k] = v }
+                        }
+                        let payloadString = String(data: try JSONSerialization.data(withJSONObject: payload), encoding: .utf8)!
+
+                        let responseString = try await llmProvider.complete(payloadJSON: payloadString)
+
+                        // Track token usage for main-agent calls
+                        if let paramsData = req.paramsJson.data(using: .utf8),
+                           let params = try? JSONSerialization.jsonObject(with: paramsData) as? [String: Any],
+                           params["messages"] == nil,
+                           let responseData = responseString.data(using: .utf8),
+                           let response = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+                           let usage = response["usage"] as? [String: Any],
+                           let promptTokens = usage["prompt_tokens"] as? Int {
+                            let ctxFromResponse = (response["context_window"] as? Int)
+                                ?? (usage["context_window"] as? Int)
+                            let ctxWindow = ctxFromResponse
+                                ?? cachedModels.first(where: { $0.key == resolvedKey })?.contextWindow
+                                ?? providerConfig.contextWindowOverride
+                                ?? 0
+                            await SessionManager.shared.updateTokenUsage(sessionID: sid, promptTokens: promptTokens, contextWindow: ctxWindow, modelKey: resolvedKey)
+                        }
+
+                        var cmdMsg = Pecan_HostCommand()
+                        var compResp = Pecan_LLMCompletionResponse()
+                        compResp.requestID = req.requestID
+                        compResp.responseJson = responseString
+                        cmdMsg.completionResponse = compResp
+                        try await responseStream.send(cmdMsg)
+                    } catch {
+                        logger.error("Provider error: \(error)")
+                        var cmdMsg = Pecan_HostCommand()
+                        var compResp = Pecan_LLMCompletionResponse()
+                        compResp.requestID = req.requestID
+                        compResp.errorMessage = error.localizedDescription
                         cmdMsg.completionResponse = compResp
                         try await responseStream.send(cmdMsg)
                     }
@@ -311,6 +330,40 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
 }
 
 extension AgentServiceProvider {
+    /// Resolve a model key to a (provider, modelID) pair.
+    /// Key formats:
+    ///   "providerID/modelID"  → explicit provider + model
+    ///   "providerID"          → use provider's first cached model
+    ///   "modelID"             → search all providers for this model ID
+    static func resolveModel(
+        key: String,
+        providers: [ProviderConfig],
+        cachedModels: [CachedModelInfo]
+    ) -> (provider: ProviderConfig, modelID: String?)? {
+        if key.contains("/") {
+            let idx = key.firstIndex(of: "/")!
+            let providerID = String(key[key.startIndex..<idx])
+            let modelID = String(key[key.index(after: idx)...])
+            guard let p = providers.first(where: { $0.id == providerID }) else { return nil }
+            return (p, modelID)
+        }
+        // Bare key: try as provider ID first
+        if let p = providers.first(where: { $0.id == key }) {
+            let modelID = cachedModels.first(where: { $0.providerID == key })?.modelID
+            return (p, modelID)
+        }
+        // Try as model ID across all providers
+        if let m = cachedModels.first(where: { $0.modelID == key }),
+           let p = providers.first(where: { $0.id == m.providerID }) {
+            return (p, m.modelID)
+        }
+        // Fall back to first provider if nothing matches
+        if let p = providers.first {
+            return (p, nil)
+        }
+        return nil
+    }
+
     /// Handle a memory command from the agent, dispatching to the appropriate store.
     static func handleMemoryCommand(_ cmd: Pecan_MemoryCommand, sessionID: String) async -> Pecan_MemoryResponse {
         var resp = Pecan_MemoryResponse()

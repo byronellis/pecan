@@ -3,6 +3,7 @@ import GRPC
 import NIO
 import PecanShared
 import PecanServerCore
+import PecanSettings
 import Logging
 
 final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
@@ -325,7 +326,7 @@ extension ClientServiceProvider {
         guard firstWord.hasPrefix("/") else { return false }
         let commandPart = String(firstWord.dropFirst())
         let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
-        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec", "network", "image", "close", "clear", "compact", "status", "prompt", "number"]
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec", "network", "image", "close", "clear", "compact", "status", "prompt", "number", "settings"]
         return knownBases.contains(base)
     }
 
@@ -814,6 +815,8 @@ extension ClientServiceProvider {
             try await sendOutput(await buildStatusOutput(sessionID: sessionID))
         case "prompt":
             try await sendOutput(await buildPromptOutput(sessionID: sessionID))
+        case "settings":
+            try await handleSettingsCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
         default:
             try await sendOutput("Unknown command '/\(cmd.base)'.")
         }
@@ -1081,6 +1084,121 @@ extension ClientServiceProvider {
                   /mq                   Same
                   /mq:list [status]     Filter by status (merging/merged/failed)
                 """)
+        }
+    }
+}
+
+// MARK: - /settings command
+
+extension ClientServiceProvider {
+    static func handleSettingsCommand(
+        sessionID: String,
+        cmd: ParsedCommand,
+        sendOutput: (String) async throws -> Void
+    ) async throws {
+        let allProviders = (try? await SettingsStore.shared.allProviders()) ?? []
+        let cachedModels = await ModelCache.shared.models(providers: allProviders)
+
+        switch cmd.subcmd {
+        case nil:
+            // Show current effective settings
+            let globalDefault = (try? await SettingsStore.shared.globalDefault()) ?? "(none)"
+            let sessionOverride = await SessionManager.shared.getModelOverride(sessionID: sessionID)
+            let personaModels = (try? await SettingsStore.shared.allPersonaModels()) ?? []
+
+            var out = "**Settings**\n\n"
+            out += "**Providers**\n"
+            if allProviders.isEmpty {
+                out += "  (none configured — run `pecan configure`)\n"
+            } else {
+                for p in allProviders {
+                    let status = p.enabled ? "✓" : "✗"
+                    out += "  \(status) \(p.id)  [\(p.type)]"
+                    if let url = p.url { out += "  \(url)" }
+                    out += "\n"
+                }
+            }
+            out += "\n**Model defaults**\n"
+            out += "  Global default:   \(globalDefault)\n"
+            if let override = sessionOverride {
+                out += "  Session override: \(override)\n"
+            }
+            if !personaModels.isEmpty {
+                out += "\n**Persona model assignments**\n"
+                for (persona, modelKey) in personaModels {
+                    out += "  \(persona): \(modelKey)\n"
+                }
+            }
+            out += "\nUse `/settings:models` to list available models, `/settings:model <key>` to set default."
+            try await sendOutput(out)
+
+        case "models":
+            // List discovered models with context window info
+            let refreshed: [CachedModelInfo]
+            if cmd.args.trimmingCharacters(in: .whitespaces) == "--refresh" {
+                await ModelCache.shared.invalidate()
+                refreshed = await ModelCache.shared.models(providers: allProviders, force: true)
+            } else {
+                refreshed = cachedModels
+            }
+            if refreshed.isEmpty {
+                try await sendOutput("No models discovered. Check provider configuration with `/settings`.\nAdd `--refresh` to force a re-fetch.")
+            } else {
+                var out = "**Available models**\n\n"
+                var lastProvider = ""
+                for m in refreshed.sorted(by: { $0.key < $1.key }) {
+                    if m.providerID != lastProvider {
+                        out += "\n**\(m.providerID)**\n"
+                        lastProvider = m.providerID
+                    }
+                    let ctx = m.contextWindow.map { "  ctx:\($0 / 1024)k" } ?? ""
+                    out += "  \(m.key)\(ctx)\n"
+                }
+                try await sendOutput(out)
+            }
+
+        case "model":
+            let target = cmd.target  // e.g. "persona", "agent", or nil
+            let arg = cmd.args.trimmingCharacters(in: .whitespaces)
+
+            switch target {
+            case nil:
+                // /settings:model <key> — set global default
+                guard !arg.isEmpty else {
+                    let current = (try? await SettingsStore.shared.globalDefault()) ?? "(none)"
+                    try await sendOutput("Current global default model: \(current)\nUsage: /settings:model <key>")
+                    return
+                }
+                try await SettingsStore.shared.setGlobalDefault(arg)
+                try await sendOutput("Global default model set to '\(arg)'.")
+
+            case "agent":
+                // /settings:model:agent <key|clear> — session override
+                if arg == "clear" || arg.isEmpty {
+                    await SessionManager.shared.setModelOverride(sessionID: sessionID, modelKey: nil)
+                    try await sendOutput("Session model override cleared.")
+                } else {
+                    await SessionManager.shared.setModelOverride(sessionID: sessionID, modelKey: arg)
+                    try await sendOutput("Session model override set to '\(arg)' (this session only).")
+                }
+
+            case let personaTarget where personaTarget != nil:
+                // /settings:model:persona:<name> <key|clear>
+                let personaName = personaTarget!
+                if arg == "clear" || arg.isEmpty {
+                    try await SettingsStore.shared.clearPersonaModel(for: personaName)
+                    try await sendOutput("Model preference cleared for persona '\(personaName)'.")
+                } else {
+                    try await SettingsStore.shared.setPersonaModel(arg, for: personaName)
+                    try await sendOutput("Persona '\(personaName)' will use model '\(arg)'.")
+                }
+
+            default:
+                try await sendOutput("Usage:\n  /settings:model <key>                — set global default\n  /settings:model:agent <key|clear>    — this session only\n  /settings:model:persona:<name> <key|clear>  — per persona")
+            }
+
+        default:
+            try await sendOutput("Usage:\n  /settings              — show current settings\n  /settings:models       — list available models\n  /settings:model <key>  — set global default model")
         }
     }
 }

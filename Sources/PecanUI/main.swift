@@ -8,6 +8,7 @@ import ANSITerminal
 import GRPC
 import NIO
 import PecanShared
+import PecanSettings
 
 
 // MARK: - Server lifecycle helpers
@@ -81,6 +82,25 @@ func main() async throws {
         exit(0)
     }
 
+    // Check for configure/config subcommand
+    let args = CommandLine.arguments.dropFirst()
+    if let first = args.first, first == "configure" || first == "config" {
+        await runConfigureTUI()
+        return
+    }
+
+    // First-run detection: open settings to see if any providers are configured
+    do {
+        try await SettingsStore.shared.open()
+        let providers = try await SettingsStore.shared.allProviders()
+        if providers.isEmpty {
+            print("No providers configured. Launching setup wizard...\r\n")
+            await runConfigureTUI()
+        }
+    } catch {
+        // If we can't open the DB at all, proceed anyway (server will handle it)
+    }
+
     // Parse CLI arguments
     var cliProjectName: String? = nil
     var cliTeamName: String? = nil
@@ -100,20 +120,14 @@ func main() async throws {
                 cliPersistent = true
             case "--force-restart":
                 cliForceRestart = true
+            case "configure", "config":
+                break  // already handled above
             default: break
             }
             i += 1
         }
     }
 
-    // Load config just to verify we can parse ~/.pecan/config.yaml
-    do {
-        let config = try Config.load()
-        print("Loaded config. Default model: \(config.defaultModel ?? config.models.first?.key ?? "unknown")\r", terminator: "\n")
-    } catch {
-        // Suppress warning if not setup yet
-    }
-    
     // Discover or launch the server
     let serverPort: Int
     do {
