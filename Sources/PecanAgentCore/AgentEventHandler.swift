@@ -152,6 +152,18 @@ public actor AgentEventHandler {
         try await sink.send(modelsReqMsg)
         logger.info("Registration: getModels sent, composing system prompt")
 
+        // Clear any previously stored system prompt before writing a fresh one.
+        // Without this, agent restarts (network toggle, /share, crash) stack duplicate prompts.
+        var clearCtxMsg = Pecan_AgentEvent()
+        var clearCtxCmd = Pecan_ContextCommand()
+        clearCtxCmd.requestID = UUID().uuidString
+        var compactOp = Pecan_CompactContext()
+        compactOp.section = .system
+        compactOp.keepRecentMessages = 0
+        clearCtxCmd.compact = compactOp
+        clearCtxMsg.contextCommand = clearCtxCmd
+        try await sink.send(clearCtxMsg)
+
         var ctxMsg = Pecan_AgentEvent()
         var ctxCmd = Pecan_ContextCommand()
         ctxCmd.requestID = UUID().uuidString
@@ -173,6 +185,13 @@ public actor AgentEventHandler {
     private func onProcessInput(_ input: Pecan_ProcessInput) async throws {
         logger.info("Received processInput, text length: \(input.text.count)")
 
+        // Compact request: server embeds conversation JSON with a sentinel prefix
+        if input.text.hasPrefix("\u{02}compact\n") {
+            let conversationJSON = String(input.text.dropFirst("\u{02}compact\n".count))
+            try await handleCompactRequest(conversationJSON: conversationJSON)
+            return
+        }
+
         var ctxMsg = Pecan_AgentEvent()
         var ctxCmd = Pecan_ContextCommand()
         ctxCmd.requestID = UUID().uuidString
@@ -187,6 +206,74 @@ public actor AgentEventHandler {
         try await sendTypedProgress(sink, type: "thinking")
         try await sendCompletionRequest()
         logger.info("Sent LLM request to server using default model.")
+    }
+
+    private func handleCompactRequest(conversationJSON: String) async throws {
+        logger.info("Handling compact request, conversation JSON length: \(conversationJSON.count)")
+        try await sendTypedProgress(sink, type: "thinking")
+
+        let systemPrompt = """
+            You are a conversation summarizer. Create a concise but complete summary of the \
+            conversation below that preserves all important decisions, facts, code written, \
+            tool results, and open items. Format as: brief overview, then key points, then \
+            any open items or next steps. Do not omit technical details that would be needed \
+            to continue the work.
+            """
+
+        let session = SubagentSession(
+            sink: sink,
+            toolManager: deps.toolManager,
+            toolTags: []
+        )
+
+        let summary: String
+        do {
+            summary = try await session.run(
+                task: "Summarize this conversation history (JSON array of messages):\n\(conversationJSON)",
+                systemPrompt: systemPrompt
+            )
+        } catch {
+            logger.error("Compact subagent failed: \(error)")
+            try await sendTypedProgress(sink, type: "response",
+                fields: ["text": "Failed to compact context: \(error.localizedDescription)"])
+            return
+        }
+
+        let messageCount: Int
+        if let data = conversationJSON.data(using: .utf8),
+           let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            messageCount = arr.count
+        } else {
+            messageCount = 0
+        }
+
+        // Clear the conversation section
+        var compactEvent = Pecan_AgentEvent()
+        var compactCmd = Pecan_ContextCommand()
+        compactCmd.requestID = UUID().uuidString
+        var compact = Pecan_CompactContext()
+        compact.section = .conversation
+        compact.keepRecentMessages = 0
+        compactCmd.compact = compact
+        compactEvent.contextCommand = compactCmd
+        try await sink.send(compactEvent)
+
+        // Store the summary as an assistant message
+        let header = "[Context compacted from \(messageCount) messages]\n\n"
+        var addEvent = Pecan_AgentEvent()
+        var addCmd = Pecan_ContextCommand()
+        addCmd.requestID = UUID().uuidString
+        var addMsg = Pecan_AddContextMessage()
+        addMsg.section = .conversation
+        addMsg.role = "assistant"
+        addMsg.content = header + summary
+        addCmd.addMessage = addMsg
+        addEvent.contextCommand = addCmd
+        try await sink.send(addEvent)
+
+        try await sendTypedProgress(sink, type: "response",
+            fields: ["text": "Context compacted from \(messageCount) messages.\n\n**Summary**\n\(summary)"])
+        logger.info("Compact complete: \(messageCount) messages → summary")
     }
 
     // MARK: - Completion response + tool loop

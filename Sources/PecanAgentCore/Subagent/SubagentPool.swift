@@ -22,8 +22,9 @@ public actor SubagentPool {
     /// - Parameters:
     ///   - task: The task description given to the subagent.
     ///   - personaName: Optional persona to use. If provided and the persona exists,
-    ///     that role's prompt is used; otherwise falls back to `CodingRole`.
-    ///   - toolTags: Tool categories the subagent may use. Defaults to `["core", "web", "skills"]`.
+    ///     that role's prompt is used; otherwise falls back to `CodingPersona`.
+    ///   - toolTags: Tool categories the subagent may use. If omitted, `SubagentPersona.allowedToolTags`
+    ///     is used when applicable, otherwise defaults to `["core", "web", "skills"]`.
     public func spawn(
         task: String,
         personaName: String? = nil,
@@ -45,16 +46,36 @@ public actor SubagentPool {
             persona = CodingPersona()
         }
 
+        // Resolve tool tags: explicit > SubagentPersona default > generic fallback
+        // Strip "meta" unconditionally — run_agent / enter_persona / leave_persona must
+        // never be available to subagents, regardless of what a persona declares.
+        let resolvedToolTags: Set<String>
+        if let toolTags = toolTags {
+            resolvedToolTags = toolTags.subtracting(["meta"])
+        } else if let subPersona = persona as? SubagentPersona {
+            resolvedToolTags = subPersona.allowedToolTags.subtracting(["meta"])
+        } else {
+            resolvedToolTags = ["core", "web", "skills"]
+        }
+
+        // Create the session first to get its unique agentID for the context
+        let session = SubagentSession(
+            sink: sink,
+            toolManager: .shared,
+            toolTags: resolvedToolTags
+        )
+        let agentID = session.agentID
+
         // Build context from the current session state
         let projectInfo = await PromptComposer.shared.getProjectInfo()
         let teamInfo    = await PromptComposer.shared.getTeamInfo()
 
         // Subagents don't see the personas catalog (no sub-subagent spawning yet)
         let context = PromptContext(
-            activeToolTags: toolTags ?? ["core", "web", "skills"],
+            activeToolTags: resolvedToolTags,
             focusedTask: nil,
-            agentID: "subagent",
-            sessionID: "subagent",
+            agentID: agentID,
+            sessionID: agentID,
             project: projectInfo,
             team: teamInfo,
             skillsCatalog: [],
@@ -63,14 +84,15 @@ public actor SubagentPool {
         )
 
         let systemPrompt = persona.render(context: context)
-        let resolvedToolTags = toolTags ?? ["core", "web", "skills"]
 
-        let session = SubagentSession(
-            sink: sink,
-            toolManager: .shared,
-            toolTags: resolvedToolTags
-        )
+        // SubagentPersona can render a richer task-scoped initial message
+        let initialMessage: String
+        if let subPersona = persona as? SubagentPersona {
+            initialMessage = subPersona.buildTaskPrompt(task: task, context: context).render()
+        } else {
+            initialMessage = task
+        }
 
-        return try await session.run(task: task, systemPrompt: systemPrompt)
+        return try await session.run(task: initialMessage, systemPrompt: systemPrompt)
     }
 }

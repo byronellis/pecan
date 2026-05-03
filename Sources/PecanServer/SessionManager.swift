@@ -29,6 +29,9 @@ actor SessionManager {
         var mergeID: String?
         var gitBaseCommit: String?
         var startTime: Date = Date()
+        var lastPromptTokens: Int = 0
+        var knownContextWindow: Int = 0
+        var lastModelKey: String = ""
     }
 
     // 4 dictionaries instead of 15
@@ -195,6 +198,67 @@ actor SessionManager {
         streams[sessionID]?.isBusy ?? false
     }
 
+    // MARK: - Token usage tracking
+
+    func updateTokenUsage(sessionID: String, promptTokens: Int, contextWindow: Int, modelKey: String = "") {
+        sessions[sessionID]?.lastPromptTokens = promptTokens
+        if contextWindow > 0 { sessions[sessionID]?.knownContextWindow = contextWindow }
+        if !modelKey.isEmpty { sessions[sessionID]?.lastModelKey = modelKey }
+    }
+
+    func getTokenUsage(sessionID: String) -> (promptTokens: Int, contextWindow: Int) {
+        guard let record = sessions[sessionID] else { return (0, 0) }
+        return (record.lastPromptTokens, record.knownContextWindow)
+    }
+
+    // MARK: - Context inspection
+
+    struct ContextSectionStats: Sendable {
+        var messageCount: Int = 0
+        var characterCount: Int = 0
+    }
+
+    struct ContextStats: Sendable {
+        var sections: [Int: ContextSectionStats] = [:]
+    }
+
+    struct ContextMessage: Sendable {
+        let role: String
+        let content: String
+    }
+
+    func getContextStats(sessionID: String) -> ContextStats {
+        guard let store = sessions[sessionID]?.store,
+              let records = try? store.getContextMessages() else { return ContextStats() }
+        var stats = ContextStats()
+        for msg in records {
+            stats.sections[msg.section, default: ContextSectionStats()].messageCount += 1
+            stats.sections[msg.section, default: ContextSectionStats()].characterCount += msg.content.count
+        }
+        return stats
+    }
+
+    func getSystemMessages(sessionID: String) -> [ContextMessage] {
+        guard let store = sessions[sessionID]?.store,
+              let records = try? store.getContextMessages() else { return [] }
+        return records.filter { $0.section == 0 }.map { ContextMessage(role: $0.role, content: $0.content) }
+    }
+
+    func getSessionMeta(sessionID: String) -> (agentName: String, teamName: String?, projectDir: String?, networkEnabled: Bool, persistent: Bool, startTime: Date, lastModelKey: String) {
+        guard let record = sessions[sessionID] else {
+            return ("", nil, nil, false, false, Date(), "")
+        }
+        let projectDir: String?
+        if let teamStore = getTeamStore(sessionID: sessionID) {
+            projectDir = teamStore.projectDirectory
+        } else if let projectStore = getProjectStore(sessionID: sessionID) {
+            projectDir = projectStore.directory
+        } else {
+            projectDir = nil
+        }
+        return (record.agentName, record.teamName, projectDir, record.networkEnabled, record.persistent, record.startTime, record.lastModelKey)
+    }
+
     // MARK: - Merge state
 
     func isMerging(sessionID: String) -> Bool {
@@ -290,7 +354,7 @@ actor SessionManager {
         }
     }
 
-    func getContext(sessionID: String) throws -> Data {
+    func getContext(sessionID: String) async throws -> Data {
         guard let store = sessions[sessionID]?.store else {
             return try JSONSerialization.data(withJSONObject: [] as [[String: Any]])
         }
@@ -706,21 +770,14 @@ actor SessionManager {
     }
 
     /// Restart the container for a session with updated mounts, preserving context.
-    func restartContainer(sessionID: String) async throws {
+    /// Compute mounts from current session state and call SpawnerFactory.
+    /// Shared by `restartContainer` and `spawnIfNeeded`.
+    private func spawnContainer(sessionID: String) async throws {
         guard let record = sessions[sessionID] else {
-            throw NSError(domain: "SessionManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "No session store for \(sessionID)"])
+            throw NSError(domain: "SessionManager", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: "No session record for \(sessionID)"])
         }
         let store = record.store
-
-        // Notify UI
-        var statusMsg = Pecan_ServerMessage()
-        var out = Pecan_AgentOutput()
-        out.sessionID = sessionID
-        out.text = "Reconfiguring environment..."
-        statusMsg.agentOutput = out
-        try await sendToUI(sessionID: sessionID, message: statusMsg)
-
-        // Build new mounts from current state
         let agentName = try store.name
         let shares = try store.getShares()
         var shareMounts = shares.map { MountSpec(source: $0.hostPath, destination: $0.guestPath, readOnly: $0.mode == "ro") }
@@ -730,23 +787,15 @@ actor SessionManager {
                 shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
                 setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
             } else if let projectStore = getProjectStore(sessionID: sessionID), let dir = projectStore.directory {
-                // Legacy fallback: directory from ProjectStore
                 shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
                 setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
             }
             shareMounts.append(MountSpec(source: teamStore.workspacePath.path, destination: "/team", readOnly: false))
         } else if let projectStore = getProjectStore(sessionID: sessionID), let dir = projectStore.directory {
-            // Legacy: project without a team
             shareMounts.append(MountSpec(source: dir, destination: "/project-lower", readOnly: true))
             setGitBase(sessionID: sessionID, commit: gitHead(for: dir))
         }
 
-        // Clear stale agent stream and any pending commands so the new agent starts fresh
-        streams[sessionID]?.agentStream = nil
-        streams[sessionID]?.pendingCommands = []
-        streams[sessionID]?.isBusy = false
-
-        // Spawn the new container first (the old one is still running — that's fine)
         try await SpawnerFactory.shared.spawn(
             sessionID: sessionID,
             agentName: agentName,
@@ -755,6 +804,48 @@ actor SessionManager {
             networkEnabled: isNetworkEnabled(sessionID: sessionID),
             envMountPath: persistEnvTarPath(sessionID: sessionID) ?? ""
         )
+    }
+
+    /// Spawn the container for a session if it doesn't already have a live agent.
+    /// Called on reattach for sessions that were loaded at startup but not yet running.
+    /// If networking is enabled but vmnet fails, retries without networking and notifies the UI.
+    func spawnIfNeeded(sessionID: String) async throws {
+        guard !hasAgent(sessionID: sessionID) else { return }
+        streams[sessionID, default: StreamState()].agentStream = nil
+        streams[sessionID]?.pendingCommands = []
+        streams[sessionID]?.isBusy = false
+
+        do {
+            try await spawnContainer(sessionID: sessionID)
+        } catch where isNetworkEnabled(sessionID: sessionID)
+                      && error.localizedDescription.lowercased().contains("vmnet") {
+            logger.warning("[\(sessionID)] vmnet error, retrying without network: \(error)")
+            sessions[sessionID]?.networkEnabled = false
+            try await spawnContainer(sessionID: sessionID)
+            var warnMsg = Pecan_ServerMessage()
+            var wOut = Pecan_AgentOutput()
+            wOut.sessionID = sessionID
+            wOut.text = "{\"type\":\"response\",\"text\":\"⚠️ Network unavailable (vmnet error) — started without network access.\"}"
+            warnMsg.agentOutput = wOut
+            try? await sendToUI(sessionID: sessionID, message: warnMsg)
+        }
+    }
+
+    func restartContainer(sessionID: String) async throws {
+        // Notify UI
+        var statusMsg = Pecan_ServerMessage()
+        var out = Pecan_AgentOutput()
+        out.sessionID = sessionID
+        out.text = "Reconfiguring environment..."
+        statusMsg.agentOutput = out
+        try await sendToUI(sessionID: sessionID, message: statusMsg)
+
+        // Clear stale agent stream and any pending commands so the new agent starts fresh
+        streams[sessionID]?.agentStream = nil
+        streams[sessionID]?.pendingCommands = []
+        streams[sessionID]?.isBusy = false
+
+        try await spawnContainer(sessionID: sessionID)
 
         // Notify UI
         var readyMsg = Pecan_ServerMessage()
@@ -764,7 +855,7 @@ actor SessionManager {
         readyMsg.agentOutput = readyOut
         try await sendToUI(sessionID: sessionID, message: readyMsg)
 
-        // The old container is cleaned up by the spawner — when spawnAgent is called
+        // The old container is cleaned up by the spawner — when spawn is called
         // for a session that already has a running container, it tears down the old one
         // in the background after the new one is up.
     }

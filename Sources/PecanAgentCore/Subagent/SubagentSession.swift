@@ -10,7 +10,7 @@ private let subagentLogger = Logger(label: "com.pecan.subagent")
 /// its own `messages` array in `paramsJson` so the server uses them instead of the
 /// session's stored context. `CompletionRouter` matches responses back by request ID.
 public actor SubagentSession {
-    let agentID: String
+    nonisolated let agentID: String
     let sink: any AgentEventSink
     let toolManager: ToolManager
     let toolTags: Set<String>
@@ -68,12 +68,23 @@ public actor SubagentSession {
                           let callId = toolCall["id"] as? String else { continue }
 
                     subagentLogger.info("[\(agentID)] Tool: \(name)")
+                    await HookManager.shared.fire(event: "tool.before", data: [
+                        "name": name,
+                        "arguments": arguments,
+                        "subagent_id": agentID,
+                    ])
                     var result: String
                     do {
                         result = try await toolManager.executeTool(name: name, argumentsJSON: arguments)
                     } catch {
                         result = "Error: \(error.localizedDescription)"
                     }
+                    await HookManager.shared.fire(event: "tool.after", data: [
+                        "name": name,
+                        "arguments": arguments,
+                        "result": result,
+                        "subagent_id": agentID,
+                    ])
 
                     messages.append([
                         "role": "tool",

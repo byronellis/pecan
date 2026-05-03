@@ -150,6 +150,22 @@ final class AgentServiceProvider: Pecan_AgentServiceAsyncProvider {
                             let payloadString = String(data: payloadData, encoding: .utf8)!
                             
                             let responseString = try await provider.complete(payloadJSON: payloadString)
+
+                            // Track token usage for main-agent calls (subagents inject "messages" in paramsJson)
+                            if let paramsData = req.paramsJson.data(using: .utf8),
+                               let params = try? JSONSerialization.jsonObject(with: paramsData) as? [String: Any],
+                               params["messages"] == nil,
+                               let responseData = responseString.data(using: .utf8),
+                               let response = try? JSONSerialization.jsonObject(with: responseData) as? [String: Any],
+                               let usage = response["usage"] as? [String: Any],
+                               let promptTokens = usage["prompt_tokens"] as? Int {
+                                let contextWindow = (response["context_window"] as? Int)
+                                    ?? (usage["context_window"] as? Int)
+                                    ?? config.models[modelKey]?.contextWindow
+                                    ?? 0
+                                await SessionManager.shared.updateTokenUsage(sessionID: sid, promptTokens: promptTokens, contextWindow: contextWindow, modelKey: modelKey)
+                            }
+
                             var cmdMsg = Pecan_HostCommand()
                             var compResp = Pecan_LLMCompletionResponse()
                             compResp.requestID = req.requestID

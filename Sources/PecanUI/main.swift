@@ -10,6 +10,70 @@ import NIO
 import PecanShared
 
 
+// MARK: - Server lifecycle helpers
+
+func findServerBinary() -> URL? {
+    if let envPath = ProcessInfo.processInfo.environment["PECAN_SERVER_PATH"] {
+        let url = URL(fileURLWithPath: envPath).standardizedFileURL
+        return FileManager.default.fileExists(atPath: url.path) ? url : nil
+    }
+    let execURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+    let candidate = execURL.deletingLastPathComponent().appendingPathComponent("pecan-server")
+    return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
+}
+
+func launchServer() throws {
+    guard let serverURL = findServerBinary() else {
+        throw NSError(domain: "Pecan", code: 2, userInfo: [
+            NSLocalizedDescriptionKey: "pecan-server not found alongside \(CommandLine.arguments[0])"
+        ])
+    }
+    let runDir = "\(FileManager.default.currentDirectoryPath)/.run"
+    try FileManager.default.createDirectory(atPath: runDir, withIntermediateDirectories: true)
+    let logPath = "\(runDir)/server.log"
+    FileManager.default.createFile(atPath: logPath, contents: nil)
+    let logHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: logPath))
+
+    let process = Process()
+    process.executableURL = serverURL
+    process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    process.standardOutput = logHandle
+    process.standardError = logHandle
+    try process.run()
+    print("Server started (PID \(process.processIdentifier)), logs: \(logPath)\r")
+}
+
+func ensureServer(forceRestart: Bool) async throws -> Int {
+    let runDir = "\(FileManager.default.currentDirectoryPath)/.run"
+    let logPath = "\(runDir)/server.log"
+
+    if forceRestart, let existing = try? ServerStatus.read(), existing.isAlive {
+        print("Stopping server (PID \(existing.pid))...\r")
+        kill(existing.pid, SIGTERM)
+        for _ in 0..<20 {
+            try await Task.sleep(nanoseconds: 250_000_000)
+            if kill(existing.pid, 0) != 0 { break }
+        }
+        ServerStatus.remove()
+    }
+
+    if let status = try? ServerStatus.read(), status.isAlive {
+        return status.port
+    }
+
+    print("Starting pecan-server... (logs: \(logPath))\r")
+    try launchServer()
+    for _ in 0..<60 {
+        try await Task.sleep(nanoseconds: 500_000_000)
+        if let status = try? ServerStatus.read(), status.isAlive {
+            return status.port
+        }
+    }
+    throw NSError(domain: "Pecan", code: 1, userInfo: [
+        NSLocalizedDescriptionKey: "Server did not start within 30 seconds. Check logs: \(logPath)"
+    ])
+}
+
 func main() async throws {
     // Handle Ctrl+C (SIGINT)
     signal(SIGINT) { _ in
@@ -21,6 +85,7 @@ func main() async throws {
     var cliProjectName: String? = nil
     var cliTeamName: String? = nil
     var cliPersistent: Bool = false
+    var cliForceRestart: Bool = false
     do {
         var i = 1
         while i < CommandLine.arguments.count {
@@ -33,6 +98,8 @@ func main() async throws {
                 if i < CommandLine.arguments.count { cliTeamName = CommandLine.arguments[i] }
             case "--keep", "-k":
                 cliPersistent = true
+            case "--force-restart":
+                cliForceRestart = true
             default: break
             }
             i += 1
@@ -47,18 +114,12 @@ func main() async throws {
         // Suppress warning if not setup yet
     }
     
-    // Discover server port from status file
+    // Discover or launch the server
     let serverPort: Int
     do {
-        let status = try ServerStatus.read()
-        guard status.isAlive else {
-            print("Error: server status file found but process \(status.pid) is not running. Start the server first.\r", terminator: "\n")
-            exit(1)
-        }
-        serverPort = status.port
+        serverPort = try await ensureServer(forceRestart: cliForceRestart)
     } catch {
-        print("Error: could not read server status file (.run/server.json): \(error)\r", terminator: "\n")
-        print("Make sure the server is running (./dev_start.sh).\r", terminator: "\n")
+        print("Error: \(error.localizedDescription)\r")
         exit(1)
     }
 
@@ -141,6 +202,30 @@ func main() async throws {
                     await TerminalManager.shared.printSystem(startMsg)
 
                 case .agentOutput(let output):
+                    // Handle session_closed before active-session check — applies regardless
+                    if let data = output.text.data(using: .utf8),
+                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+                       json["type"] == "session_closed" {
+                        let closedID = output.sessionID
+                        let closedName = await sessionState.getName(for: closedID) ?? closedID
+                        await sessionState.removeSession(id: closedID)
+                        let remaining = await sessionState.agentTabList()
+                        await TerminalManager.shared.updateAgentTabs(remaining)
+                        if remaining.isEmpty {
+                            await TerminalManager.shared.printSystem("Session '\(closedName)' closed. No sessions remaining.")
+                            exit(0)
+                        }
+                        let next = remaining.first!
+                        await switchToAgent(id: next.id, sessionState: sessionState)
+                        await TerminalManager.shared.printSystem("Session '\(closedName)' closed.")
+                        await TerminalManager.shared.printSystem("Remaining agents:")
+                        for (i, tab) in remaining.enumerated() {
+                            let marker = tab.id == next.id ? " ← active" : ""
+                            await TerminalManager.shared.printSystem("  \(i + 1). \(tab.name)\(marker)")
+                        }
+                        continue
+                    }
+
                     let isActive = await sessionState.isActiveSession(output.sessionID)
 
                     if isActive {
@@ -395,6 +480,9 @@ func main() async throws {
                   \(ansiCyan)/mergequeue\(ansiReset)       List merge queue (/mq)
                   \(ansiCyan)/mq:approve\(ansiReset) \(ansiDim)<id>\(ansiReset)  Approve and promote changeset
                   \(ansiCyan)/mq:reject\(ansiReset) \(ansiDim)<id>\(ansiReset)   Reject changeset
+                  \(ansiCyan)/close\(ansiReset)            Terminate current agent, switch to next (or exit if last)
+                  \(ansiCyan)/clear\(ansiReset)            Clear conversation history, keep persona/system prompt
+                  \(ansiCyan)/compact\(ansiReset)          Summarize conversation via LLM subagent, replace with summary
                   \(ansiCyan)/detach\(ansiReset)           Disconnect UI, keep agent running
                   \(ansiCyan)/quit\(ansiReset)             Exit Pecan and stop the agent
 
@@ -506,6 +594,21 @@ func main() async throws {
                     startTask.teamName = t
                 }
                 msg.startTask = startTask
+                try await call.requestStream.send(msg)
+                continue
+            }
+
+            // /close — terminate current agent, switch to next or exit
+            if trimmed == "/close" {
+                guard let sid = await sessionState.getActiveID() else {
+                    await TerminalManager.shared.printSystem("No active session to close.")
+                    continue
+                }
+                var msg = Pecan_ClientMessage()
+                var input = Pecan_TaskInput()
+                input.sessionID = sid
+                input.text = "/close"
+                msg.userInput = input
                 try await call.requestStream.send(msg)
                 continue
             }

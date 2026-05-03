@@ -287,14 +287,11 @@ actor ContainerSpawner {
 
                 config.bootLog = bootLog
 
-                if let currentTerm = try? Terminal.current {
-                    config.process.stdout = currentTerm
-                    config.process.stderr = currentTerm
-                } else if let logWriter = logWriter {
+                if let logWriter = logWriter {
                     config.process.stdout = logWriter
                     config.process.stderr = logWriter
                 } else {
-                    logger.warning("Could not obtain Terminal.current or create log file for session \(sessionID).")
+                    logger.warning("Could not create log file for session \(sessionID) — agent output will be lost.")
                 }
 
                 let guestSocketPath = URL(fileURLWithPath: "/tmp/grpc.sock")
@@ -409,6 +406,7 @@ actor ContainerSpawner {
         }
 
         let capturedName = containerName
+        var capturedManager = manager
         Task.detached { [weak self] in
             do {
                 let status = try await container.wait()
@@ -416,9 +414,7 @@ actor ContainerSpawner {
                 // Only clean up if we haven't been terminated already (avoid double cleanup)
                 if let entry = await self?.containers[sessionID], entry.name == capturedName {
                     try? await container.stop()
-                    if var mgr = await self?.sharedManager {
-                        try? mgr.delete(capturedName)
-                    }
+                    try? capturedManager.delete(capturedName)
                     await self?.removeSession(sessionID)
                 }
             } catch {

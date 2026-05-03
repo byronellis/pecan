@@ -228,6 +228,22 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     startedMsg.sessionStarted = started
                     try await responseStream.send(startedMsg)
                     logger.info("UI reattached to session \(sid)")
+                    // Lazy-spawn the container in a background task so the message loop
+                    // stays responsive while the container boots.
+                    let spawnSID = sid
+                    Task {
+                        do {
+                            try await SessionManager.shared.spawnIfNeeded(sessionID: spawnSID)
+                        } catch {
+                            logger.error("Failed to spawn container for session \(spawnSID): \(error)")
+                            var errMsg = Pecan_ServerMessage()
+                            var errOut = Pecan_AgentOutput()
+                            errOut.sessionID = spawnSID
+                            errOut.text = "{\"type\":\"response\",\"text\":\"❌ Failed to start agent container: \(error.localizedDescription)\\n\\nThis session has no live agent. Type /new to start a fresh session.\"}"
+                            errMsg.agentOutput = errOut
+                            try? await SessionManager.shared.sendToUI(sessionID: spawnSID, message: errMsg)
+                        }
+                    }
 
                 case nil:
                     break
@@ -307,7 +323,7 @@ extension ClientServiceProvider {
         guard firstWord.hasPrefix("/") else { return false }
         let commandPart = String(firstWord.dropFirst())
         let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
-        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec", "network", "image"]
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec", "network", "image", "close", "clear", "compact", "status", "prompt"]
         return knownBases.contains(base)
     }
 
@@ -752,6 +768,41 @@ extension ClientServiceProvider {
             try await handleNetworkCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
         case "image":
             try await handleImageCommand(sessionID: sessionID, cmd: cmd, sendOutput: sendOutput)
+        case "close":
+            // Send notification first so UI can remove the session before we tear it down
+            var srvMsg = Pecan_ServerMessage()
+            var out = Pecan_AgentOutput()
+            out.sessionID = sessionID
+            out.text = "{\"type\":\"session_closed\"}"
+            srvMsg.agentOutput = out
+            try await SessionManager.shared.sendToUI(sessionID: sessionID, message: srvMsg)
+            await SessionManager.shared.removeSession(sessionID: sessionID)
+        case "clear":
+            await SessionManager.shared.compactContext(sessionID: sessionID, section: .conversation, keepRecent: 0)
+            var srvMsg = Pecan_ServerMessage()
+            var out = Pecan_AgentOutput()
+            out.sessionID = sessionID
+            out.text = "{\"type\":\"response\",\"text\":\"Context cleared.\"}"
+            srvMsg.agentOutput = out
+            try await SessionManager.shared.sendToUI(sessionID: sessionID, message: srvMsg)
+        case "compact":
+            guard await SessionManager.shared.hasAgent(sessionID: sessionID) else {
+                try await sendOutput("No active agent — cannot compact context.")
+                return
+            }
+            let contextData = try await SessionManager.shared.getContext(sessionID: sessionID)
+            let contextJSON = String(data: contextData, encoding: .utf8) ?? "[]"
+            await SessionManager.shared.setAgentBusy(sessionID: sessionID, busy: true)
+            var cmdMsg = Pecan_HostCommand()
+            var processInput = Pecan_ProcessInput()
+            processInput.text = "\u{02}compact\n\(contextJSON)"
+            cmdMsg.processInput = processInput
+            try await SessionManager.shared.sendToAgent(sessionID: sessionID, command: cmdMsg)
+            try await sendOutput("Compacting context with subagent...")
+        case "status":
+            try await sendOutput(await buildStatusOutput(sessionID: sessionID))
+        case "prompt":
+            try await sendOutput(await buildPromptOutput(sessionID: sessionID))
         default:
             try await sendOutput("Unknown command '/\(cmd.base)'.")
         }
@@ -1020,6 +1071,114 @@ extension ClientServiceProvider {
                   /mq:list [status]     Filter by status (merging/merged/failed)
                 """)
         }
+    }
+}
+
+// MARK: - /status and /prompt builders
+
+extension ClientServiceProvider {
+    private static func buildStatusOutput(sessionID: String) async -> String {
+        let meta = await SessionManager.shared.getSessionMeta(sessionID: sessionID)
+        let (promptTokens, contextWindow) = await SessionManager.shared.getTokenUsage(sessionID: sessionID)
+        let stats = await SessionManager.shared.getContextStats(sessionID: sessionID)
+        let isBusy = await SessionManager.shared.isAgentBusy(sessionID: sessionID)
+
+        var out = "**Session Status**\n\n"
+
+        out += "  Name:    \(meta.agentName)\n"
+        let shortID = String(sessionID.prefix(8))
+        out += "  ID:      \(shortID)...\n"
+        out += "  Agent:   \(isBusy ? "busy" : "idle")\n"
+        out += "  Network: \(meta.networkEnabled ? "enabled" : "disabled")"
+        if meta.persistent { out += "  Persistent: yes" }
+        out += "\n"
+        if let team = meta.teamName {
+            out += "  Team:    \(team)\n"
+        }
+        if let dir = meta.projectDir {
+            out += "  Project: \(dir)\n"
+        }
+        if !meta.lastModelKey.isEmpty {
+            out += "  Model:   \(meta.lastModelKey)\n"
+        }
+
+        out += "\n**Context**\n\n"
+
+        if contextWindow > 0 && promptTokens > 0 {
+            let pct = Double(promptTokens) / Double(contextWindow) * 100.0
+            let filled = min(30, Int(pct * 30.0 / 100.0))
+            let empty = 30 - filled
+            let bar = String(repeating: "█", count: filled) + String(repeating: "░", count: empty)
+            out += "  [\(bar)] \(String(format: "%.1f", pct))%\n"
+            out += "  \(formatInt(promptTokens)) / \(formatInt(contextWindow)) tokens used\n"
+        } else if promptTokens > 0 {
+            out += "  \(formatInt(promptTokens)) tokens used (context window unknown)\n"
+        } else {
+            out += "  (no completion yet this session)\n"
+        }
+
+        out += "\n"
+
+        let sectionNames = [0: "System", 1: "Conversation", 2: "Tool calls"]
+        let orderedSections = [0, 1, 2]
+        let colW = 14
+
+        out += "  \("Section".padding(toLength: colW, withPad: " ", startingAt: 0))  Msgs    Chars    ~Tokens\n"
+        out += "  \(String(repeating: "─", count: colW + 29))\n"
+
+        var totalMsgs = 0, totalChars = 0
+        for sec in orderedSections {
+            let s = stats.sections[sec] ?? SessionManager.ContextSectionStats()
+            if s.messageCount == 0 { continue }
+            let name = sectionNames[sec] ?? "Section \(sec)"
+            let estTokens = s.characterCount / 4
+            out += "  \(name.padding(toLength: colW, withPad: " ", startingAt: 0))"
+            out += "  \(String(s.messageCount).leftPad(4))"
+            out += "  \(formatInt(s.characterCount).leftPad(8))"
+            out += "  \(formatInt(estTokens).leftPad(8))\n"
+            totalMsgs += s.messageCount
+            totalChars += s.characterCount
+        }
+        out += "  \(String(repeating: "─", count: colW + 29))\n"
+        out += "  \("Total".padding(toLength: colW, withPad: " ", startingAt: 0))"
+        out += "  \(String(totalMsgs).leftPad(4))"
+        out += "  \(formatInt(totalChars).leftPad(8))"
+        out += "  \(formatInt(totalChars / 4).leftPad(8))\n"
+
+        if contextWindow == 0 {
+            out += "\n  (Set context_window in config to enable token budget display)"
+        }
+
+        return out
+    }
+
+    private static func buildPromptOutput(sessionID: String) async -> String {
+        let messages = await SessionManager.shared.getSystemMessages(sessionID: sessionID)
+        guard !messages.isEmpty else {
+            return "No system prompt stored for this session yet.\n(The agent writes it on first connect.)"
+        }
+        var out = "**System Prompt** (\(messages.count) message\(messages.count == 1 ? "" : "s"))\n"
+        for (i, msg) in messages.enumerated() {
+            out += "\n\(String(repeating: "─", count: 60))\n"
+            out += "[\(msg.role)]\n\n"
+            out += msg.content
+            if i < messages.count - 1 { out += "\n" }
+        }
+        return out
+    }
+
+    private static func formatInt(_ n: Int) -> String {
+        let formatter = NumberFormatter()
+        formatter.numberStyle = .decimal
+        return formatter.string(from: NSNumber(value: n)) ?? "\(n)"
+    }
+}
+
+private extension String {
+    func leftPad(_ width: Int) -> String {
+        let s = self
+        if s.count >= width { return s }
+        return String(repeating: " ", count: width - s.count) + s
     }
 }
 

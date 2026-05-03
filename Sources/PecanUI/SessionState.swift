@@ -209,6 +209,21 @@ actor SessionState {
         return outputBuffers.removeValue(forKey: sessionID) ?? []
     }
 
+    // MARK: - Session removal
+
+    func removeSession(id: String) {
+        sessions.removeValue(forKey: id)
+        sessionOrder.removeAll { $0 == id }
+        focusedTasks.removeValue(forKey: id)
+        outputBuffers.removeValue(forKey: id)
+        unreadCounts.removeValue(forKey: id)
+        if activeSessionID == id {
+            activeSessionID = sessionOrder.first
+        }
+    }
+
+    func getName(for id: String) -> String? { sessions[id]?.name }
+
     // MARK: - Legacy compat
 
     func setSession(id: String, name: String) { addSession(id: id, name: name) }

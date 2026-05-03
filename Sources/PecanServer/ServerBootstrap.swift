@@ -227,17 +227,7 @@ func respawnPersistentSessions(config: Config) async {
                 }
             }
 
-            let envMountPath = await SessionManager.shared.persistEnvTarPath(
-                sessionID: meta.sessionID) ?? ""
-            try await SpawnerFactory.shared.spawn(
-                sessionID: meta.sessionID,
-                agentName: meta.agentName,
-                workspacePath: store.workspacePath.path,
-                shares: shareMounts,
-                networkEnabled: meta.networkEnabled,
-                envMountPath: envMountPath
-            )
-            logger.info("Respawned session \(meta.sessionID) (\(meta.agentName))")
+            logger.info("Registered persistent session \(meta.sessionID) (\(meta.agentName)) — container will start on reattach")
         } catch {
             logger.error("Failed to respawn session \(meta.sessionID) (\(meta.agentName)): \(error)")
         }
