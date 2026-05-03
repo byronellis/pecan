@@ -76,7 +76,7 @@ actor TerminalManager {
     /// Legacy shim — converts flat list to AgentTabInfo without team/unread info.
     func updateAgents(_ newAgents: [(name: String, isActive: Bool)]) {
         agentTabs = newAgents.map {
-            AgentTabInfo(id: "", name: $0.name, teamKey: "", isActive: $0.isActive, hasUnread: false)
+            AgentTabInfo(id: "", name: $0.name, teamKey: "", isActive: $0.isActive, hasUnread: false, agentNumber: 0)
         }
     }
 
@@ -118,8 +118,9 @@ actor TerminalManager {
 
         var segments: [(text: String, visLen: Int)] = []
 
-        func tabSegment(_ tab: AgentTabInfo, index: Int) -> (text: String, visLen: Int) {
-            let label = tab.hasUnread ? "\(index):\(tab.name)*" : "\(index):\(tab.name)"
+        func tabSegment(_ tab: AgentTabInfo) -> (text: String, visLen: Int) {
+            let num = tab.agentNumber > 0 ? "\(tab.agentNumber)" : "·"
+            let label = tab.hasUnread ? "\(num):\(tab.name)*" : "\(num):\(tab.name)"
             let visLen = label.count + 2  // one space each side
             if tab.isActive {
                 return ("\u{1B}[1m\u{1B}[46m \(label) \(ansiReset)", visLen)
@@ -132,12 +133,9 @@ actor TerminalManager {
             ("  \(ansiDim)┃\(ansiReset)  ", 5)
         }
 
-        var idx = 1
-
         // No-team agents
         for tab in noTeam {
-            segments.append(tabSegment(tab, index: idx))
-            idx += 1
+            segments.append(tabSegment(tab))
         }
 
         // Named-team groups
@@ -147,15 +145,13 @@ actor TerminalManager {
             // Team label
             let teamLabel = "\(ansiDim)\(teamKey):\(ansiReset)"
             segments.append((teamLabel, teamKey.count + 1))
-            idx = 1  // reset per team
             for tab in tabs {
-                segments.append(tabSegment(tab, index: idx))
-                idx += 1
+                segments.append(tabSegment(tab))
             }
         }
 
-        var visLen = segments.reduce(0) { $0 + $1.visLen }
-        var result = segments.map(\.text).joined()
+        let visLen = segments.reduce(0) { $0 + $1.visLen }
+        let result = segments.map(\.text).joined()
 
         // Right side: project + task (dim)
         var right = ""
@@ -307,11 +303,12 @@ actor TerminalManager {
             } else if let tab = row.tab, let key = row.hotkey {
                 let isSelected = (row.agentIndex == pickerSelection)
                 let unreadMark = tab.hasUnread ? " \(ansiDim)*\(ansiReset)" : ""
+                let numLabel = tab.agentNumber > 0 ? "#\(tab.agentNumber) " : ""
                 if isSelected {
-                    print("  \u{1B}[46m\u{1B}[1m \(key)  \(tab.name) \(ansiReset)\(unreadMark)\r", terminator: "\n")
+                    print("  \u{1B}[46m\u{1B}[1m \(key)  \(numLabel)\(tab.name) \(ansiReset)\(unreadMark)\r", terminator: "\n")
                 } else {
                     let marker = tab.isActive ? "\(ansiCyan) ← \(ansiReset)" : "   "
-                    print("  \(ansiDim)\(key)\(ansiReset)  \(tab.name)\(marker)\(unreadMark)\r", terminator: "\n")
+                    print("  \(ansiDim)\(key)\(ansiReset)  \(numLabel)\(tab.name)\(marker)\(unreadMark)\r", terminator: "\n")
                 }
                 agentIdx += 1
             }

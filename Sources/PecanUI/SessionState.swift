@@ -15,6 +15,7 @@ actor SessionState {
         let name: String
         var projectName: String
         var teamName: String
+        var agentNumber: Int32
     }
 
     private var sessionOrder: [String] = []
@@ -29,8 +30,8 @@ actor SessionState {
 
     // MARK: - Session registration
 
-    func addSession(id: String, name: String, projectName: String = "", teamName: String = "") {
-        sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName)
+    func addSession(id: String, name: String, projectName: String = "", teamName: String = "", agentNumber: Int32 = 0) {
+        sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName, agentNumber: agentNumber)
         if !sessionOrder.contains(id) {
             sessionOrder.append(id)
         }
@@ -39,10 +40,14 @@ actor SessionState {
     }
 
     /// Register a session without changing the active session — used to pre-populate known sessions.
-    func registerSession(id: String, name: String, projectName: String = "", teamName: String = "") {
+    func registerSession(id: String, name: String, projectName: String = "", teamName: String = "", agentNumber: Int32 = 0) {
         if sessions[id] != nil { return }  // already known
-        sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName)
+        sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName, agentNumber: agentNumber)
         sessionOrder.append(id)
+    }
+
+    func updateAgentNumber(sessionID: String, agentNumber: Int32) {
+        sessions[sessionID]?.agentNumber = agentNumber
     }
 
     private func normalizedTeam(_ teamName: String) -> String {
@@ -99,16 +104,19 @@ actor SessionState {
     // MARK: - Agent tab list
 
     func agentTabList() -> [AgentTabInfo] {
-        sessionOrder.compactMap { id in
-            guard let s = sessions[id] else { return nil }
-            return AgentTabInfo(
-                id: s.id,
-                name: s.name,
-                teamKey: normalizedTeam(s.teamName),
-                isActive: s.id == activeSessionID,
-                hasUnread: (unreadCounts[id] ?? 0) > 0
-            )
-        }
+        sessionOrder
+            .compactMap { id -> AgentTabInfo? in
+                guard let s = sessions[id] else { return nil }
+                return AgentTabInfo(
+                    id: s.id,
+                    name: s.name,
+                    teamKey: normalizedTeam(s.teamName),
+                    isActive: s.id == activeSessionID,
+                    hasUnread: (unreadCounts[id] ?? 0) > 0,
+                    agentNumber: s.agentNumber
+                )
+            }
+            .sorted { $0.agentNumber < $1.agentNumber }
     }
 
     /// Legacy — returns flat (name, isActive) list.

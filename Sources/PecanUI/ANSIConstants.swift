@@ -17,4 +17,5 @@ struct AgentTabInfo: Sendable {
     let teamKey: String   // "" = no team / default team
     let isActive: Bool
     let hasUnread: Bool
+    let agentNumber: Int32
 }

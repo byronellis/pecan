@@ -32,10 +32,12 @@ actor SessionManager {
         var lastPromptTokens: Int = 0
         var knownContextWindow: Int = 0
         var lastModelKey: String = ""
+        var agentNumber: Int32 = 0
     }
 
     // 4 dictionaries instead of 15
     private var sessions: [String: SessionRecord] = [:]
+    private var nextAgentNumber: Int32 = 1
     private var streams: [String: StreamState] = [:]
 
     // Shared stores keyed by name (multiple sessions can reference the same project/team)
@@ -74,9 +76,40 @@ actor SessionManager {
             sessions[sessionID]!.store = store
             if !agentName.isEmpty { sessions[sessionID]!.agentName = agentName }
         } else {
-            sessions[sessionID] = SessionRecord(store: store, agentName: agentName)
+            // Restore persisted agent number, or assign a new one
+            let existingNumber = store.getAgentNumber()
+            let assignedNumber: Int32
+            if let n = existingNumber, n > 0 {
+                assignedNumber = n
+                if n >= nextAgentNumber { nextAgentNumber = n + 1 }
+            } else {
+                assignedNumber = nextAgentNumber
+                nextAgentNumber += 1
+                try? store.setAgentNumber(assignedNumber)
+            }
+            var record = SessionRecord(store: store, agentName: agentName)
+            record.agentNumber = assignedNumber
+            sessions[sessionID] = record
             streams[sessionID] = StreamState()
         }
+    }
+
+    func getAgentNumber(sessionID: String) -> Int32 {
+        sessions[sessionID]?.agentNumber ?? 0
+    }
+
+    func renumberSession(sessionID: String, newNumber: Int32) {
+        guard sessions[sessionID] != nil else { return }
+        // Swap with any session that already holds newNumber
+        if let conflictID = sessions.first(where: { $0.value.agentNumber == newNumber && $0.key != sessionID })?.key {
+            let oldNumber = sessions[sessionID]!.agentNumber
+            sessions[conflictID]!.agentNumber = oldNumber
+            try? sessions[conflictID]!.store.setAgentNumber(oldNumber)
+        }
+        sessions[sessionID]!.agentNumber = newNumber
+        try? sessions[sessionID]!.store.setAgentNumber(newNumber)
+        // Keep nextAgentNumber ahead of all assigned numbers
+        if newNumber >= nextAgentNumber { nextAgentNumber = newNumber + 1 }
     }
 
     func getStore(sessionID: String) -> SessionStore? {
@@ -733,8 +766,19 @@ actor SessionManager {
             info.teamName = record.teamName ?? ""
             info.isBusy = streams[sid]?.isBusy ?? false
             info.startedAt = iso.string(from: record.startTime)
+            info.agentNumber = record.agentNumber
             return info
-        }.sorted { $0.startedAt < $1.startedAt }
+        }.sorted { $0.agentNumber < $1.agentNumber }
+    }
+
+    func broadcastSessionList() async throws {
+        var msg = Pecan_ServerMessage()
+        var list = Pecan_SessionList()
+        list.sessions = allLiveSessions()
+        msg.sessionList = list
+        for sid in sessions.keys {
+            try? await sendToUI(sessionID: sid, message: msg)
+        }
     }
 
     /// Build the running-sessions index for pecan-shell name lookup.

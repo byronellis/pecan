@@ -153,12 +153,15 @@ func main() async throws {
         private var delivered = false
         private var result: [Pecan_SessionInfo] = []
 
-        func deliver(_ sessions: [Pecan_SessionInfo]) {
-            guard !delivered else { return }
+        /// Returns true if this was the startup delivery (consumed by wait()), false if post-startup.
+        @discardableResult
+        func deliver(_ sessions: [Pecan_SessionInfo]) -> Bool {
+            guard !delivered else { return false }
             delivered = true
             result = sessions
             cont?.resume(returning: sessions)
             cont = nil
+            return true
         }
 
         func wait() async -> [Pecan_SessionInfo] {
@@ -186,7 +189,7 @@ func main() async throws {
                 switch message.payload {
                 case .sessionStarted(let started):
                     let name = started.agentName.isEmpty ? "agent" : started.agentName
-                    await sessionState.addSession(id: started.sessionID, name: name, projectName: started.projectName, teamName: started.teamName)
+                    await sessionState.addSession(id: started.sessionID, name: name, projectName: started.projectName, teamName: started.teamName, agentNumber: started.agentNumber)
                     let tabs = await sessionState.agentTabList()
                     await TerminalManager.shared.updateAgentTabs(tabs)
                     let projectDisplay = await sessionState.getActiveProjectName()
@@ -219,9 +222,10 @@ func main() async throws {
                         await switchToAgent(id: next.id, sessionState: sessionState)
                         await TerminalManager.shared.printSystem("Session '\(closedName)' closed.")
                         await TerminalManager.shared.printSystem("Remaining agents:")
-                        for (i, tab) in remaining.enumerated() {
+                        for tab in remaining {
+                            let num = tab.agentNumber > 0 ? "\(tab.agentNumber)" : "·"
                             let marker = tab.id == next.id ? " ← active" : ""
-                            await TerminalManager.shared.printSystem("  \(i + 1). \(tab.name)\(marker)")
+                            await TerminalManager.shared.printSystem("  \(num). \(tab.name)\(marker)")
                         }
                         continue
                     }
@@ -278,7 +282,15 @@ func main() async throws {
                     }
 
                 case .sessionList(let list):
-                    await sessionListWaiter.deliver(list.sessions)
+                    let delivered = await sessionListWaiter.deliver(list.sessions)
+                    if !delivered {
+                        // Post-startup update (e.g., after /number renumber) — refresh ordering
+                        for s in list.sessions {
+                            await sessionState.updateAgentNumber(sessionID: s.sessionID, agentNumber: s.agentNumber)
+                        }
+                        let updatedTabs = await sessionState.agentTabList()
+                        await TerminalManager.shared.updateAgentTabs(updatedTabs)
+                    }
 
                 case nil:
                     break
@@ -315,7 +327,8 @@ func main() async throws {
                 id: s.sessionID,
                 name: s.agentName.isEmpty ? "agent" : s.agentName,
                 projectName: s.projectName,
-                teamName: s.teamName
+                teamName: s.teamName,
+                agentNumber: s.agentNumber
             )
         }
         let initialTabs = await sessionState.agentTabList()
@@ -333,21 +346,21 @@ func main() async throws {
         }
 
         await TerminalManager.shared.printSystem("Running agents:")
-        for (i, s) in liveSessions.enumerated() {
-            var label = "  \(i + 1).  \(s.agentName)"
+        for s in liveSessions {
+            let num = s.agentNumber > 0 ? s.agentNumber : 0
+            var label = "  \(num).  \(s.agentName)"
             if !s.projectName.isEmpty { label += "  [\(s.projectName)]" }
             label += s.isBusy ? "  · busy" : "  · idle"
             if !s.startedAt.isEmpty { label += "  · \(relativeAge(s.startedAt))" }
             await TerminalManager.shared.printSystem(label)
         }
         await TerminalManager.shared.printSystem("")
-        await TerminalManager.shared.printSystem("Enter a number to reattach, or press Enter to start a new agent:")
+        await TerminalManager.shared.printSystem("Enter an agent number to reattach, or press Enter to start a new agent:")
 
         let choice = await readInputLine(sessionState: sessionState)
         let trimmedChoice = choice?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
 
-        if let idx = Int(trimmedChoice), idx >= 1, idx <= liveSessions.count {
-            let target = liveSessions[idx - 1]
+        if let n = Int32(trimmedChoice), let target = liveSessions.first(where: { $0.agentNumber == n }) {
             var reattachMsg = Pecan_ClientMessage()
             var reattach = Pecan_ReattachRequest()
             reattach.sessionID = target.sessionID
@@ -464,6 +477,7 @@ func main() async throws {
                   \(ansiCyan)/fork\(ansiReset)             Fork current agent (copies context & shares)
                   \(ansiCyan)/agents\(ansiReset)            List all agents
                   \(ansiCyan)/switch\(ansiReset) \(ansiDim)<name>\(ansiReset)    Switch to agent by name
+                  \(ansiCyan)/number\(ansiReset) \(ansiDim)<n>\(ansiReset)       Assign this agent a stable display number
                   \(ansiCyan)/share\(ansiReset) \(ansiDim)[-rw] <path>[:<guest>]\(ansiReset)
                                     Share a host directory with the agent
                   \(ansiCyan)/unshare\(ansiReset) \(ansiDim)<path>\(ansiReset)  Remove a shared directory
@@ -556,7 +570,8 @@ func main() async throws {
                         for tab in group {
                             let marker = tab.isActive ? "\(ansiCyan) ← active\(ansiReset)" : ""
                             let unread = tab.hasUnread ? " \(ansiDim)*\(ansiReset)" : ""
-                            lines += "    \(tab.isActive ? "\(ansiBold)\(tab.name)\(ansiReset)" : "\(ansiDim)\(tab.name)\(ansiReset)")\(marker)\(unread)\r\n"
+                            let num = tab.agentNumber > 0 ? "\(ansiDim)#\(tab.agentNumber)\(ansiReset) " : ""
+                            lines += "    \(num)\(tab.isActive ? "\(ansiBold)\(tab.name)\(ansiReset)" : "\(ansiDim)\(tab.name)\(ansiReset)")\(marker)\(unread)\r\n"
                         }
                     }
                     await TerminalManager.shared.printOutput(lines)

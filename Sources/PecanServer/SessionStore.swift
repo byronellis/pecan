@@ -184,6 +184,19 @@ final class SessionStore: ScopedStore, Sendable {
         }
     }
 
+    func getAgentNumber() -> Int32? {
+        try? dbQueue.read { db in
+            guard let record = try MetadataRecord.fetchOne(db, key: "agent_number") else { return nil }
+            return Int32(record.value)
+        }
+    }
+
+    func setAgentNumber(_ n: Int32) throws {
+        try dbQueue.write { db in
+            try MetadataRecord(key: "agent_number", value: String(n)).save(db)
+        }
+    }
+
     // MARK: - Context Messages
 
     func addContextMessage(section: Int, role: String, content: String, metadata: String) throws {

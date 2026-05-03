@@ -107,6 +107,7 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     started.agentName = agentName
                     started.projectName = projectName
                     started.teamName = teamName
+                    started.agentNumber = await SessionManager.shared.getAgentNumber(sessionID: sessionID)
                     response.sessionStarted = started
                     try await responseStream.send(response)
 
@@ -225,6 +226,7 @@ final class ClientServiceProvider: Pecan_ClientServiceAsyncProvider {
                     started.agentName = await SessionManager.shared.getAgentName(sessionID: sid) ?? ""
                     started.projectName = await SessionManager.shared.getProjectName(sessionID: sid) ?? ""
                     started.teamName = await SessionManager.shared.getTeamName(sessionID: sid) ?? ""
+                    started.agentNumber = await SessionManager.shared.getAgentNumber(sessionID: sid)
                     startedMsg.sessionStarted = started
                     try await responseStream.send(startedMsg)
                     logger.info("UI reattached to session \(sid)")
@@ -323,7 +325,7 @@ extension ClientServiceProvider {
         guard firstWord.hasPrefix("/") else { return false }
         let commandPart = String(firstWord.dropFirst())
         let base = commandPart.split(separator: ":", maxSplits: 1).first.map(String.init) ?? commandPart
-        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec", "network", "image", "close", "clear", "compact", "status", "prompt"]
+        let knownBases: Set<String> = ["task", "tasks", "t", "ts", "project", "projects", "p", "team", "teams", "changeset", "cs", "mergequeue", "mq", "exec", "network", "image", "close", "clear", "compact", "status", "prompt", "number"]
         return knownBases.contains(base)
     }
 
@@ -799,6 +801,15 @@ extension ClientServiceProvider {
             cmdMsg.processInput = processInput
             try await SessionManager.shared.sendToAgent(sessionID: sessionID, command: cmdMsg)
             try await sendOutput("Compacting context with subagent...")
+        case "number":
+            let arg = cmd.args.isEmpty ? (cmd.subcmd ?? "") : cmd.args
+            guard let n = Int32(arg.trimmingCharacters(in: .whitespaces)), n >= 1 else {
+                try await sendOutput("Usage: /number <n>  — assign this agent a stable display number (e.g. /number 2)")
+                return
+            }
+            await SessionManager.shared.renumberSession(sessionID: sessionID, newNumber: n)
+            try await sendOutput("Agent number set to \(n).")
+            try await SessionManager.shared.broadcastSessionList()
         case "status":
             try await sendOutput(await buildStatusOutput(sessionID: sessionID))
         case "prompt":
