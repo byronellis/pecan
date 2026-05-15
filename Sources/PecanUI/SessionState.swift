@@ -180,6 +180,14 @@ actor SessionState {
         return members[index]
     }
 
+    /// Look up an agent in the active team by its assigned agent number.
+    func agentByNumber(_ number: Int32) -> String? {
+        let teamKey = activeTeamKey()
+        return sessions.values.first { s in
+            normalizedTeam(s.teamName) == teamKey && s.agentNumber == number
+        }?.id
+    }
+
     // MARK: - Team switching
 
     /// Returns the best agent to activate when switching to a team:

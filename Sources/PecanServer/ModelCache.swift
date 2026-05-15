@@ -7,9 +7,27 @@ struct CachedModelInfo: Sendable {
     let providerID: String
     let modelID: String        // actual ID sent to provider API
     let displayName: String
-    let contextWindow: Int?
+    let contextWindow: Int?    // effective runtime ctx (meta.n_ctx)
+    let contextWindowTrain: Int?  // training ctx (meta.n_ctx_train)
+    let isLoaded: Bool?        // nil = unknown; true = confirmed loaded in server memory
+    let paramCount: Int?       // total parameter count (meta.n_params)
+    let sizeBytes: Int?        // model file size in bytes (meta.size)
 
     var key: String { "\(providerID)/\(modelID)" }
+
+    var formattedParams: String? {
+        guard let n = paramCount else { return nil }
+        let b = Double(n) / 1e9
+        if b >= 1.0 { return String(format: "%.1fB", b) }
+        return String(format: "%.0fM", Double(n) / 1e6)
+    }
+
+    var formattedSize: String? {
+        guard let s = sizeBytes else { return nil }
+        let gb = Double(s) / 1_000_000_000
+        if gb >= 1.0 { return String(format: "%.1f GB", gb) }
+        return String(format: "%.0f MB", Double(s) / 1_000_000)
+    }
 }
 
 /// Fetches and caches model lists from all configured providers.
@@ -56,19 +74,16 @@ private func fetchModels(from provider: ProviderConfig) async -> [CachedModelInf
     case "openai":
         return await fetchOpenAIModels(provider: provider)
     case "mlx":
-        // MLX uses an alias, not a /v1/models endpoint
         return [CachedModelInfo(
-            providerID: provider.id,
-            modelID: provider.id,
-            displayName: provider.id,
-            contextWindow: provider.contextWindowOverride
+            providerID: provider.id, modelID: provider.id, displayName: provider.id,
+            contextWindow: provider.contextWindowOverride, contextWindowTrain: nil,
+            isLoaded: true, paramCount: nil, sizeBytes: nil
         )]
     case "mock":
         return [CachedModelInfo(
-            providerID: provider.id,
-            modelID: "mock",
-            displayName: "Mock Model",
-            contextWindow: 8192
+            providerID: provider.id, modelID: "mock", displayName: "Mock Model",
+            contextWindow: 8192, contextWindowTrain: 8192,
+            isLoaded: true, paramCount: nil, sizeBytes: nil
         )]
     default:
         return []
@@ -95,19 +110,37 @@ private func fetchOpenAIModels(provider: ProviderConfig) async -> [CachedModelIn
         }
         return dataArray.compactMap { entry -> CachedModelInfo? in
             guard let id = entry["id"] as? String else { return nil }
-            // llama.cpp includes meta.n_ctx_train; also check meta.n_ctx for runtime ctx size
-            let ctx: Int?
-            if let meta = entry["meta"] as? [String: Any] {
-                ctx = (meta["n_ctx"] as? Int) ?? (meta["n_ctx_train"] as? Int)
-                    ?? provider.contextWindowOverride
+            let meta = entry["meta"] as? [String: Any]
+            let nCtx = meta?["n_ctx"] as? Int
+            let nCtxTrain = meta?["n_ctx_train"] as? Int
+            let ctx = nCtx ?? nCtxTrain ?? provider.contextWindowOverride
+
+            let isLoaded: Bool?
+            if let loaded = entry["loaded"] as? Bool {
+                isLoaded = loaded
+            } else if let status = entry["status"] as? String {
+                isLoaded = status == "loaded"
+            } else if nCtx != nil {
+                isLoaded = true   // runtime n_ctx present → model is in memory
             } else {
-                ctx = provider.contextWindowOverride
+                isLoaded = nil
             }
+
+            // llama.cpp meta.n_params is an Int; meta.size is bytes (may come as Int or Double)
+            let paramCount: Int?
+            if let p = meta?["n_params"] as? Int { paramCount = p }
+            else if let p = meta?["n_params"] as? Double { paramCount = Int(p) }
+            else { paramCount = nil }
+
+            let sizeBytes: Int?
+            if let s = meta?["size"] as? Int { sizeBytes = s }
+            else if let s = meta?["size"] as? Double { sizeBytes = Int(s) }
+            else { sizeBytes = nil }
+
             return CachedModelInfo(
-                providerID: provider.id,
-                modelID: id,
-                displayName: id,
-                contextWindow: ctx
+                providerID: provider.id, modelID: id, displayName: id,
+                contextWindow: ctx, contextWindowTrain: nCtxTrain,
+                isLoaded: isLoaded, paramCount: paramCount, sizeBytes: sizeBytes
             )
         }
     } catch {

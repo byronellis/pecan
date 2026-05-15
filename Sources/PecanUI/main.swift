@@ -237,7 +237,7 @@ func main() async throws {
                         await TerminalManager.shared.printSystem("Session '\(closedName)' closed.")
                         await TerminalManager.shared.printSystem("Remaining agents:")
                         for tab in remaining {
-                            let num = tab.agentNumber > 0 ? "\(tab.agentNumber)" : "·"
+                            let num = "\(tab.agentNumber)"
                             let marker = tab.id == next.id ? " ← active" : ""
                             await TerminalManager.shared.printSystem("  \(num). \(tab.name)\(marker)")
                         }
@@ -361,8 +361,7 @@ func main() async throws {
 
         await TerminalManager.shared.printSystem("Running agents:")
         for s in liveSessions {
-            let num = s.agentNumber > 0 ? s.agentNumber : 0
-            var label = "  \(num).  \(s.agentName)"
+            var label = "  \(s.agentNumber).  \(s.agentName)"
             if !s.projectName.isEmpty { label += "  [\(s.projectName)]" }
             label += s.isBusy ? "  · busy" : "  · idle"
             if !s.startedAt.isEmpty { label += "  · \(relativeAge(s.startedAt))" }
@@ -537,6 +536,13 @@ func main() async throws {
                   \(ansiCyan)/team:join\(ansiReset) \(ansiDim)<name>\(ansiReset)   Join a team
                   \(ansiCyan)/team:leave\(ansiReset)        Leave current team
 
+                \(ansiBold)Settings\(ansiReset)
+                  \(ansiCyan)/settings\(ansiReset)         Show providers, default model, session override
+                  \(ansiCyan)/settings:models\(ansiReset)  List available models (add \(ansiDim)--refresh\(ansiReset) to re-fetch)
+                  \(ansiCyan)/settings:model\(ansiReset) \(ansiDim)<key>\(ansiReset)         Set global default model
+                  \(ansiCyan)/settings:model:agent\(ansiReset) \(ansiDim)<key|clear>\(ansiReset)   Override for this session
+                  \(ansiCyan)/settings:model:persona:\(ansiReset)\(ansiDim)<name> <key|clear>\(ansiReset)  Per-persona default
+
                 \(ansiBold)Shell\(ansiReset)
                   \(ansiCyan)!\(ansiReset)\(ansiDim)<cmd>\(ansiReset)             Run a shell command in the container
                   \(ansiCyan)!\(ansiReset)                 Interactive shell mode (empty line to exit)
@@ -553,7 +559,8 @@ func main() async throws {
 
                 \(ansiBold)Agent navigation\(ansiReset) \(ansiDim)(Alt = Esc then key)\(ansiReset)
                   \(ansiCyan)Alt+n\(ansiReset) / \(ansiCyan)Alt+p\(ansiReset)    Next / prev agent within team
-                  \(ansiCyan)Alt+1..9\(ansiReset)          Jump to agent N within team
+                  \(ansiCyan)Alt+0..9\(ansiReset)          Jump to agent by number (0 = first)
+                  \(ansiCyan)Alt+a..z\(ansiReset)          Jump to agent 10–35 (Alt+a = #10)
                   \(ansiCyan)Alt+t\(ansiReset)             Team picker (←→ or key to select)
                 """
                 await TerminalManager.shared.printOutput(help)
@@ -584,7 +591,7 @@ func main() async throws {
                         for tab in group {
                             let marker = tab.isActive ? "\(ansiCyan) ← active\(ansiReset)" : ""
                             let unread = tab.hasUnread ? " \(ansiDim)*\(ansiReset)" : ""
-                            let num = tab.agentNumber > 0 ? "\(ansiDim)#\(tab.agentNumber)\(ansiReset) " : ""
+                            let num = "\(ansiDim)#\(tab.agentNumber)\(ansiReset) "
                             lines += "    \(num)\(tab.isActive ? "\(ansiBold)\(tab.name)\(ansiReset)" : "\(ansiDim)\(tab.name)\(ansiReset)")\(marker)\(unread)\r\n"
                         }
                     }

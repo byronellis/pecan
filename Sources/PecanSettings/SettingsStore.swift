@@ -187,10 +187,16 @@ public actor SettingsStore {
     // MARK: - YAML migration
 
     private func migrateFromYAMLIfNeeded(queue: DatabaseQueue) throws {
-        let hasProviders = try queue.read { db in
-            try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM providers") ?? 0
+        // Use a one-time flag so deleting providers doesn't re-trigger migration
+        let alreadyMigrated = try queue.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM global WHERE key = 'yaml_migration_done'")
         }
-        guard hasProviders == 0 else { return }
+        guard alreadyMigrated == nil else { return }
+
+        // Mark as done immediately — even if no YAML exists or parse fails
+        try queue.write { db in
+            try db.execute(sql: "INSERT OR IGNORE INTO global (key, value) VALUES ('yaml_migration_done', '1')")
+        }
 
         let configPath = ProcessInfo.processInfo.environment["PECAN_CONFIG_PATH"]
             ?? FileManager.default.homeDirectoryForCurrentUser

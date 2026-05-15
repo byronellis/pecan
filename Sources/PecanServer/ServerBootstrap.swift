@@ -232,6 +232,8 @@ func respawnPersistentSessions() async {
             logger.error("Failed to respawn session \(meta.sessionID) (\(meta.agentName)): \(error)")
         }
     }
+    // Compact any number gaps left from sessions deleted while the server was offline
+    await SessionManager.shared.repackAndBroadcast()
     await SessionManager.shared.flushRunningIndex()
 }
 

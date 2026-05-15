@@ -1,5 +1,16 @@
 import Foundation
 
+// MARK: - Path resolution
+
+/// Resolve a user-supplied path to an absolute path.
+/// Handles `~` expansion and resolves relative paths against the current working directory.
+private func resolvePath(_ path: String) -> String {
+    let expanded = (path as NSString).expandingTildeInPath
+    if expanded.hasPrefix("/") { return expanded }
+    return URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent(expanded).path
+}
+
 // MARK: - ReadFileTool
 
 public struct ReadFileTool: PecanTool, Sendable {
@@ -23,7 +34,7 @@ public struct ReadFileTool: PecanTool, Sendable {
             throw ToolError.invalidArguments("Missing required parameter: path")
         }
 
-        let resolvedPath = (path as NSString).expandingTildeInPath
+        let resolvedPath = resolvePath(path)
         guard FileManager.default.fileExists(atPath: resolvedPath) else {
             throw ToolError.fileNotFound("File not found: \(path)")
         }
@@ -83,9 +94,11 @@ public struct WriteFileTool: PecanTool, Sendable {
             throw ToolError.invalidArguments("Missing required parameter: content")
         }
 
-        let resolvedPath = (path as NSString).expandingTildeInPath
-        let dir = (resolvedPath as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        let resolvedPath = resolvePath(path)
+        let dir = URL(fileURLWithPath: resolvedPath).deletingLastPathComponent().path
+        if dir != "/" && !dir.isEmpty {
+            try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        }
 
         try content.write(toFile: resolvedPath, atomically: true, encoding: .utf8)
 
@@ -123,7 +136,7 @@ public struct EditFileTool: PecanTool, Sendable {
             throw ToolError.invalidArguments("Missing required parameter: new_string")
         }
 
-        let resolvedPath = (path as NSString).expandingTildeInPath
+        let resolvedPath = resolvePath(path)
         guard FileManager.default.fileExists(atPath: resolvedPath) else {
             throw ToolError.fileNotFound("File not found: \(path)")
         }
@@ -166,7 +179,7 @@ public struct AppendFileTool: PecanTool, Sendable {
         guard let path = args["path"] as? String else { throw ToolError.invalidArguments("Missing path") }
         guard let content = args["content"] as? String else { throw ToolError.invalidArguments("Missing content") }
 
-        let resolved = (path as NSString).expandingTildeInPath
+        let resolved = resolvePath(path)
         if !FileManager.default.fileExists(atPath: resolved) {
             let dir = (resolved as NSString).deletingLastPathComponent
             try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)

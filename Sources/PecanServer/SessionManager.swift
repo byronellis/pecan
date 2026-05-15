@@ -38,7 +38,7 @@ actor SessionManager {
 
     // 4 dictionaries instead of 15
     private var sessions: [String: SessionRecord] = [:]
-    private var nextAgentNumber: Int32 = 1
+    private var nextAgentNumber: Int32 = 0
     private var streams: [String: StreamState] = [:]
 
     // Shared stores keyed by name (multiple sessions can reference the same project/team)
@@ -80,7 +80,7 @@ actor SessionManager {
             // Restore persisted agent number, or assign a new one
             let existingNumber = store.getAgentNumber()
             let assignedNumber: Int32
-            if let n = existingNumber, n > 0 {
+            if let n = existingNumber {
                 assignedNumber = n
                 if n >= nextAgentNumber { nextAgentNumber = n + 1 }
             } else {
@@ -97,6 +97,25 @@ actor SessionManager {
 
     func getAgentNumber(sessionID: String) -> Int32 {
         sessions[sessionID]?.agentNumber ?? 0
+    }
+
+    /// Reassign agent numbers 0, 1, 2, ... in current sorted order and persist to DB.
+    private func repackNumbers() {
+        let sorted = sessions.sorted { $0.value.agentNumber < $1.value.agentNumber }
+        for (i, (sid, _)) in sorted.enumerated() {
+            let newNum = Int32(i)
+            if sessions[sid]!.agentNumber != newNum {
+                sessions[sid]!.agentNumber = newNum
+                try? sessions[sid]!.store.setAgentNumber(newNum)
+            }
+        }
+        nextAgentNumber = Int32(sessions.count)
+    }
+
+    /// Repack numbers and broadcast the updated list to all connected UIs.
+    func repackAndBroadcast() async {
+        repackNumbers()
+        try? await broadcastSessionList()
     }
 
     func renumberSession(sessionID: String, newNumber: Int32) {
@@ -813,7 +832,9 @@ actor SessionManager {
 
         // Remove persisted metadata so this session won't be respawned after restart
         SessionMeta.delete(sessionID: sessionID)
+        repackNumbers()  // close the gap left by the removed session
         flushRunningIndex()
+        try? await broadcastSessionList()  // notify UI of reassigned numbers
 
         do {
             try await SpawnerFactory.shared.terminate(sessionID: sessionID)

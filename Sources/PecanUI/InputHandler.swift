@@ -372,10 +372,16 @@ func readInputLine(sessionState: SessionState) async -> String? {
                             await switchToAgent(id: agentID, sessionState: sessionState)
                         }
                     }
-                case "1"..."9":
-                    // Jump to Nth agent within current team (1-indexed)
-                    let idx = Int(String(c))! - 1
-                    if let agentID = await sessionState.agentByIndexInTeam(idx) {
+                case "0"..."9":
+                    // Jump to agent with this number within current team
+                    let num = Int32(String(c))!
+                    if let agentID = await sessionState.agentByNumber(num) {
+                        await switchToAgent(id: agentID, sessionState: sessionState)
+                    }
+                case "a"..."z" where c != "t":
+                    // Alt+a = agent #10, Alt+b = agent #11, etc.
+                    let num = Int32(c.asciiValue! - Character("a").asciiValue! + 10)
+                    if let agentID = await sessionState.agentByNumber(num) {
                         await switchToAgent(id: agentID, sessionState: sessionState)
                     }
                 default:

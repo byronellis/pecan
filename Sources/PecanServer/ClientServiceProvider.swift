@@ -1133,7 +1133,6 @@ extension ClientServiceProvider {
             try await sendOutput(out)
 
         case "models":
-            // List discovered models with context window info
             let refreshed: [CachedModelInfo]
             if cmd.args.trimmingCharacters(in: .whitespaces) == "--refresh" {
                 await ModelCache.shared.invalidate()
@@ -1144,17 +1143,8 @@ extension ClientServiceProvider {
             if refreshed.isEmpty {
                 try await sendOutput("No models discovered. Check provider configuration with `/settings`.\nAdd `--refresh` to force a re-fetch.")
             } else {
-                var out = "**Available models**\n\n"
-                var lastProvider = ""
-                for m in refreshed.sorted(by: { $0.key < $1.key }) {
-                    if m.providerID != lastProvider {
-                        out += "\n**\(m.providerID)**\n"
-                        lastProvider = m.providerID
-                    }
-                    let ctx = m.contextWindow.map { "  ctx:\($0 / 1024)k" } ?? ""
-                    out += "  \(m.key)\(ctx)\n"
-                }
-                try await sendOutput(out)
+                let currentDefault = (try? await SettingsStore.shared.globalDefault()) ?? ""
+                try await sendOutput(formatModelList(refreshed, currentKey: currentDefault, heading: "Available models"))
             }
 
         case "model":
@@ -1163,10 +1153,15 @@ extension ClientServiceProvider {
 
             switch target {
             case nil:
-                // /settings:model <key> — set global default
+                // /settings:model <key> — set global default; show list when no key given
                 guard !arg.isEmpty else {
                     let current = (try? await SettingsStore.shared.globalDefault()) ?? "(none)"
-                    try await sendOutput("Current global default model: \(current)\nUsage: /settings:model <key>")
+                    if cachedModels.isEmpty {
+                        try await sendOutput("Current global default: `\(current)`\n\nNo models in cache — run `/settings:models --refresh` first, then `/settings:model <key>` to set.")
+                    } else {
+                        try await sendOutput(formatModelList(cachedModels, currentKey: current,
+                            heading: "Available models — use `/settings:model <key>` to select"))
+                    }
                     return
                 }
                 try await SettingsStore.shared.setGlobalDefault(arg)
@@ -1200,6 +1195,49 @@ extension ClientServiceProvider {
         default:
             try await sendOutput("Usage:\n  /settings              — show current settings\n  /settings:models       — list available models\n  /settings:model <key>  — set global default model")
         }
+    }
+
+    /// Format a model list grouped by provider with llama.cpp metadata.
+    private static func formatModelList(_ models: [CachedModelInfo], currentKey: String, heading: String) -> String {
+        var out = "**\(heading)**\n"
+        var byProvider: [String: [CachedModelInfo]] = [:]
+        var providerOrder: [String] = []
+        for m in models {
+            if byProvider[m.providerID] == nil { providerOrder.append(m.providerID) }
+            byProvider[m.providerID, default: []].append(m)
+        }
+        for pid in providerOrder {
+            let group = byProvider[pid] ?? []
+            let loadedCount = group.filter { $0.isLoaded == true }.count
+            let summary = loadedCount > 0 ? " (\(loadedCount)/\(group.count) loaded)" : " (\(group.count) models)"
+            out += "\n**\(pid)**\(summary)\n"
+            for m in group {
+                let isCurrent = m.key == currentKey
+                let loadedMark: String
+                switch m.isLoaded {
+                case true:  loadedMark = "● "
+                case false: loadedMark = "○ "
+                default:    loadedMark = "  "
+                }
+                var meta: [String] = []
+                if let ctx = m.contextWindow {
+                    let ctxStr = ctx >= 1024 ? "\(ctx / 1024)k" : "\(ctx)"
+                    if let train = m.contextWindowTrain, train != ctx {
+                        meta.append("ctx \(ctxStr) / \(train / 1024)k train")
+                    } else {
+                        meta.append("ctx \(ctxStr)")
+                    }
+                } else if let train = m.contextWindowTrain {
+                    meta.append("\(train / 1024)k train")
+                }
+                if let p = m.formattedParams { meta.append(p) }
+                if let s = m.formattedSize   { meta.append(s) }
+                let metaStr = meta.isEmpty ? "" : "  · \(meta.joined(separator: " · "))"
+                let currentMark = isCurrent ? "  ← **current**" : ""
+                out += "  \(loadedMark)`\(m.key)`\(metaStr)\(currentMark)\n"
+            }
+        }
+        return out
     }
 }
 
