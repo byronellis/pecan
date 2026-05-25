@@ -8,6 +8,10 @@ public struct ProviderConfig: Codable, Sendable {
     public let apiKey: String?
     public let huggingfaceRepo: String?
     public let contextWindowOverride: Int?
+    /// Request timeout in seconds. nil = use provider default (600s for openai).
+    public let requestTimeout: Double?
+    /// Use SSE streaming for openai-compatible providers (avoids long-response timeouts).
+    public let useStreaming: Bool
     public let enabled: Bool
 
     public init(
@@ -17,6 +21,8 @@ public struct ProviderConfig: Codable, Sendable {
         apiKey: String? = nil,
         huggingfaceRepo: String? = nil,
         contextWindowOverride: Int? = nil,
+        requestTimeout: Double? = nil,
+        useStreaming: Bool = true,
         enabled: Bool = true
     ) {
         self.id = id
@@ -25,6 +31,8 @@ public struct ProviderConfig: Codable, Sendable {
         self.apiKey = apiKey
         self.huggingfaceRepo = huggingfaceRepo
         self.contextWindowOverride = contextWindowOverride
+        self.requestTimeout = requestTimeout
+        self.useStreaming = useStreaming
         self.enabled = enabled
     }
 }

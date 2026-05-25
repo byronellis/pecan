@@ -40,7 +40,8 @@ SIGN = codesign --force --sign "$(SIGN_IDENTITY)" --entitlements $(ENTITLEMENTS)
 all: release agent
 
 release:
-	$(SWIFT) build -c release --product pecan-server --product pecan-vm-launcher
+	$(SWIFT) build -c release --product pecan-server
+	$(SWIFT) build -c release --product pecan-vm-launcher
 	$(SWIFT) build -c release --product pecan
 	$(SIGN) $(RELEASE_DIR)/pecan-vm-launcher
 
@@ -50,7 +51,8 @@ agent:
 		--swift-sdk aarch64-swift-linux-musl
 
 debug:
-	$(SWIFT) build --product pecan-server --product pecan-vm-launcher
+	$(SWIFT) build --product pecan-server
+	$(SWIFT) build --product pecan-vm-launcher
 	$(SWIFT) build --product pecan
 	$(SIGN) $(DEBUG_DIR)/pecan-vm-launcher
 

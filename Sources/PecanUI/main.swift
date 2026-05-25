@@ -257,7 +257,8 @@ func main() async throws {
                             } else if msgType == "tool_call" {
                                 let toolName = json["name"] ?? "unknown"
                                 if let rendered = renderAgentOutput(output.text) {
-                                    await TerminalManager.shared.printOutput(rendered)
+                                    // No trailing blank line — tool_result immediately follows with ├─ box
+                                    await TerminalManager.shared.printOutput(rendered, trailingBlankLine: false)
                                 }
                                 await TerminalManager.shared.startThrobber(message: "Running \(toolName)...")
                             } else if let rendered = renderAgentOutput(output.text) {

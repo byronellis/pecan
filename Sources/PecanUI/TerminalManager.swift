@@ -371,11 +371,12 @@ actor TerminalManager {
 
     // MARK: - Output
 
-    func printOutput(_ text: String) {
+    func printOutput(_ text: String, trailingBlankLine: Bool = true) {
         stopThrobberSync()
         clearChrome()
         print("\r\u{1B}[K", terminator: "")
         print(text + "\r", terminator: "\n")
+        if trailingBlankLine { print("\r", terminator: "\n") }
         if inputActive { drawChrome() }
     }
 

@@ -29,6 +29,15 @@ public actor SettingsStore {
                     enabled INTEGER NOT NULL DEFAULT 1
                 )
             """)
+            // Schema migrations: add columns introduced after initial release
+            let columns = try Row.fetchAll(db, sql: "PRAGMA table_info(providers)")
+            let columnNames = Set(columns.compactMap { $0["name"] as? String })
+            if !columnNames.contains("request_timeout") {
+                try db.execute(sql: "ALTER TABLE providers ADD COLUMN request_timeout REAL")
+            }
+            if !columnNames.contains("use_streaming") {
+                try db.execute(sql: "ALTER TABLE providers ADD COLUMN use_streaming INTEGER DEFAULT 1")
+            }
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS global (
                     key TEXT PRIMARY KEY,
@@ -59,6 +68,8 @@ public actor SettingsStore {
                 apiKey: $0["api_key"],
                 huggingfaceRepo: $0["hf_repo"],
                 contextWindowOverride: $0["ctx_window_override"],
+                requestTimeout: $0["request_timeout"],
+                useStreaming: ($0["use_streaming"] as Int? ?? 1) != 0,
                 enabled: ($0["enabled"] as Int) != 0
             )}
         }
@@ -77,6 +88,8 @@ public actor SettingsStore {
                 apiKey: row["api_key"],
                 huggingfaceRepo: row["hf_repo"],
                 contextWindowOverride: row["ctx_window_override"],
+                requestTimeout: row["request_timeout"],
+                useStreaming: (row["use_streaming"] as Int? ?? 1) != 0,
                 enabled: (row["enabled"] as Int) != 0
             )
         }
@@ -87,18 +100,21 @@ public actor SettingsStore {
         try db.write { db in
             try db.execute(
                 sql: """
-                    INSERT INTO providers (id, type, url, api_key, hf_repo, ctx_window_override, enabled)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO providers (id, type, url, api_key, hf_repo, ctx_window_override, request_timeout, use_streaming, enabled)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET
                         type = excluded.type,
                         url = excluded.url,
                         api_key = excluded.api_key,
                         hf_repo = excluded.hf_repo,
                         ctx_window_override = excluded.ctx_window_override,
+                        request_timeout = excluded.request_timeout,
+                        use_streaming = excluded.use_streaming,
                         enabled = excluded.enabled
                 """,
                 arguments: [p.id, p.type, p.url, p.apiKey, p.huggingfaceRepo,
-                            p.contextWindowOverride, p.enabled ? 1 : 0]
+                            p.contextWindowOverride, p.requestTimeout,
+                            p.useStreaming ? 1 : 0, p.enabled ? 1 : 0]
             )
         }
     }

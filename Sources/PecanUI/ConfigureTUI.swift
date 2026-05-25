@@ -28,6 +28,8 @@ private struct ProviderForm {
     var apiKey: String = ""
     var hfRepo: String = ""
     var contextWindowOverride: String = ""
+    var requestTimeout: String = ""  // seconds, empty = default (600s)
+    var useStreaming: Bool = true
     var enabled: Bool = true
 
     var isNew: Bool { originalID == nil }
@@ -59,6 +61,7 @@ private struct ProviderForm {
         let trimKey = apiKey.trimmingCharacters(in: .whitespaces)
         let trimRepo = hfRepo.trimmingCharacters(in: .whitespaces)
         let trimCtx = contextWindowOverride.trimmingCharacters(in: .whitespaces)
+        let trimTimeout = requestTimeout.trimmingCharacters(in: .whitespaces)
         return ProviderConfig(
             id: trimID,
             type: providerType,
@@ -66,6 +69,8 @@ private struct ProviderForm {
             apiKey: trimKey.isEmpty ? nil : trimKey,
             huggingfaceRepo: trimRepo.isEmpty ? nil : trimRepo,
             contextWindowOverride: Int(trimCtx),
+            requestTimeout: Double(trimTimeout),
+            useStreaming: useStreaming,
             enabled: enabled
         )
     }
@@ -79,6 +84,8 @@ private struct ProviderForm {
             apiKey: p.apiKey ?? "",
             hfRepo: p.huggingfaceRepo ?? "",
             contextWindowOverride: p.contextWindowOverride.map { String($0) } ?? "",
+            requestTimeout: p.requestTimeout.map { String(format: "%.0f", $0) } ?? "",
+            useStreaming: p.useStreaming,
             enabled: p.enabled
         )
     }
@@ -120,9 +127,9 @@ final class ConfigureTUI {
     private let addFieldLabels = ["URL", "API Key", "Provider ID", "Save", "Cancel"]
     private let addFieldCount = 5
 
-    // Edit mode field indices: 0=Type, 1=URL, 2=API Key, 3=HF Repo, 4=Ctx Window, 5=Enabled, 6=Save, 7=Cancel
-    private let editFieldLabels = ["Type", "URL", "API Key", "HF Repo", "Ctx Window", "Enabled", "Save", "Cancel"]
-    private let editFieldCount = 8
+    // Edit mode field indices: 0=Type, 1=URL, 2=API Key, 3=HF Repo, 4=Ctx Window, 5=Timeout, 6=Streaming, 7=Enabled, 8=Save, 9=Cancel
+    private let editFieldLabels = ["Type", "URL", "API Key", "HF Repo", "Ctx Window", "Timeout", "Streaming", "Enabled", "Save", "Cancel"]
+    private let editFieldCount = 10
 
     private var currentFieldCount: Int { form.isNew ? addFieldCount : editFieldCount }
 
@@ -275,11 +282,15 @@ final class ConfigureTUI {
                 formEditingField = 3; formEditBuffer = form.hfRepo
             case 4:  // Ctx Window
                 formEditingField = 4; formEditBuffer = form.contextWindowOverride
-            case 5:  // Enabled
+            case 5:  // Timeout
+                formEditingField = 5; formEditBuffer = form.requestTimeout
+            case 6:  // Streaming
+                form.useStreaming = !form.useStreaming
+            case 7:  // Enabled
                 form.enabled = !form.enabled
-            case 6:  // Save
+            case 8:  // Save
                 await saveForm()
-            case 7:  // Cancel
+            case 9:  // Cancel
                 screen = .main
             default: break
             }
@@ -304,6 +315,7 @@ final class ConfigureTUI {
             case 2: form.apiKey = formEditBuffer
             case 3: form.hfRepo = formEditBuffer
             case 4: form.contextWindowOverride = formEditBuffer
+            case 5: form.requestTimeout = formEditBuffer
             default: break
             }
         }
@@ -313,6 +325,11 @@ final class ConfigureTUI {
         if !form.contextWindowOverride.trimmingCharacters(in: .whitespaces).isEmpty,
            Int(form.contextWindowOverride.trimmingCharacters(in: .whitespaces)) == nil {
             formError = "Ctx Window must be a number or empty."
+            return
+        }
+        if !form.requestTimeout.trimmingCharacters(in: .whitespaces).isEmpty,
+           Double(form.requestTimeout.trimmingCharacters(in: .whitespaces)) == nil {
+            formError = "Timeout must be a number (seconds) or empty (default: 600)."
             return
         }
         guard let config = form.toConfig() else {
@@ -459,7 +476,7 @@ final class ConfigureTUI {
             let label = labels[i].padding(toLength: labelWidth, withPad: " ", startingAt: 0)
 
             // Button rows
-            if (form.isNew && (i == 3 || i == 4)) || (!form.isNew && (i == 6 || i == 7)) {
+            if (form.isNew && (i == 3 || i == 4)) || (!form.isNew && (i == 8 || i == 9)) {
                 let display = isSelected ? "\u{1B}[7m \(labels[i]) \u{1B}[0m" : "[\(labels[i])]"
                 print("\(cursor)\(display)")
                 continue
@@ -481,12 +498,14 @@ final class ConfigureTUI {
                 case 2: rawValue = form.apiKey.isEmpty ? "" : String(repeating: "•", count: min(form.apiKey.count, 24))
                 case 3: rawValue = form.hfRepo
                 case 4: rawValue = form.contextWindowOverride
-                case 5: rawValue = form.enabled ? "yes" : "no"
+                case 5: rawValue = form.requestTimeout.isEmpty ? "(default: 600s)" : form.requestTimeout + "s"
+                case 6: rawValue = form.useStreaming ? "yes" : "no"
+                case 7: rawValue = form.enabled ? "yes" : "no"
                 default: rawValue = ""
                 }
             }
 
-            let isCycleOrToggle = !form.isNew && (i == 0 || i == 5)
+            let isCycleOrToggle = !form.isNew && (i == 0 || i == 6 || i == 7)
 
             let valueDisplay: String
             if isEditing {

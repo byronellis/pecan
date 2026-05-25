@@ -32,19 +32,20 @@ public class OpenAIProvider: LLMProvider {
         }
         let urlString = baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions"
 
-        let body = try JSONSerialization.data(withJSONObject: payload, options: [])
-
         var request = URLRequest(url: URL(string: urlString)!)
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 120
+        request.timeoutInterval = provider.requestTimeout ?? 600
 
         if let apiKey = provider.apiKey, !apiKey.isEmpty, apiKey.lowercased() != "none" {
             request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         }
 
-        request.httpBody = body
+        if provider.useStreaming {
+            return try await completeStreaming(request: request, payload: &payload)
+        }
 
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse else {
@@ -57,6 +58,129 @@ public class OpenAIProvider: LLMProvider {
                 userInfo: [NSLocalizedDescriptionKey: "HTTP Error \(httpResponse.statusCode): \(errorString)"])
         }
 
+        return String(data: data, encoding: .utf8) ?? ""
+    }
+
+    private func completeStreaming(request: URLRequest, payload: inout [String: Any]) async throws -> String {
+        payload["stream"] = true
+        payload["stream_options"] = ["include_usage": true]
+
+        var streamRequest = request
+        // For streaming the timeout is per-chunk, not total — use a very large value so slow/buffering
+        // inference servers don't time out before sending the first token.
+        streamRequest.timeoutInterval = 86400
+        streamRequest.httpBody = try JSONSerialization.data(withJSONObject: payload)
+
+        logger.info("OpenAIProvider: using SSE streaming for \(provider.id)")
+        let (bytes, response) = try await URLSession.shared.bytes(for: streamRequest)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw NSError(domain: "OpenAIProvider", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid response"])
+        }
+
+        if !(200...299).contains(httpResponse.statusCode) {
+            var errorData = Data()
+            for try await byte in bytes { errorData.append(byte) }
+            let errorString = String(data: errorData, encoding: .utf8) ?? "Unknown error"
+            throw NSError(domain: "OpenAIProvider", code: httpResponse.statusCode,
+                userInfo: [NSLocalizedDescriptionKey: "HTTP Error \(httpResponse.statusCode): \(errorString)"])
+        }
+
+        // If the server ignores stream:true and returns plain JSON, parse it directly.
+        let contentType = httpResponse.value(forHTTPHeaderField: "Content-Type") ?? ""
+        if !contentType.contains("text/event-stream") {
+            logger.warning("OpenAIProvider: expected SSE (text/event-stream) but got '\(contentType)' — falling back to JSON")
+            var fullData = Data()
+            for try await byte in bytes { fullData.append(byte) }
+            return String(data: fullData, encoding: .utf8) ?? ""
+        }
+
+        // Accumulate SSE chunks into a single chat.completion response.
+        var id = ""
+        var model = ""
+        var role = "assistant"
+        var content = ""
+        var finishReason: String? = nil
+        var promptTokens = 0
+        var completionTokens = 0
+        // tool_calls[index] → accumulated fields
+        struct ToolCallAcc {
+            var id: String = ""
+            var type: String = "function"
+            var name: String = ""
+            var arguments: String = ""
+        }
+        var toolCallAccs: [Int: ToolCallAcc] = [:]
+
+        for try await line in bytes.lines {
+            guard line.hasPrefix("data: ") else { continue }
+            let jsonStr = String(line.dropFirst(6)).trimmingCharacters(in: .whitespaces)
+            if jsonStr == "[DONE]" { break }
+
+            guard let chunkData = jsonStr.data(using: .utf8),
+                  let chunk = try? JSONSerialization.jsonObject(with: chunkData) as? [String: Any] else { continue }
+
+            if id.isEmpty { id = chunk["id"] as? String ?? "" }
+            if model.isEmpty { model = chunk["model"] as? String ?? "" }
+
+            if let usage = chunk["usage"] as? [String: Any] {
+                promptTokens = usage["prompt_tokens"] as? Int ?? promptTokens
+                completionTokens = usage["completion_tokens"] as? Int ?? completionTokens
+            }
+
+            if let choices = chunk["choices"] as? [[String: Any]], let choice = choices.first {
+                if let fr = choice["finish_reason"] as? String { finishReason = fr }
+                if let delta = choice["delta"] as? [String: Any] {
+                    if let r = delta["role"] as? String { role = r }
+                    if let c = delta["content"] as? String { content += c }
+                    if let tcs = delta["tool_calls"] as? [[String: Any]] {
+                        for tc in tcs {
+                            guard let idx = tc["index"] as? Int else { continue }
+                            var acc = toolCallAccs[idx] ?? ToolCallAcc()
+                            if let tcID = tc["id"] as? String, !tcID.isEmpty { acc.id = tcID }
+                            if let tcType = tc["type"] as? String, !tcType.isEmpty { acc.type = tcType }
+                            if let fn = tc["function"] as? [String: Any] {
+                                if let name = fn["name"] as? String, !name.isEmpty { acc.name = name }
+                                if let args = fn["arguments"] as? String { acc.arguments += args }
+                            }
+                            toolCallAccs[idx] = acc
+                        }
+                    }
+                }
+            }
+        }
+
+        var message: [String: Any] = ["role": role, "content": content]
+        if !toolCallAccs.isEmpty {
+            let toolCalls = toolCallAccs.sorted { $0.key < $1.key }.map { (_, acc) -> [String: Any] in
+                return [
+                    "id": acc.id,
+                    "type": acc.type,
+                    "function": ["name": acc.name, "arguments": acc.arguments]
+                ]
+            }
+            message["tool_calls"] = toolCalls
+            message["content"] = NSNull()  // OpenAI sets content to null when tool_calls present
+        }
+
+        let finalResponse: [String: Any] = [
+            "id": id,
+            "object": "chat.completion",
+            "created": Int(Date().timeIntervalSince1970),
+            "model": model,
+            "choices": [[
+                "index": 0,
+                "message": message,
+                "finish_reason": finishReason ?? "stop"
+            ]],
+            "usage": [
+                "prompt_tokens": promptTokens,
+                "completion_tokens": completionTokens,
+                "total_tokens": promptTokens + completionTokens
+            ]
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: finalResponse)
         return String(data: data, encoding: .utf8) ?? ""
     }
 }

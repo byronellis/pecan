@@ -213,7 +213,8 @@ func switchToAgent(id: String, sessionState: SessionState) async {
     if !buffered.isEmpty {
         for rawText in buffered {
             if let rendered = renderAgentOutput(rawText) {
-                await TerminalManager.shared.printOutput(rendered)
+                let isToolCall = rawText.contains("\"type\":\"tool_call\"") || rawText.contains("\"type\": \"tool_call\"")
+                await TerminalManager.shared.printOutput(rendered, trailingBlankLine: !isToolCall)
             }
         }
     }
