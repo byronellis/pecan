@@ -5,9 +5,6 @@ import Darwin
 import Glibc
 #endif
 import ANSITerminal
-import GRPC
-import NIO
-import PecanShared
 
 actor TerminalManager {
     static let shared = TerminalManager()
@@ -370,6 +367,12 @@ actor TerminalManager {
     }
 
     // MARK: - Output
+
+    func printStreamChunk(_ text: String) {
+        clearChrome()
+        print(text, terminator: "")
+        fflush(stdout)
+    }
 
     func printOutput(_ text: String, trailingBlankLine: Bool = true) {
         stopThrobberSync()

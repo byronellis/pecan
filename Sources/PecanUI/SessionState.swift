@@ -1,25 +1,9 @@
 import Foundation
-#if canImport(Darwin)
-import Darwin
-#elseif canImport(Glibc)
-import Glibc
-#endif
 import ANSITerminal
-import GRPC
-import NIO
-import PecanShared
 
 actor SessionState {
-    struct Session {
-        let id: String
-        let name: String
-        var projectName: String
-        var teamName: String
-        var agentNumber: Int32
-    }
-
     private var sessionOrder: [String] = []
-    private var sessions: [String: Session] = [:]
+    private var sessions: [String: LocalSession] = [:]
     private var activeSessionID: String?
     private var focusedTasks: [String: String] = [:]
     private var outputBuffers: [String: [String]] = [:]
@@ -31,7 +15,8 @@ actor SessionState {
     // MARK: - Session registration
 
     func addSession(id: String, name: String, projectName: String = "", teamName: String = "", agentNumber: Int32 = 0) {
-        sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName, agentNumber: agentNumber)
+        let session = LocalSession(id: id, name: name, projectName: projectName, teamName: teamName, agentNumber: agentNumber)
+        sessions[id] = session
         if !sessionOrder.contains(id) {
             sessionOrder.append(id)
         }
@@ -39,15 +24,15 @@ actor SessionState {
         lastActiveByTeam[normalizedTeam(teamName)] = id
     }
 
-    /// Register a session without changing the active session — used to pre-populate known sessions.
     func registerSession(id: String, name: String, projectName: String = "", teamName: String = "", agentNumber: Int32 = 0) {
-        if sessions[id] != nil { return }  // already known
-        sessions[id] = Session(id: id, name: name, projectName: projectName, teamName: teamName, agentNumber: agentNumber)
+        if sessions[id] != nil { return }
+        let session = LocalSession(id: id, name: name, projectName: projectName, teamName: teamName, agentNumber: agentNumber)
+        sessions[id] = session
         sessionOrder.append(id)
     }
 
-    func updateAgentNumber(sessionID: String, agentNumber: Int32) {
-        sessions[sessionID]?.agentNumber = agentNumber
+    func updateAgentNumber(sessionID: String, agentNumber: Int32) async {
+        await sessions[sessionID]?.setAgentNumber(agentNumber)
     }
 
     private func normalizedTeam(_ teamName: String) -> String {
@@ -56,87 +41,106 @@ actor SessionState {
 
     // MARK: - Active session
 
-    func setActive(_ id: String) {
-        guard sessions[id] != nil else { return }
+    func setActive(_ id: String) async {
+        guard let session = sessions[id] else { return }
         activeSessionID = id
-        // Remember as last-active for this team
-        if let s = sessions[id] {
-            lastActiveByTeam[normalizedTeam(s.teamName)] = id
-        }
+        let team = await session.getTeamName()
+        lastActiveByTeam[normalizedTeam(team)] = id
     }
 
-    func setActiveByName(_ name: String) -> Bool {
-        guard let session = sessions.values.first(where: { $0.name == name }) else { return false }
-        setActive(session.id)
-        return true
+    func setActiveByName(_ name: String) async -> Bool {
+        for (id, session) in sessions {
+            let sName = await session.getName()
+            if sName == name {
+                await setActive(id)
+                return true
+            }
+        }
+        return false
     }
 
     func getActiveID() -> String? { activeSessionID }
-    func getActiveName() -> String? {
+    func getActiveSession() -> LocalSession? {
         guard let id = activeSessionID else { return nil }
-        return sessions[id]?.name
+        return sessions[id]
+    }
+    
+    func getActiveName() async -> String? {
+        guard let id = activeSessionID, let s = sessions[id] else { return nil }
+        return await s.getName()
     }
 
-    func getActiveProjectName() -> String? {
+    func getActiveProjectName() async -> String? {
         guard let id = activeSessionID, let s = sessions[id] else { return nil }
-        return s.projectName.isEmpty ? nil : s.projectName
+        let p = await s.getProjectName()
+        return p.isEmpty ? nil : p
     }
 
-    func getActiveTeamName() -> String? {
+    func getActiveTeamName() async -> String? {
         guard let id = activeSessionID, let s = sessions[id] else { return nil }
-        let t = normalizedTeam(s.teamName)
-        return t.isEmpty ? nil : t
+        let t = await s.getTeamName()
+        let norm = normalizedTeam(t)
+        return norm.isEmpty ? nil : norm
     }
 
     func isActiveSession(_ sessionID: String) -> Bool { sessionID == activeSessionID }
 
-    func updateProjectTeam(sessionID: String, projectName: String, teamName: String) {
-        guard var session = sessions[sessionID] else { return }
-        session.projectName = projectName
-        session.teamName = teamName
-        sessions[sessionID] = session
+    func updateProjectTeam(sessionID: String, projectName: String, teamName: String) async {
+        guard let session = sessions[sessionID] else { return }
+        await session.setProjectName(projectName)
+        await session.setTeamName(teamName)
     }
 
-    func allSessions() -> [Session] {
+    func allSessions() -> [LocalSession] {
         sessionOrder.compactMap { sessions[$0] }
     }
 
     // MARK: - Agent tab list
 
-    func agentTabList() -> [AgentTabInfo] {
-        sessionOrder
-            .compactMap { id -> AgentTabInfo? in
-                guard let s = sessions[id] else { return nil }
-                return AgentTabInfo(
-                    id: s.id,
-                    name: s.name,
-                    teamKey: normalizedTeam(s.teamName),
-                    isActive: s.id == activeSessionID,
-                    hasUnread: (unreadCounts[id] ?? 0) > 0,
-                    agentNumber: s.agentNumber
-                )
-            }
-            .sorted { $0.agentNumber < $1.agentNumber }
-    }
-
-    /// Legacy — returns flat (name, isActive) list.
-    func agentList() -> [(name: String, isActive: Bool)] {
-        agentTabList().map { ($0.name, $0.isActive) }
+    func agentTabList() async -> [AgentTabInfo] {
+        var tabs: [AgentTabInfo] = []
+        for id in sessionOrder {
+            guard let s = sessions[id] else { continue }
+            let name = await s.getName()
+            let team = await s.getTeamName()
+            let number = await s.getAgentNumber()
+            tabs.append(AgentTabInfo(
+                id: s.id,
+                name: name,
+                teamKey: normalizedTeam(team),
+                isActive: s.id == activeSessionID,
+                hasUnread: (unreadCounts[id] ?? 0) > 0,
+                agentNumber: number
+            ))
+        }
+        return tabs.sorted { $0.agentNumber < $1.agentNumber }
     }
 
     // MARK: - Team list (for team picker)
 
-    func teamList() -> [(key: String, displayName: String)] {
+    func teamList() async -> [(key: String, displayName: String)] {
         var seen: [String] = []
         var result: [(key: String, displayName: String)] = []
-        let hasNoTeam = sessionOrder.compactMap { sessions[$0] }.contains { normalizedTeam($0.teamName) == "" }
+        
+        var hasNoTeam = false
+        for id in sessionOrder {
+            if let s = sessions[id] {
+                let team = await s.getTeamName()
+                if normalizedTeam(team) == "" {
+                    hasNoTeam = true
+                    break
+                }
+            }
+        }
+        
         if hasNoTeam {
             result.append((key: "", displayName: "(no team)"))
             seen.append("")
         }
         for id in sessionOrder {
             guard let s = sessions[id] else { continue }
-            let key = normalizedTeam(s.teamName)
+            let team = await s.getTeamName()
+            let key = normalizedTeam(team)
             if !key.isEmpty && !seen.contains(key) {
                 seen.append(key)
                 result.append((key: key, displayName: key))
@@ -147,54 +151,70 @@ actor SessionState {
 
     // MARK: - Within-team navigation
 
-    func activeTeamKey() -> String {
+    func activeTeamKey() async -> String {
         guard let id = activeSessionID, let s = sessions[id] else { return "" }
-        return normalizedTeam(s.teamName)
+        let team = await s.getTeamName()
+        return normalizedTeam(team)
     }
 
-    private func agentsInTeam(_ teamKey: String) -> [String] {
-        sessionOrder.filter { id in
-            guard let s = sessions[id] else { return false }
-            return normalizedTeam(s.teamName) == teamKey
+    private func agentsInTeam(_ teamKey: String) async -> [String] {
+        var list: [String] = []
+        for id in sessionOrder {
+            if let s = sessions[id] {
+                let team = await s.getTeamName()
+                if normalizedTeam(team) == teamKey {
+                    list.append(id)
+                }
+            }
         }
+        return list
     }
 
-    func nextAgentInTeam() -> String? {
-        let members = agentsInTeam(activeTeamKey())
+    func nextAgentInTeam() async -> String? {
+        let key = await activeTeamKey()
+        let members = await agentsInTeam(key)
         guard members.count > 1 else { return nil }
         let idx = members.firstIndex(of: activeSessionID ?? "") ?? -1
         return members[(idx + 1) % members.count]
     }
 
-    func prevAgentInTeam() -> String? {
-        let members = agentsInTeam(activeTeamKey())
+    func prevAgentInTeam() async -> String? {
+        let key = await activeTeamKey()
+        let members = await agentsInTeam(key)
         guard members.count > 1 else { return nil }
         let idx = members.firstIndex(of: activeSessionID ?? "") ?? 0
         return members[(idx - 1 + members.count) % members.count]
     }
 
     /// 0-indexed within the active team.
-    func agentByIndexInTeam(_ index: Int) -> String? {
-        let members = agentsInTeam(activeTeamKey())
+    func agentByIndexInTeam(_ index: Int) async -> String? {
+        let key = await activeTeamKey()
+        let members = await agentsInTeam(key)
         guard index >= 0, index < members.count else { return nil }
         return members[index]
     }
 
     /// Look up an agent in the active team by its assigned agent number.
-    func agentByNumber(_ number: Int32) -> String? {
-        let teamKey = activeTeamKey()
-        return sessions.values.first { s in
-            normalizedTeam(s.teamName) == teamKey && s.agentNumber == number
-        }?.id
+    func agentByNumber(_ number: Int32) async -> String? {
+        let teamKey = await activeTeamKey()
+        for s in sessions.values {
+            let team = await s.getTeamName()
+            let num = await s.getAgentNumber()
+            if normalizedTeam(team) == teamKey && num == number {
+                return s.id
+            }
+        }
+        return nil
     }
 
     // MARK: - Team switching
 
     /// Returns the best agent to activate when switching to a team:
     /// last-active agent in that team, or its first agent.
-    func agentForTeam(_ teamKey: String) -> String? {
+    func agentForTeam(_ teamKey: String) async -> String? {
         if let last = lastActiveByTeam[teamKey], sessions[last] != nil { return last }
-        return agentsInTeam(teamKey).first
+        let members = await agentsInTeam(teamKey)
+        return members.first
     }
 
     // MARK: - Focused tasks
@@ -238,11 +258,8 @@ actor SessionState {
         }
     }
 
-    func getName(for id: String) -> String? { sessions[id]?.name }
-
-    // MARK: - Legacy compat
-
-    func setSession(id: String, name: String) { addSession(id: id, name: name) }
-    func getID() -> String? { activeSessionID }
-    func getAgentName() -> String? { getActiveName() }
+    func getName(for id: String) async -> String? {
+        guard let s = sessions[id] else { return nil }
+        return await s.getName()
+    }
 }

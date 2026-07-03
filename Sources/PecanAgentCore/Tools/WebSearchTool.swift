@@ -27,18 +27,21 @@ public struct WebSearchTool: PecanTool, Sendable {
             throw ToolError.invalidArguments("Could not encode query.")
         }
 
-        let searchURL = "https://html.duckduckgo.com/html/?q=\(encoded)"
+        let searchURL = URL(string: "https://html.duckduckgo.com/html/?q=\(encoded)")!
+        var request = URLRequest(url: searchURL)
+        request.httpMethod = "GET"
+        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36", forHTTPHeaderField: "User-Agent")
 
-        let resp = try await HttpClient.shared.sendRequest(
-            method: "GET",
-            url: searchURL,
-            requiresApproval: false
-        )
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
+            throw ToolError.executionFailed("DuckDuckGo search request failed")
+        }
 
-        let results = parseSearchResults(html: resp.body, maxResults: numResults)
+        let html = String(data: data, encoding: .utf8) ?? ""
+        let results = parseSearchResults(html: html, maxResults: numResults)
 
-        let data = try JSONSerialization.data(withJSONObject: results)
-        return String(data: data, encoding: .utf8) ?? "[]"
+        let resultData = try JSONSerialization.data(withJSONObject: results)
+        return String(data: resultData, encoding: .utf8) ?? "[]"
     }
 
     public func formatResult(_ result: String) -> String? {

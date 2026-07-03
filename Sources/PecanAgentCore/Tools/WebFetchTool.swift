@@ -47,21 +47,34 @@ public struct WebFetchTool: PecanTool, Sendable {
         let headers = parseHeaderArray(args["headers"])
         let queryParams = parseHeaderArray(args["query_params"])
 
-        let resp = try await HttpClient.shared.sendRequest(
-            method: "GET",
-            url: url,
-            headers: headers,
-            queryParams: queryParams,
-            requiresApproval: false
-        )
+        var urlComponents = URLComponents(string: url)
+        if !queryParams.isEmpty {
+            var items = urlComponents?.queryItems ?? []
+            for q in queryParams {
+                items.append(URLQueryItem(name: q.name, value: q.value))
+            }
+            urlComponents?.queryItems = items
+        }
+        guard let finalURL = urlComponents?.url else {
+            throw ToolError.executionFailed("Invalid URL: \(url)")
+        }
 
-        var body = resp.body
+        var request = URLRequest(url: finalURL)
+        request.httpMethod = "GET"
+        for h in headers {
+            request.setValue(h.value, forHTTPHeaderField: h.name)
+        }
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+        let statusCode = (response as? HTTPURLResponse)?.statusCode ?? 0
+        var body = String(data: data, encoding: .utf8) ?? ""
+
         // Truncate to 50KB
         if body.utf8.count > 50_000 {
             body = String(body.prefix(50_000)) + "\n... (truncated)"
         }
 
-        return "HTTP \(resp.statusCode)\n\(body)"
+        return "HTTP \(statusCode)\n\(body)"
     }
 
     public func formatResult(_ result: String) -> String? {

@@ -1,5 +1,4 @@
 import Foundation
-import PecanShared
 import Lua
 
 public protocol PecanTool: Sendable {
@@ -70,17 +69,6 @@ public actor ToolManager {
         register(tool: WebFetchTool())
         register(tool: WebSearchTool())
         register(tool: HttpRequestTool())
-        register(tool: TaskCreateTool())
-        register(tool: TaskListTool())
-        register(tool: TaskGetTool())
-        register(tool: TaskUpdateTool())
-        register(tool: TaskFocusTool())
-        // Trigger tools
-        register(tool: TriggerCreateTool())
-        register(tool: TriggerListTool())
-        register(tool: TriggerCancelTool())
-        // Skills tools
-        register(tool: ActivateSkillTool())
         // Meta tools (persona + subagent)
         register(tool: EnterPersonaTool())
         register(tool: LeavePersonaTool())

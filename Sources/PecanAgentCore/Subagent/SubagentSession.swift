@@ -1,28 +1,23 @@
 import Foundation
-import PecanShared
 import Logging
+import PecanSettings
 
 private let subagentLogger = Logger(label: "com.pecan.subagent")
 
 /// A self-contained agent run with its own in-memory context.
 ///
-/// The subagent sends LLM completion requests via the shared gRPC sink, embedding
-/// its own `messages` array in `paramsJson` so the server uses them instead of the
-/// session's stored context. `CompletionRouter` matches responses back by request ID.
+/// The subagent sends LLM completion requests directly to the local HTTP LLM Proxy server.
 public actor SubagentSession {
     nonisolated let agentID: String
-    let sink: any AgentEventSink
     let toolManager: ToolManager
     let toolTags: Set<String>
     private var messages: [[String: Any]] = []
 
     public init(
-        sink: any AgentEventSink,
         toolManager: ToolManager = .shared,
         toolTags: Set<String> = ["core", "web", "skills"]
     ) {
         self.agentID = "sub-\(UUID().uuidString.prefix(8))"
-        self.sink = sink
         self.toolManager = toolManager
         self.toolTags = toolTags
     }
@@ -104,9 +99,6 @@ public actor SubagentSession {
     // MARK: - LLM request
 
     private func requestCompletion() async throws -> String {
-        let requestID = UUID().uuidString
-
-        // Build paramsJson that overrides the server's session context with our local messages
         var params: [String: Any] = ["messages": messages]
         if let toolData = try? await toolManager.getToolDefinitions(tags: toolTags),
            let toolDefs = try? JSONSerialization.jsonObject(with: toolData) as? [[String: Any]],
@@ -114,32 +106,24 @@ public actor SubagentSession {
             params["tools"] = toolDefs
         }
 
-        let paramsData = try JSONSerialization.data(withJSONObject: params)
-        let paramsJSON = String(data: paramsData, encoding: .utf8)!
+        let config = ProxyConfig.load()
+        let defaultModel = config.defaultModel ?? "claude-3-5-sonnet"
+        params["model"] = defaultModel
 
-        // Register with CompletionRouter BEFORE sending (actor call guarantees ordering)
-        let responseStream = await CompletionRouter.shared.makeStream(requestID: requestID)
+        let port = (try? ServerStatus.read().port) ?? 3000
+        let url = URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!
 
-        var event = Pecan_AgentEvent()
-        var req = Pecan_LLMCompletionRequest()
-        req.requestID = requestID
-        req.modelKey = ""
-        req.paramsJson = paramsJSON
-        event.completionRequest = req
-        try await sink.send(event)
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: params)
 
-        // Wait for the response
-        for await response in responseStream {
-            if !response.errorMessage.isEmpty {
-                throw NSError(
-                    domain: "SubagentSession",
-                    code: 1,
-                    userInfo: [NSLocalizedDescriptionKey: "LLM error: \(response.errorMessage)"]
-                )
-            }
-            return response.responseJson
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse, (200...299).contains(httpResponse.statusCode) else {
+            let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown completion error"
+            throw NSError(domain: "SubagentSession", code: 1, userInfo: [NSLocalizedDescriptionKey: errorMsg])
         }
-        throw NSError(domain: "SubagentSession", code: 2,
-                      userInfo: [NSLocalizedDescriptionKey: "Response stream ended without a value"])
+
+        return String(data: data, encoding: .utf8) ?? ""
     }
 }

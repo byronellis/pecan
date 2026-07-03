@@ -1,5 +1,4 @@
 import Foundation
-import PecanShared
 import Lua
 
 public enum LuaToolMode: Sendable {

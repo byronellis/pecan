@@ -10,42 +10,19 @@ let package = Package(
     ],
     products: [
         .executable(name: "pecan-server", targets: ["PecanServer"]),
-        .executable(name: "pecan-vm-launcher", targets: ["PecanVMLauncher"]),
-        .executable(name: "pecan-test-client", targets: ["PecanTestClient"]),
         .executable(name: "pecan", targets: ["PecanUI"]),
-        .executable(name: "pecan-agent", targets: ["PecanAgent"]),
-        .executable(name: "pecan-shell", targets: ["PecanShell"]),
-        .executable(name: "pecan-mock-llm", targets: ["PecanMockLLM"]),
-        .library(name: "PecanServerCore", targets: ["PecanServerCore"]),
-        .library(name: "PecanOverlayCore", targets: ["PecanOverlayCore"]),
+        .library(name: "PecanAgentCore", targets: ["PecanAgentCore"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/byronellis/pecan-shared.git", branch: "main"),
         .package(url: "https://github.com/pakLebah/ANSITerminal.git", from: "0.0.3"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
         .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
-        .package(url: "https://github.com/apple/containerization.git", branch: "main"),
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
-        .package(url: "https://github.com/grpc/grpc-swift.git", from: "1.27.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
     ],
     targets: [
-        // MARK: - Testable core library (pure logic, no gRPC/container deps)
-        .target(
-            name: "PecanServerCore",
-            dependencies: [],
-            path: "Sources/PecanServerCore"
-        ),
-
-        // MARK: - Testable overlay filesystem logic (no FUSE dependencies)
-        .target(
-            name: "PecanOverlayCore",
-            dependencies: [],
-            path: "Sources/PecanOverlayCore"
-        ),
-
-        // MARK: - Settings store (providers, model prefs; shared between server and UI)
+        // MARK: - Settings store (providers, models, server state)
         .target(
             name: "PecanSettings",
             dependencies: [
@@ -54,96 +31,40 @@ let package = Package(
             path: "Sources/PecanSettings"
         ),
 
-        // MARK: - Testable agent core (tools, hooks, prompt, event handler; no gRPC/FUSE deps)
+        // MARK: - Core agent logic (tools, hooks, prompt composer, Lua runtime)
         .target(
             name: "PecanAgentCore",
             dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
                 .product(name: "Lua", package: "LuaSwift"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Markdown", package: "swift-markdown"),
+                "PecanSettings",
             ],
             path: "Sources/PecanAgentCore"
         ),
 
-        // MARK: - Mock LLM server for integration testing
-        .executableTarget(
-            name: "PecanMockLLM",
-            dependencies: [],
-            path: "Sources/PecanMockLLM"
-        ),
-
-        // MARK: - Production targets
-        .executableTarget(
-            name: "PecanTestClient",
-            dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
-            ]),
+        // MARK: - HTTP LLM Proxy Server
         .executableTarget(
             name: "PecanServer",
             dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
-                .product(name: "GRDB", package: "GRDB.swift"),
-                .product(name: "Markdown", package: "swift-markdown"),
-                "PecanServerCore",
-                "PecanSettings",
-            ]),
-        .executableTarget(
-            name: "PecanVMLauncher",
-            dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
-                .product(name: "Containerization", package: "containerization"),
-                .product(name: "ContainerizationEXT4", package: "containerization"),
-                .product(name: "ContainerizationArchive", package: "containerization"),
                 .product(name: "Logging", package: "swift-log"),
-            ]),
+                .product(name: "NIO", package: "swift-nio"),
+                .product(name: "NIOHTTP1", package: "swift-nio"),
+                "PecanSettings",
+            ],
+            path: "Sources/PecanServer"
+        ),
+
+        // MARK: - Terminal UI & Integrated Agent Client
         .executableTarget(
             name: "PecanUI",
             dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
                 .product(name: "ANSITerminal", package: "ANSITerminal"),
+                .product(name: "Markdown", package: "swift-markdown"),
                 "PecanSettings",
-            ]),
-        .executableTarget(
-            name: "PecanAgent",
-            dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
                 "PecanAgentCore",
-                "PecanOverlayCore",
-            ]),
-        .executableTarget(
-            name: "PecanShell",
-            dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
-            ]),
-
-        // MARK: - Test targets
-        .testTarget(
-            name: "PecanCoreTests",
-            dependencies: ["PecanServerCore"],
-            path: "Tests/PecanCoreTests"
-        ),
-        .testTarget(
-            name: "PecanOverlayCoreTests",
-            dependencies: ["PecanOverlayCore"],
-            path: "Tests/PecanOverlayCoreTests"
-        ),
-        .testTarget(
-            name: "PecanIntegrationTests",
-            dependencies: [
-                .product(name: "PecanShared", package: "pecan-shared"),
-                .product(name: "GRPC", package: "grpc-swift"),
-                .product(name: "NIO", package: "swift-nio"),
             ],
-            path: "Tests/PecanIntegrationTests"
-        ),
-        .testTarget(
-            name: "PecanAgentTests",
-            dependencies: [
-                "PecanAgentCore",
-                .product(name: "PecanShared", package: "pecan-shared"),
-            ],
-            path: "Tests/PecanAgentTests"
+            path: "Sources/PecanUI"
         ),
     ]
 )

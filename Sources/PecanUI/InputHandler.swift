@@ -5,9 +5,6 @@ import Darwin
 import Glibc
 #endif
 import ANSITerminal
-import GRPC
-import NIO
-import PecanShared
 
 enum InputKey {
     case ctrlC

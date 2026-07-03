@@ -83,10 +83,6 @@ public actor PromptComposer {
     /// Compose the full system prompt: role first, then extension fragments in priority order.
     /// All async data (skills, personas, project tools) is pre-fetched into `PromptContext`.
     public func compose(agentID: String, sessionID: String) async -> String {
-        // Pre-fetch async data into context
-        let rawSkills = await SkillManager.shared.catalog()
-        let skillEntries = rawSkills.map { PromptContext.SkillEntry(name: $0.name, description: $0.description) }
-
         let rawProjectTools = await ToolManager.shared.allToolDescriptions(tags: ["project"])
         let projectToolEntries = rawProjectTools.map { PromptContext.ToolEntry(name: $0.name, description: $0.description) }
 
@@ -100,7 +96,7 @@ public actor PromptComposer {
             sessionID: sessionID,
             project: projectInfo,
             team: teamInfo,
-            skillsCatalog: skillEntries,
+            skillsCatalog: [],
             projectTools: projectToolEntries,
             personasCatalog: personaEntries
         )

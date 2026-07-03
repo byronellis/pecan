@@ -1,144 +1,72 @@
 import Foundation
-import GRPC
-import NIO
-import PecanShared
-import PecanServerCore
-import PecanSettings
 import Logging
+import PecanSettings
 
-let logger = Logger(label: "com.pecan.server")
-
+private let mainLogger = Logger(label: "com.pecan.server.main")
 
 func main() async throws {
-
-    // Open the settings store (migrates from config.yaml automatically if present)
-    try await SettingsStore.shared.open()
-
-    // Launch the vm-launcher subprocess and wait for it to be ready
-    let launcher = try LauncherProcessManager()
-    try launcher.waitForSocket()
-
-    // Switch to container-based execution
-    await SpawnerFactory.shared.useVirtualizationFramework(launcher: launcher)
-
-    // Ensure launcher is terminated on exit
-    defer {
-        Task { await SpawnerFactory.shared.shutdownLauncher() }
+    LoggingSystem.bootstrap { label in
+        var handler = StreamLogHandler.standardError(label: label)
+        handler.logLevel = .info
+        return handler
     }
 
-    // Launch MLX server if any providers use the mlx type
-    let mlxProviders = (try? await SettingsStore.shared.allProviders().filter {
-        $0.type.lowercased() == "mlx" && $0.enabled
-    }) ?? []
-    if !mlxProviders.isEmpty {
-        do {
-            let mlxManager = try MLXProcessManager()
-            try mlxManager.waitForSocket()
-            ProviderFactory.mlxManager = mlxManager
+    mainLogger.info("Starting Pecan LLM Proxy Server...")
 
-            for p in mlxProviders {
-                if let repo = p.huggingfaceRepo {
-                    logger.info("Preloading MLX model '\(p.id)' from \(repo)")
-                    var req = Pecan_MLXRequest()
-                    var loadReq = Pecan_MLXLoadModelRequest()
-                    loadReq.alias = p.id
-                    loadReq.huggingfaceRepo = repo
-                    loadReq.requestID = UUID().uuidString
-                    req.loadModel = loadReq
-                    let resp = try mlxManager.sendRequest(req, timeout: 300)
-                    if case .error(let err) = resp.payload {
-                        logger.error("Failed to preload MLX model '\(p.id)': \(err.errorMessage)")
-                    } else {
-                        logger.info("MLX model '\(p.id)' preloaded successfully")
-                    }
-                }
-            }
-        } catch {
-            logger.error("Failed to start MLX server: \(error). MLX models will be unavailable.")
-        }
+    // Trigger config loading/creation at startup
+    let config = ProxyConfig.load()
+    let defaultModel = config.defaultModel ?? "none"
+    mainLogger.info("Config loaded (default model: \(defaultModel))")
+
+    // Start HTTP Proxy Server on a free port (port 0) or port 3000
+    // Let's bind to 0 to dynamically assign a port, or 3000. Bind to 3000 by default, fallback to 0 if busy.
+    var port = 3000
+    let server = HTTPProxyServer(host: "127.0.0.1", port: port)
+    
+    let boundPort: Int
+    do {
+        boundPort = try await server.start()
+    } catch {
+        mainLogger.warning("Port 3000 busy, binding to dynamic port...")
+        let dynamicServer = HTTPProxyServer(host: "127.0.0.1", port: 0)
+        boundPort = try await dynamicServer.start()
     }
 
-    let group = MultiThreadedEventLoopGroup(numberOfThreads: System.coreCount)
-    let providers = [ClientServiceProvider(), AgentServiceProvider()] as [CallHandlerProvider]
-
-    // TCP server for UI clients — bind port 0 so the OS picks a free port
-    let tcpServer = try await Server.insecure(group: group)
-        .withServiceProviders(providers)
-        .bind(host: "127.0.0.1", port: 0)
-        .get()
-
-    let boundPort = tcpServer.channel.localAddress?.port ?? 0
-    guard boundPort > 0 else {
-        logger.critical("Failed to determine bound port")
-        exit(1)
-    }
-
-    // Unix socket server for containerized agents (relayed via vsock)
-    let runDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".run")
-    try? FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
-    let socketPath = runDir.appendingPathComponent("grpc.sock").path
-    // Remove stale socket file if it exists
-    try? FileManager.default.removeItem(atPath: socketPath)
-
-    let udsServer = try await Server.insecure(group: group)
-        .withServiceProviders(providers)
-        .bind(unixDomainSocketPath: socketPath)
-        .get()
-
-    // Write server status file so clients can discover the port and PID
+    // Write server status file so TUI and clients can auto-discover it
     let status = ServerStatus(
         pid: ProcessInfo.processInfo.processIdentifier,
         port: boundPort,
-        grpcSocketPath: socketPath
+        grpcSocketPath: ""
     )
-    try status.write()
-
-    let defaultModel = (try? await SettingsStore.shared.globalDefault()) ?? "unknown"
-    logger.info("Pecan Server started on port \(boundPort) and Unix socket \(socketPath) with default model: \(defaultModel)")
-
-    // Ensure skills directory exists and populate built-in skills
-    let homeDir = FileManager.default.homeDirectoryForCurrentUser
-    let skillsDir = homeDir.appendingPathComponent(".pecan/skills")
-    try? FileManager.default.createDirectory(at: skillsDir, withIntermediateDirectories: true)
-    ensureBuiltinSkills(skillsDir: skillsDir.path)
-
-    // Respawn persistent sessions from previous server run
-    Task { await respawnPersistentSessions() }
-
-    // Background trigger timer: check for due triggers every 10 seconds
-    Task {
-        while !Task.isCancelled {
-            try? await Task.sleep(nanoseconds: 10_000_000_000) // 10 seconds
-            let sessionIDs = await SessionManager.shared.activeSessionIDs()
-            for sid in sessionIDs {
-                await SessionManager.shared.checkAndDeliverTriggers(sessionID: sid)
-            }
-        }
+    do {
+        let runDir = URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".run")
+        try FileManager.default.createDirectory(at: runDir, withIntermediateDirectories: true)
+        try status.write()
+        mainLogger.info("Server status written to \(ServerStatus.statusFilePath)")
+    } catch {
+        mainLogger.error("Failed to write server status: \(error)")
     }
 
-    // Handle SIGINT/SIGTERM for clean shutdown
+    // Handle shutdown signals
     for sig in [SIGINT, SIGTERM] {
         signal(sig) { _ in
             ServerStatus.remove()
-            Task {
-                await SpawnerFactory.shared.shutdownLauncher()
-            }
-            ProviderFactory.mlxManager?.shutdown()
+            mainLogger.info("Shutting down...")
             exit(0)
         }
     }
 
-    // Wait for either server to close
-    try await tcpServer.onClose.get()
-    try await udsServer.onClose.get()
-    try await group.shutdownGracefully()
+    // Keep server running
+    while true {
+        try await Task.sleep(nanoseconds: 3_600_000_000_000) // 1 hour
+    }
 }
 
 Task {
     do {
         try await main()
     } catch {
-        logger.critical("Server error: \(error)")
+        mainLogger.critical("Server main crash: \(error)")
         exit(1)
     }
 }

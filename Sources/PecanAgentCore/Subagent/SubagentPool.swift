@@ -1,21 +1,13 @@
 import Foundation
-import PecanShared
+import PecanSettings
 
 /// Manages the lifecycle of subagent sessions spawned by `RunAgentTool`.
 ///
-/// Configured with the shared gRPC sink at startup (same pattern as `TaskClient`).
 /// Subagents run as independent Swift Tasks and return a final summary string.
 public actor SubagentPool {
     public static let shared = SubagentPool()
 
-    private var sink: (any AgentEventSink)?
-
     public init() {}
-
-    /// Provide the gRPC sink. Call this once from `main.swift` after the writer is created.
-    public func configure(sink: any AgentEventSink) {
-        self.sink = sink
-    }
 
     /// Spawn a subagent and wait for it to complete, returning its final response.
     ///
@@ -30,13 +22,6 @@ public actor SubagentPool {
         personaName: String? = nil,
         toolTags: Set<String>? = nil
     ) async throws -> String {
-        guard let sink = sink else {
-            throw NSError(
-                domain: "SubagentPool", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "SubagentPool has no sink — call configure(sink:) at startup"]
-            )
-        }
-
         // Resolve persona: named override or CodingPersona fallback
         let persona: any AgentPersona
         if let personaName = personaName,
@@ -60,7 +45,6 @@ public actor SubagentPool {
 
         // Create the session first to get its unique agentID for the context
         let session = SubagentSession(
-            sink: sink,
             toolManager: .shared,
             toolTags: resolvedToolTags
         )
