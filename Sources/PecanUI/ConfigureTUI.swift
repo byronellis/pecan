@@ -44,6 +44,8 @@ final class ConfigureTUI {
     private var formFieldIndex: Int = 0
     private var formEditingField: Int? = nil // Index of text field being edited
     private var formEditBuffer: String = ""
+    private var formEditCursor: Int = 0       // cursor position (index into formEditBuffer)
+    private var formKillRing: String = ""     // yank buffer (shared for both editors)
     private var formError: String = ""
 
     // Values of the provider currently being edited
@@ -58,6 +60,7 @@ final class ConfigureTUI {
     // Custom model ID manual insertion state
     private var isAddingModelID = false
     private var newModelIDBuffer = ""
+    private var newModelIDCursor: Int = 0
 
     // Directory Explorer state
     private var isShowingDirExplorer = false
@@ -121,7 +124,7 @@ final class ConfigureTUI {
         if let hf = existing.first(where: { $0.id == "huggingface" }) {
             inMemoryProviders.append(hf)
         } else {
-            inMemoryProviders.append(ProviderConfig(id: "huggingface", type: "huggingface", url: "https://api-inference.huggingface.co/v1", enabled: false))
+            inMemoryProviders.append(ProviderConfig(id: "huggingface", type: "huggingface", url: "https://router.huggingface.co/v1", enabled: false))
         }
         
         // 4. Add custom OpenAI providers
@@ -337,11 +340,105 @@ final class ConfigureTUI {
         return false
     }
 
+    // MARK: - LineEditor helpers (operate on a (buffer, cursor) pair)
+
+    private func leInsert(_ c: Character, buf: inout String, cur: inout Int) {
+        guard c != "\n" && c != "\r" && c != "\t" else { return }
+        let idx = buf.index(buf.startIndex, offsetBy: cur)
+        buf.insert(c, at: idx)
+        cur += 1
+    }
+
+    private func leBackspace(buf: inout String, cur: inout Int) {
+        guard cur > 0 else { return }
+        let end = buf.index(buf.startIndex, offsetBy: cur)
+        let start = buf.index(before: end)
+        buf.remove(at: start)
+        cur -= 1
+    }
+
+    private func leDeleteForward(buf: inout String, cur: inout Int) {
+        guard cur < buf.count else { return }
+        let idx = buf.index(buf.startIndex, offsetBy: cur)
+        buf.remove(at: idx)
+    }
+
+    private func leMoveLeft(buf: inout String, cur: inout Int) {
+        if cur > 0 { cur -= 1 }
+    }
+
+    private func leMoveRight(buf: inout String, cur: inout Int) {
+        if cur < buf.count { cur += 1 }
+    }
+
+    private func leMoveHome(buf: inout String, cur: inout Int) {
+        cur = 0
+    }
+
+    private func leMoveEnd(buf: inout String, cur: inout Int) {
+        cur = buf.count
+    }
+
+    /// Move backward one word (Alt+B / Alt+Left)
+    private func leWordLeft(buf: inout String, cur: inout Int) {
+        var i = cur
+        // skip non-alphanum
+        while i > 0 && !buf[buf.index(buf.startIndex, offsetBy: i - 1)].isLetter { i -= 1 }
+        // skip alphanum
+        while i > 0 && buf[buf.index(buf.startIndex, offsetBy: i - 1)].isLetter { i -= 1 }
+        cur = i
+    }
+
+    /// Move forward one word (Alt+F / Alt+Right)
+    private func leWordRight(buf: inout String, cur: inout Int) {
+        var i = cur
+        let count = buf.count
+        while i < count && !buf[buf.index(buf.startIndex, offsetBy: i)].isLetter { i += 1 }
+        while i < count && buf[buf.index(buf.startIndex, offsetBy: i)].isLetter { i += 1 }
+        cur = i
+    }
+
+    /// Kill from cursor to end of line (^K)
+    private func leKillToEnd(buf: inout String, cur: inout Int, ring: inout String) {
+        let idx = buf.index(buf.startIndex, offsetBy: cur)
+        ring = String(buf[idx...])
+        buf = String(buf[..<idx])
+    }
+
+    /// Kill from start to cursor (^U)
+    private func leKillToStart(buf: inout String, cur: inout Int, ring: inout String) {
+        let idx = buf.index(buf.startIndex, offsetBy: cur)
+        ring = String(buf[..<idx])
+        buf = String(buf[idx...])
+        cur = 0
+    }
+
+    /// Kill previous word (^W)
+    private func leKillWordBackward(buf: inout String, cur: inout Int, ring: inout String) {
+        var i = cur
+        while i > 0 && buf[buf.index(buf.startIndex, offsetBy: i - 1)] == " " { i -= 1 }
+        while i > 0 && buf[buf.index(buf.startIndex, offsetBy: i - 1)] != " " { i -= 1 }
+        let start = buf.index(buf.startIndex, offsetBy: i)
+        let end = buf.index(buf.startIndex, offsetBy: cur)
+        ring = String(buf[start..<end])
+        buf.removeSubrange(start..<end)
+        cur = i
+    }
+
+    /// Yank from kill ring (^Y)
+    private func leYank(buf: inout String, cur: inout Int, ring: String) {
+        guard !ring.isEmpty else { return }
+        let idx = buf.index(buf.startIndex, offsetBy: cur)
+        buf.insert(contentsOf: ring, at: idx)
+        cur += ring.count
+    }
+
+    // MARK: - handleFormKey
     private func handleFormKey(_ key: InputKey, isNew: Bool, index: Int?) async -> Bool {
         if isAddingModelID {
             switch key {
             case .enter:
-                let mName = newModelIDBuffer.trimmingCharacters(in: .whitespaces)
+                let mName = newModelIDBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !mName.isEmpty {
                     editActiveModels.insert(mName)
                     let pid = editID.isEmpty ? "new_custom" : editID
@@ -354,21 +451,27 @@ final class ConfigureTUI {
                 }
                 isAddingModelID = false
                 newModelIDBuffer = ""
+                newModelIDCursor = 0
                 return true
             case .escape:
                 isAddingModelID = false
                 newModelIDBuffer = ""
+                newModelIDCursor = 0
                 return true
-            case .character(let c):
-                newModelIDBuffer.append(c)
-                return true
-            case .backspace:
-                if !newModelIDBuffer.isEmpty {
-                    newModelIDBuffer.removeLast()
-                }
-                return true
-            default:
-                break
+            case .character(let c):  leInsert(c, buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .backspace:         leBackspace(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .delete:            leDeleteForward(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .arrowLeft, .ctrlB: leMoveLeft(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .arrowRight, .ctrlF:leMoveRight(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .ctrlA:             leMoveHome(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .ctrlE:             leMoveEnd(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .ctrlK:             leKillToEnd(buf: &newModelIDBuffer, cur: &newModelIDCursor, ring: &formKillRing); return true
+            case .ctrlU:             leKillToStart(buf: &newModelIDBuffer, cur: &newModelIDCursor, ring: &formKillRing); return true
+            case .ctrlW:             leKillWordBackward(buf: &newModelIDBuffer, cur: &newModelIDCursor, ring: &formKillRing); return true
+            case .ctrlY:             leYank(buf: &newModelIDBuffer, cur: &newModelIDCursor, ring: formKillRing); return true
+            case .alt(let c) where c == "b": leWordLeft(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            case .alt(let c) where c == "f": leWordRight(buf: &newModelIDBuffer, cur: &newModelIDCursor); return true
+            default: break
             }
             return true
         }
@@ -381,17 +484,22 @@ final class ConfigureTUI {
             case .escape:
                 formEditingField = nil
                 formEditBuffer = ""
+                formEditCursor = 0
                 return true
-            case .character(let c):
-                formEditBuffer.append(c)
-                return true
-            case .backspace:
-                if !formEditBuffer.isEmpty {
-                    formEditBuffer.removeLast()
-                }
-                return true
-            default:
-                break
+            case .character(let c):   leInsert(c, buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .backspace:          leBackspace(buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .delete:             leDeleteForward(buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .arrowLeft, .ctrlB:  leMoveLeft(buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .arrowRight, .ctrlF: leMoveRight(buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .ctrlA:              leMoveHome(buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .ctrlE:              leMoveEnd(buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .ctrlK:              leKillToEnd(buf: &formEditBuffer, cur: &formEditCursor, ring: &formKillRing); return true
+            case .ctrlU:              leKillToStart(buf: &formEditBuffer, cur: &formEditCursor, ring: &formKillRing); return true
+            case .ctrlW:              leKillWordBackward(buf: &formEditBuffer, cur: &formEditCursor, ring: &formKillRing); return true
+            case .ctrlY:              leYank(buf: &formEditBuffer, cur: &formEditCursor, ring: formKillRing); return true
+            case .alt(let c) where c == "b": leWordLeft(buf: &formEditBuffer, cur: &formEditCursor); return true
+            case .alt(let c) where c == "f": leWordRight(buf: &formEditBuffer, cur: &formEditCursor); return true
+            default: break
             }
             return true
         }
@@ -504,17 +612,18 @@ final class ConfigureTUI {
         let label = formFields[fieldIdx]
         
         if label.contains("ID / Name") {
-            editID = formEditBuffer.trimmingCharacters(in: .whitespaces)
+            editID = formEditBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         } else if label.contains("Base API URL") {
-            editURL = formEditBuffer.trimmingCharacters(in: .whitespaces)
+            editURL = formEditBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         } else if label.contains("API Access Key") {
-            editKey = formEditBuffer.trimmingCharacters(in: .whitespaces)
+            editKey = formEditBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         } else if label.contains("Model Dir") {
-            editHF = formEditBuffer.trimmingCharacters(in: .whitespaces)
+            editHF = formEditBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         
         formEditingField = nil
         formEditBuffer = ""
+        formEditCursor = 0
     }
 
     private func handleFormEnter(isNew: Bool, index: Int?) async {
@@ -644,6 +753,7 @@ final class ConfigureTUI {
         } else if label.contains("Model Dir") {
             formEditBuffer = editHF
         }
+        formEditCursor = formEditBuffer.count  // start at end like a real shell
     }
 
     private func refreshActiveModelList(index: Int?) async {
@@ -675,7 +785,7 @@ final class ConfigureTUI {
             if editType == "fireworks" {
                 urlToFetch = "https://api.fireworks.ai/inference/v1"
             } else if editType == "huggingface" {
-                urlToFetch = "https://api-inference.huggingface.co/v1"
+                urlToFetch = "https://router.huggingface.co/v1"
             } else {
                 urlToFetch = editURL
             }
@@ -817,6 +927,136 @@ final class ConfigureTUI {
     }
 
     private func fetchRemoteModels(url: String, apiKey: String) async -> (models: [String], error: String?) {
+        if editType == "huggingface" {
+            // Native Hugging Face Hub API for listing text-generation models
+            let cleanURL = "https://huggingface.co/api/models?limit=100&pipeline_tag=text-generation"
+            guard let requestURL = URL(string: cleanURL) else {
+                return ([], "Invalid Hugging Face URL.")
+            }
+            var request = URLRequest(url: requestURL)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 10.0
+            
+            if !apiKey.isEmpty {
+                request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+            
+            do {
+                let (data, response) = try await URLSession.shared.data(for: request)
+                guard let httpResponse = response as? HTTPURLResponse else {
+                    return ([], "No HTTP response from Hugging Face.")
+                }
+                if httpResponse.statusCode == 401 {
+                    return ([], "Unauthorized (401) - invalid Hugging Face Token.")
+                }
+                if httpResponse.statusCode != 200 {
+                    return ([], "Hugging Face Hub Error \(httpResponse.statusCode).")
+                }
+                
+                struct HFModelItem: Codable {
+                    let id: String
+                }
+                let decoded = try JSONDecoder().decode([HFModelItem].self, from: data)
+                return (decoded.map { $0.id }.sorted(), nil)
+            } catch {
+                return ([], error.localizedDescription)
+            }
+        }
+        
+        if editType == "fireworks" {
+            // 1. Fetch user's account IDs from GET https://api.fireworks.ai/v1/accounts
+            guard let accountsURL = URL(string: "https://api.fireworks.ai/v1/accounts") else {
+                return ([], "Invalid URL format.")
+            }
+            var accRequest = URLRequest(url: accountsURL)
+            accRequest.httpMethod = "GET"
+            accRequest.timeoutInterval = 10.0
+            if !apiKey.isEmpty {
+                accRequest.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+            }
+            
+            var userAccountIDs: [String] = []
+            do {
+                let (data, response) = try await URLSession.shared.data(for: accRequest)
+                if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
+                    struct AccountItem: Codable {
+                        let name: String
+                    }
+                    struct AccountsResponse: Codable {
+                        let accounts: [AccountItem]
+                    }
+                    if let decoded = try? JSONDecoder().decode(AccountsResponse.self, from: data) {
+                        userAccountIDs = decoded.accounts.compactMap { item -> String? in
+                            let parts = item.name.components(separatedBy: "/")
+                            return parts.last
+                        }
+                    }
+                }
+            } catch {
+                // ignore and fallback to public
+            }
+            
+            // 2. Fetch models for "fireworks" (public) and all user account IDs
+            var allModels: Set<String> = []
+            var lastError: String? = nil
+            
+            let targets = ["fireworks"] + userAccountIDs
+            for target in targets {
+                let modelsURLStr = "https://api.fireworks.ai/v1/accounts/\(target)/models"
+                guard let url = URL(string: modelsURLStr) else { continue }
+                
+                var request = URLRequest(url: url)
+                request.httpMethod = "GET"
+                request.timeoutInterval = 10.0
+                if !apiKey.isEmpty {
+                    request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+                }
+                
+                do {
+                    let (data, response) = try await URLSession.shared.data(for: request)
+                    guard let httpResponse = response as? HTTPURLResponse else { continue }
+                    if httpResponse.statusCode != 200 {
+                        if target == "fireworks" {
+                            lastError = "Fireworks API Error \(httpResponse.statusCode) (Unauthorized / Invalid Key)."
+                        }
+                        continue
+                    }
+                    
+                    struct ModelItem: Codable {
+                        let id: String
+                    }
+                    struct ModelResponse: Codable {
+                        let models: [ModelItem]
+                    }
+                    
+                    // Handle Fireworks custom API format ("models" field)
+                    if let decoded = try? JSONDecoder().decode(ModelResponse.self, from: data) {
+                        for m in decoded.models {
+                            allModels.insert(m.id)
+                        }
+                    } else {
+                        // Fallback to OpenAI compatible format ("data" field)
+                        struct OpenAIModelResponse: Codable {
+                            let data: [ModelItem]
+                        }
+                        if let decoded = try? JSONDecoder().decode(OpenAIModelResponse.self, from: data) {
+                            for m in decoded.data {
+                                allModels.insert(m.id)
+                            }
+                        }
+                    }
+                } catch {
+                    lastError = error.localizedDescription
+                }
+            }
+            
+            if allModels.isEmpty {
+                return ([], lastError ?? "Failed to fetch Fireworks models. Check API Key.")
+            }
+            return (Array(allModels).sorted(), nil)
+        }
+        
+        // Custom OpenAI compatible models (Ollama, vLLM, etc.)
         var cleanURL = url
         if !cleanURL.hasSuffix("/models") {
             if cleanURL.hasSuffix("/") {
@@ -843,10 +1083,7 @@ final class ConfigureTUI {
                 return ([], "No HTTP response received.")
             }
             if httpResponse.statusCode == 401 {
-                return ([], "Unauthorized (401) - invalid API Key.")
-            }
-            if httpResponse.statusCode == 403 {
-                return ([], "Forbidden (403) - access denied.")
+                return ([], "Unauthorized (401) - invalid credentials.")
             }
             if httpResponse.statusCode != 200 {
                 return ([], "HTTP Error \(httpResponse.statusCode).")
@@ -865,6 +1102,7 @@ final class ConfigureTUI {
             return ([], error.localizedDescription)
         }
     }
+
 
     private func showModelModal(modelID: String) {
         modalModelID = modelID
@@ -1146,7 +1384,9 @@ final class ConfigureTUI {
                 buffer.writeString(x: contentX + 2, y: y, string: display, style: isSelected ? style : BIOSStyle.fgCyan + BIOSStyle.bold)
             } else if label.contains("Add Active Model ID") {
                 if isAddingModelID {
-                    let display = "Enter Model ID:       \(newModelIDBuffer)█"
+                    let pre = String(newModelIDBuffer.prefix(newModelIDCursor))
+                    let post = String(newModelIDBuffer.dropFirst(newModelIDCursor))
+                    let display = "Enter Model ID:       \(pre)█\(post)"
                     buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: BIOSStyle.fgYellow + BIOSStyle.bold)
                 } else {
                     let display = isSelected ? "[ \(label) ]" : "  [\(label)]"
@@ -1197,7 +1437,13 @@ final class ConfigureTUI {
                 }
                 
                 if isEditingThis {
-                    let display = "\(labelPadded): \(formEditBuffer)█"
+                    let isPassword = label.contains("API Access Key")
+                    let shownBuf = isPassword
+                        ? String(repeating: "•", count: formEditBuffer.count)
+                        : formEditBuffer
+                    let pre  = String(shownBuf.prefix(formEditCursor))
+                    let post = String(shownBuf.dropFirst(formEditCursor))
+                    let display = "\(labelPadded): \(pre)█\(post)"
                     buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: BIOSStyle.fgYellow + BIOSStyle.bold)
                 } else {
                     let display = "\(labelPadded): \(valStr.isEmpty ? "(empty)" : valStr)"
