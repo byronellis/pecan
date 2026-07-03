@@ -151,19 +151,16 @@ final class ConfigureTUI {
         let w = termCols
         let h = termRows
 
-        // 1. Draw top header bar
-        buffer.writeStringCentered(x: 0, y: 0, w: w, string: " 🥜 PECAN BIOS CONFIGURATION UTILITY 🥜 ", style: BIOSStyle.reverse + BIOSStyle.bold)
-
-        // Calculate sizes
+        // Calculate sizes (no top title bar, boxes start at y = 0)
         let sidebarW = max(28, w / 3)
         let mainW = w - sidebarW
-        let splitH = h - 3
+        let splitH = h - 2
 
         let activePane = splitLayout.activePane
 
-        // 2. Draw Sidebar Box
+        // 1. Draw Sidebar Box
         let sidebarBoxStyle = (activePane == .sidebar) ? BIOSStyle.fgCyan + BIOSStyle.bold : BIOSStyle.fgGray
-        buffer.drawBox(x: 0, y: 1, w: sidebarW, h: splitH, title: "CATEGORIES", borderStyle: .double, boxStyle: sidebarBoxStyle, titleStyle: sidebarBoxStyle)
+        buffer.drawBox(x: 0, y: 0, w: sidebarW, h: splitH, title: "CATEGORIES", borderStyle: .double, boxStyle: sidebarBoxStyle, titleStyle: sidebarBoxStyle)
 
         // Draw Sidebar Menu Items
         for (idx, item) in sidebarMenu.items.enumerated() {
@@ -178,7 +175,7 @@ final class ConfigureTUI {
                     itemY = splitH - 3
                 }
             } else {
-                itemY = 3 + idx
+                itemY = 2 + idx
             }
 
             // Determine Style
@@ -214,7 +211,7 @@ final class ConfigureTUI {
             }
         }
 
-        // 3. Draw Main Panel Box
+        // 2. Draw Main Panel Box
         let mainBoxStyle = (activePane == .mainPanel) ? BIOSStyle.fgCyan + BIOSStyle.bold : BIOSStyle.fgGray
         
         let selectedID = sidebarMenu.selectedIndex.map { sidebarMenu.items[$0].id }
@@ -226,13 +223,13 @@ final class ConfigureTUI {
         default:          mainTitle = "WELCOME"
         }
         
-        buffer.drawBox(x: sidebarW, y: 1, w: mainW, h: splitH, title: mainTitle, borderStyle: .double, boxStyle: mainBoxStyle, titleStyle: mainBoxStyle)
+        buffer.drawBox(x: sidebarW, y: 0, w: mainW, h: splitH, title: mainTitle, borderStyle: .double, boxStyle: mainBoxStyle, titleStyle: mainBoxStyle)
 
         // Draw Main Panel Content
         let contentX = sidebarW + 2
-        let contentY = 3
+        let contentY = 2
         let contentW = mainW - 4
-        let contentH = splitH - 4
+        let contentH = splitH - 3
 
         switch selectedID {
         case "providers":

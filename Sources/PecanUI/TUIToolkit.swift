@@ -136,7 +136,16 @@ class TUIBuffer {
             var currentStyle = ""
             for x in 0..<width {
                 let cell = cells[y * width + x]
-                let cellStyle = cell.style.isEmpty ? defaultStyle : cell.style
+                var cellStyle = cell.style
+                if cellStyle.isEmpty {
+                    cellStyle = defaultStyle
+                } else {
+                    // Prepend default bgBlue background if the cell style does not specify a background color
+                    if !cellStyle.contains("\u{1B}[4") && !cellStyle.contains("\u{1B}[10") {
+                        cellStyle = BIOSStyle.bgBlue + cellStyle
+                    }
+                }
+                
                 if cellStyle != currentStyle {
                     output += BIOSStyle.reset + cellStyle
                     currentStyle = cellStyle
