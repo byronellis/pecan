@@ -181,6 +181,44 @@ public actor SettingsStore {
         }
     }
 
+    public func resolveProviderAndModel(requestModel: String) async -> (ProviderConfig, String)? {
+        var modelToResolve = requestModel
+        if modelToResolve == "default" || modelToResolve.isEmpty {
+            if let def = try? globalDefault(), !def.isEmpty {
+                modelToResolve = def
+            }
+        }
+
+        let parts = modelToResolve.components(separatedBy: "/")
+        if parts.count >= 2 {
+            let providerID = parts[0]
+            let modelID = parts.dropFirst().joined(separator: "/")
+            if let provider = try? provider(id: providerID) {
+                return (provider, modelID)
+            }
+        }
+
+        if let provider = try? provider(id: modelToResolve) {
+            return (provider, modelToResolve)
+        }
+
+        if let def = try? globalDefault(), !def.isEmpty {
+            let defParts = def.components(separatedBy: "/")
+            if defParts.count >= 2 {
+                let providerID = defParts[0]
+                if let provider = try? provider(id: providerID) {
+                    return (provider, modelToResolve)
+                }
+            }
+        }
+
+        if let firstProvider = try? allProviders().first(where: { $0.enabled }) {
+            return (firstProvider, modelToResolve)
+        }
+
+        return nil
+    }
+
     // MARK: - Helpers
 
     private func globalSetting(key: String) throws -> String? {

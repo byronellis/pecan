@@ -1,10 +1,11 @@
 import Foundation
 import ANSITerminal
 import PecanSettings
+import PecanServer
 
 // MARK: - Interactive configuration TUI
 
-func runConfigureTUI() async {
+public func runConfigureTUI() async {
     do {
         try await SettingsStore.shared.open()
     } catch {
@@ -18,9 +19,6 @@ func runConfigureTUI() async {
 // MARK: - Provider form models
 
 private struct ProviderForm {
-    // Add mode: URL → API Key → auto-suggested ID
-    // Edit mode: all fields, ID shown as read-only header
-
     var originalID: String?  // nil = new provider
     var id: String = ""
     var providerType: String = "openai"
@@ -28,29 +26,29 @@ private struct ProviderForm {
     var apiKey: String = ""
     var hfRepo: String = ""
     var contextWindowOverride: String = ""
-    var requestTimeout: String = ""  // seconds, empty = default (600s)
+    var requestTimeout: String = ""
     var useStreaming: Bool = true
     var enabled: Bool = true
 
     var isNew: Bool { originalID == nil }
-    static let types = ["openai", "mlx", "mock"]
+    static let types = ["openai", "mlx", "fireworks", "anthropic", "mock"]
 
     mutating func cycleType() {
         let idx = Self.types.firstIndex(of: providerType) ?? 0
         providerType = Self.types[(idx + 1) % Self.types.count]
-    }
-
-    // Suggest an ID from a URL (uses the hostname)
-    mutating func suggestIDFromURL() {
-        guard id.isEmpty, !url.isEmpty,
-              let host = URL(string: url.trimmingCharacters(in: .whitespaces))?.host,
-              !host.isEmpty else { return }
-        // Strip common prefixes to keep IDs concise: "192.168.1.x" → keep, "api.openai.com" → "openai"
-        let parts = host.split(separator: ".").map(String.init)
-        if parts.count >= 2 && parts.last == "com" || parts.last == "io" || parts.last == "ai" {
-            id = parts.dropLast().last ?? host
-        } else {
-            id = host
+        
+        if id.isEmpty || Self.types.contains(id) {
+            id = providerType
+        }
+        
+        if url.isEmpty || url.contains("api.openai.com") || url.contains("api.fireworks.ai") || url.contains("api.anthropic.com") || url.contains("127.0.0.1:8080") {
+            switch providerType {
+            case "openai": url = "https://api.openai.com/v1"
+            case "fireworks": url = "https://api.fireworks.ai/inference/v1"
+            case "anthropic": url = "https://api.anthropic.com/v1"
+            case "mlx": url = "http://127.0.0.1:8080/v1"
+            default: url = ""
+            }
         }
     }
 
@@ -95,15 +93,12 @@ private struct ProviderForm {
 
 @MainActor
 final class ConfigureTUI {
-
-    // Main screen
     private var providers: [ProviderConfig] = []
     private var cachedModels: [RemoteModelInfo] = []
     private var personaModels: [(persona: String, modelKey: String)] = []
     private var globalDefault: String = ""
     private var selectedRow: Int = 0
 
-    // Screen routing
     private enum Screen { case main, form, modelPicker }
     private var screen: Screen = .main
     private var shouldExit = false
@@ -121,19 +116,8 @@ final class ConfigureTUI {
 
     private var statusMessage: String = ""
 
-    // MARK: - Field layout constants
-
-    // Add mode field indices: 0=URL, 1=API Key, 2=Provider ID, 3=Save, 4=Cancel
-    private let addFieldLabels = ["URL", "API Key", "Provider ID", "Save", "Cancel"]
-    private let addFieldCount = 5
-
-    // Edit mode field indices: 0=Type, 1=URL, 2=API Key, 3=HF Repo, 4=Ctx Window, 5=Timeout, 6=Streaming, 7=Enabled, 8=Save, 9=Cancel
-    private let editFieldLabels = ["Type", "URL", "API Key", "HF Repo", "Ctx Window", "Timeout", "Streaming", "Enabled", "Save", "Cancel"]
-    private let editFieldCount = 10
-
-    private var currentFieldCount: Int { form.isNew ? addFieldCount : editFieldCount }
-
-    // MARK: - Run loop
+    private let formFieldLabels = ["ID/Name", "Type", "URL", "API Key", "HF Repo", "Ctx Window", "Timeout", "Streaming", "Enabled", "Save", "Cancel"]
+    private let formFieldCount = 11
 
     func run() async {
         await loadSettings()
@@ -153,26 +137,21 @@ final class ConfigureTUI {
         }
     }
 
-    // MARK: - Main screen
+    // MARK: - Main Screen
 
     private func handleMainKey(_ key: String) async {
         switch key {
         case "q", "\u{1B}":
             shouldExit = true
-
         case "j", "\u{1B}[B":
             if selectedRow < providers.count - 1 { selectedRow += 1 }
-
         case "k", "\u{1B}[A":
             if selectedRow > 0 { selectedRow -= 1 }
-
         case "\r", "\n":
             guard !providers.isEmpty, selectedRow < providers.count else { return }
             openForm(for: providers[selectedRow])
-
         case "a":
             openForm(for: nil)
-
         case "d":
             guard selectedRow < providers.count else { return }
             let id = providers[selectedRow].id
@@ -180,7 +159,6 @@ final class ConfigureTUI {
             await loadSettings()
             if selectedRow >= providers.count { selectedRow = max(0, providers.count - 1) }
             statusMessage = "Provider '\(id)' deleted."
-
         case "m":
             guard selectedRow < providers.count else { return }
             let pid = providers[selectedRow].id
@@ -192,17 +170,15 @@ final class ConfigureTUI {
                 pickerSelectedRow = models.firstIndex { $0.key == globalDefault } ?? 0
                 screen = .modelPicker
             }
-
         case "r":
             statusMessage = "Fetching models..."
             render()
             await refreshModels()
-
         default: break
         }
     }
 
-    // MARK: - Form screen
+    // MARK: - Form Screen
 
     private func handleFormKey(_ key: String) async {
         if formEditingField != nil {
@@ -213,16 +189,16 @@ final class ConfigureTUI {
         case "q", "\u{1B}":
             screen = .main
             statusMessage = ""
-
         case "j", "\u{1B}[B":
-            if formSelectedField < currentFieldCount - 1 { formSelectedField += 1 }
-
+            var nextField = formSelectedField + 1
+            if nextField == 4 && form.providerType != "mlx" { nextField += 1 }
+            if nextField < formFieldCount { formSelectedField = nextField }
         case "k", "\u{1B}[A":
-            if formSelectedField > 0 { formSelectedField -= 1 }
-
+            var prevField = formSelectedField - 1
+            if prevField == 4 && form.providerType != "mlx" { prevField -= 1 }
+            if prevField >= 0 { formSelectedField = prevField }
         case "\r", "\n":
             await handleFormEnter()
-
         default: break
         }
     }
@@ -235,14 +211,11 @@ final class ConfigureTUI {
             formEditingField = nil
             formEditBuffer = ""
             formError = ""
-
         case "\u{1B}":
             formEditingField = nil
             formEditBuffer = ""
-
         case _ where key.hasPrefix("\u{1B}["):
-            break  // arrow sequences — ignore in edit mode
-
+            break
         default:
             for ch in key.unicodeScalars {
                 if ch.value == 127 {
@@ -256,68 +229,61 @@ final class ConfigureTUI {
 
     private func handleFormEnter() async {
         formError = ""
-        if form.isNew {
-            switch formSelectedField {
-            case 0:  // URL
-                formEditingField = 0; formEditBuffer = form.url
-            case 1:  // API Key
-                formEditingField = 1; formEditBuffer = form.apiKey
-            case 2:  // Provider ID
-                formEditingField = 2; formEditBuffer = form.id
-            case 3:  // Save
-                await saveForm()
-            case 4:  // Cancel
-                screen = .main
-            default: break
+        switch formSelectedField {
+        case 0:
+            if form.isNew {
+                formEditingField = 0
+                formEditBuffer = form.id
             }
-        } else {
-            switch formSelectedField {
-            case 0:  // Type
-                form.cycleType()
-            case 1:  // URL
-                formEditingField = 1; formEditBuffer = form.url
-            case 2:  // API Key
-                formEditingField = 2; formEditBuffer = form.apiKey
-            case 3:  // HF Repo
-                formEditingField = 3; formEditBuffer = form.hfRepo
-            case 4:  // Ctx Window
-                formEditingField = 4; formEditBuffer = form.contextWindowOverride
-            case 5:  // Timeout
-                formEditingField = 5; formEditBuffer = form.requestTimeout
-            case 6:  // Streaming
-                form.useStreaming = !form.useStreaming
-            case 7:  // Enabled
-                form.enabled = !form.enabled
-            case 8:  // Save
-                await saveForm()
-            case 9:  // Cancel
-                screen = .main
-            default: break
+        case 1:
+            form.cycleType()
+            if formSelectedField == 4 && form.providerType != "mlx" {
+                formSelectedField = 5
             }
+        case 2:
+            formEditingField = 2
+            formEditBuffer = form.url
+        case 3:
+            formEditingField = 3
+            formEditBuffer = form.apiKey
+        case 4:
+            if form.providerType == "mlx" {
+                formEditingField = 4
+                formEditBuffer = form.hfRepo
+            }
+        case 5:
+            formEditingField = 5
+            formEditBuffer = form.contextWindowOverride
+        case 6:
+            formEditingField = 6
+            formEditBuffer = form.requestTimeout
+        case 7:
+            form.useStreaming = !form.useStreaming
+        case 8:
+            form.enabled = !form.enabled
+        case 9:
+            await saveForm()
+        case 10:
+            screen = .main
+        default: break
         }
     }
 
     private func applyEditBuffer(to fieldRow: Int) {
-        if form.isNew {
-            switch fieldRow {
-            case 0:
-                form.url = formEditBuffer
-                form.suggestIDFromURL()  // auto-populate ID from hostname if ID is still empty
-            case 1:
-                form.apiKey = formEditBuffer
-            case 2:
-                form.id = formEditBuffer
-            default: break
-            }
-        } else {
-            switch fieldRow {
-            case 1: form.url = formEditBuffer
-            case 2: form.apiKey = formEditBuffer
-            case 3: form.hfRepo = formEditBuffer
-            case 4: form.contextWindowOverride = formEditBuffer
-            case 5: form.requestTimeout = formEditBuffer
-            default: break
-            }
+        switch fieldRow {
+        case 0:
+            if form.isNew { form.id = formEditBuffer }
+        case 2:
+            form.url = formEditBuffer
+        case 3:
+            form.apiKey = formEditBuffer
+        case 4:
+            form.hfRepo = formEditBuffer
+        case 5:
+            form.contextWindowOverride = formEditBuffer
+        case 6:
+            form.requestTimeout = formEditBuffer
+        default: break
         }
     }
 
@@ -329,7 +295,7 @@ final class ConfigureTUI {
         }
         if !form.requestTimeout.trimmingCharacters(in: .whitespaces).isEmpty,
            Double(form.requestTimeout.trimmingCharacters(in: .whitespaces)) == nil {
-            formError = "Timeout must be a number (seconds) or empty (default: 600)."
+            formError = "Timeout must be a number (seconds) or empty."
             return
         }
         guard let config = form.toConfig() else {
@@ -337,7 +303,6 @@ final class ConfigureTUI {
             return
         }
 
-        // Fetch models before saving so we populate the cache immediately
         statusMessage = "Saving and fetching models..."
         render()
         let fetched = await fetchModels(from: config)
@@ -361,10 +326,10 @@ final class ConfigureTUI {
     private func openForm(for provider: ProviderConfig?) {
         if let p = provider {
             form = ProviderForm.from(p)
-            formSelectedField = 0
+            formSelectedField = 1 // Start at type selection for editing
         } else {
             form = ProviderForm()
-            formSelectedField = 0
+            formSelectedField = 0 // Start at ID selection for new
         }
         formEditingField = nil
         formEditBuffer = ""
@@ -372,7 +337,7 @@ final class ConfigureTUI {
         screen = .form
     }
 
-    // MARK: - Model picker screen
+    // MARK: - Model Picker
 
     private func handlePickerKey(_ key: String) async {
         let models = cachedModels.filter { $0.providerID == pickerProviderID }
@@ -380,13 +345,10 @@ final class ConfigureTUI {
         case "q", "\u{1B}":
             screen = .main
             selectedRow = providers.firstIndex(where: { $0.id == pickerProviderID }) ?? 0
-
         case "j", "\u{1B}[B":
             if pickerSelectedRow < models.count - 1 { pickerSelectedRow += 1 }
-
         case "k", "\u{1B}[A":
             if pickerSelectedRow > 0 { pickerSelectedRow -= 1 }
-
         case "\r", "\n":
             guard pickerSelectedRow < models.count else { return }
             let selected = models[pickerSelectedRow]
@@ -395,7 +357,6 @@ final class ConfigureTUI {
             statusMessage = "Default model set to '\(globalDefault)'"
             screen = .main
             selectedRow = providers.firstIndex(where: { $0.id == pickerProviderID }) ?? 0
-
         default: break
         }
     }
@@ -419,7 +380,7 @@ final class ConfigureTUI {
     }
 
     private func renderMain() {
-        print("\u{1B}[1mPecan Configuration\u{1B}[0m\n")
+        print("\u{1B}[1mPecan Configuration Manager\u{1B}[0m\n")
         print("Providers  \u{1B}[2m[a]dd  [d]elete  [r]efresh models  [m]odel picker  [q]uit\u{1B}[0m\n")
 
         if providers.isEmpty {
@@ -439,7 +400,8 @@ final class ConfigureTUI {
                     modelsStr = "\u{1B}[2m(\(modelCount) model\(modelCount == 1 ? "" : "s"))\u{1B}[0m"
                 }
                 let url = p.url.map { "  \u{1B}[2m\($0)\u{1B}[0m" } ?? ""
-                print("\(cursor)\(status) \u{1B}[1m\(p.id)\u{1B}[0m  [\(p.type)]\(url)  \(modelsStr)")
+                let detailStr = p.type == "mlx" ? "  \u{1B}[36mhf: \(p.huggingfaceRepo ?? "")\u{1B}[0m" : url
+                print("\(cursor)\(status) \u{1B}[1m\(p.id)\u{1B}[0m  [\(p.type)]\(detailStr)  \(modelsStr)")
             }
         }
 
@@ -448,13 +410,6 @@ final class ConfigureTUI {
             : "\u{1B}[33m\(globalDefault)\u{1B}[0m"
         print("\nGlobal default model: \(defaultDisplay)")
 
-        if !personaModels.isEmpty {
-            print("\nPersona model assignments:")
-            for (persona, modelKey) in personaModels {
-                print("  \u{1B}[2m\(persona)\u{1B}[0m → \(modelKey)")
-            }
-        }
-
         print("\n\u{1B}[2mEnter to edit, [a] add, [d] delete, [m] pick default model, [r] refresh\u{1B}[0m")
     }
 
@@ -462,66 +417,52 @@ final class ConfigureTUI {
         let title = form.isNew ? "Add Provider" : "Edit Provider"
         print("\u{1B}[1m\(title)\u{1B}[0m\n")
 
-        if !form.isNew {
-            print("  \u{1B}[2mID:  \(form.id)\u{1B}[0m\n")
-        }
-
-        let labels = form.isNew ? addFieldLabels : editFieldLabels
         let labelWidth = 14
 
-        for i in 0..<labels.count {
+        for i in 0..<formFieldLabels.count {
+            if i == 4 && form.providerType != "mlx" { continue }
+
             let isSelected = i == formSelectedField
             let isEditing = formEditingField == i
             let cursor = isSelected ? "▶ " : "  "
-            let label = labels[i].padding(toLength: labelWidth, withPad: " ", startingAt: 0)
+            let label = formFieldLabels[i].padding(toLength: labelWidth, withPad: " ", startingAt: 0)
 
-            // Button rows
-            if (form.isNew && (i == 3 || i == 4)) || (!form.isNew && (i == 8 || i == 9)) {
-                let display = isSelected ? "\u{1B}[7m \(labels[i]) \u{1B}[0m" : "[\(labels[i])]"
+            if i == 9 || i == 10 {
+                let display = isSelected ? "\u{1B}[7m \(formFieldLabels[i]) \u{1B}[0m" : "[\(formFieldLabels[i])]"
                 print("\(cursor)\(display)")
                 continue
             }
 
-            // Compute display value
-            let rawValue: String
-            if form.isNew {
-                switch i {
-                case 0: rawValue = form.url
-                case 1: rawValue = form.apiKey.isEmpty ? "" : String(repeating: "•", count: min(form.apiKey.count, 24))
-                case 2: rawValue = form.id
-                default: rawValue = ""
-                }
-            } else {
-                switch i {
-                case 0: rawValue = form.providerType
-                case 1: rawValue = form.url
-                case 2: rawValue = form.apiKey.isEmpty ? "" : String(repeating: "•", count: min(form.apiKey.count, 24))
-                case 3: rawValue = form.hfRepo
-                case 4: rawValue = form.contextWindowOverride
-                case 5: rawValue = form.requestTimeout.isEmpty ? "(default: 600s)" : form.requestTimeout + "s"
-                case 6: rawValue = form.useStreaming ? "yes" : "no"
-                case 7: rawValue = form.enabled ? "yes" : "no"
-                default: rawValue = ""
-                }
+            if i == 0 && !form.isNew {
+                print("\(cursor)\(label) \(form.id)  \u{1B}[2m(read-only)\u{1B}[0m")
+                continue
             }
 
-            let isCycleOrToggle = !form.isNew && (i == 0 || i == 6 || i == 7)
+            var rawValue = ""
+            switch i {
+            case 0: rawValue = form.id
+            case 1: rawValue = form.providerType
+            case 2: rawValue = form.url
+            case 3: rawValue = form.apiKey.isEmpty ? "" : String(repeating: "•", count: min(form.apiKey.count, 24))
+            case 4: rawValue = form.hfRepo
+            case 5: rawValue = form.contextWindowOverride
+            case 6: rawValue = form.requestTimeout.isEmpty ? "(default)" : form.requestTimeout + "s"
+            case 7: rawValue = form.useStreaming ? "yes" : "no"
+            case 8: rawValue = form.enabled ? "yes" : "no"
+            default: break
+            }
+
+            let isCycleOrToggle = (i == 1 || i == 7 || i == 8)
 
             let valueDisplay: String
             if isEditing {
-                let displayBuf = (form.isNew && i == 1) || (!form.isNew && i == 2) ? formEditBuffer : formEditBuffer
-                _ = displayBuf
                 valueDisplay = "\u{1B}[4m\(formEditBuffer)\u{1B}[0m█"
             } else if isCycleOrToggle {
-                let action = i == 0 ? "cycle" : "toggle"
+                let action = i == 1 ? "cycle" : "toggle"
                 let hint = isSelected ? "  \u{1B}[2m(Enter to \(action))\u{1B}[0m" : ""
                 valueDisplay = "\u{1B}[36m\(rawValue)\u{1B}[0m\(hint)"
             } else if rawValue.isEmpty {
-                let hint: String
-                if isSelected {
-                    hint = i == 1 && form.isNew ? "  \u{1B}[2m(optional, Enter to skip)\u{1B}[0m"
-                                                : "  \u{1B}[2m(Enter to edit)\u{1B}[0m"
-                } else { hint = "" }
+                let hint = isSelected ? "  \u{1B}[2m(Enter to edit)\u{1B}[0m" : ""
                 valueDisplay = "\u{1B}[2m(empty)\u{1B}[0m\(hint)"
             } else {
                 let hint = isSelected ? "  \u{1B}[2m(Enter to edit)\u{1B}[0m" : ""
@@ -540,10 +481,6 @@ final class ConfigureTUI {
         }
 
         print("\n\u{1B}[2mj/k ↑↓ navigate · Enter edit/toggle/save · Esc cancel edit · q back\u{1B}[0m")
-
-        if form.isNew {
-            print("\u{1B}[2mModels will be fetched automatically when you Save.\u{1B}[0m")
-        }
     }
 
     private func renderModelPicker() {
@@ -553,7 +490,6 @@ final class ConfigureTUI {
         if models.isEmpty {
             print("  \u{1B}[2mNo models available. Go back and press [r] to refresh.\u{1B}[0m\n")
         } else {
-            // Pre-compute display widths for alignment
             let maxIDLen = models.map { $0.modelID.count }.max() ?? 0
 
             for (i, m) in models.enumerated() {
@@ -561,7 +497,6 @@ final class ConfigureTUI {
                 let isCurrent = m.key == globalDefault
                 let cursor = isSelected ? "▶ " : "  "
 
-                // Loaded indicator
                 let loadedBadge: String
                 switch m.isLoaded {
                 case true:  loadedBadge = "\u{1B}[32m● loaded  \u{1B}[0m"
@@ -569,30 +504,17 @@ final class ConfigureTUI {
                 default:    loadedBadge = "\u{1B}[2m          \u{1B}[0m"
                 }
 
-                // Context info
                 let ctxStr: String
                 if let ctx = m.contextWindow {
                     let ctxK = ctx >= 1024 ? "\(ctx / 1024)k" : "\(ctx)"
-                    if let train = m.contextWindowTrain, train != ctx {
-                        ctxK == "\(train / 1024)k"
-                            ? (ctxStr = "\(ctxK) ctx")
-                            : (ctxStr = "\(ctxK) ctx / \(train / 1024)k train")
-                    } else {
-                        ctxStr = "\(ctxK) ctx"
-                    }
-                } else if let train = m.contextWindowTrain {
-                    ctxStr = "—  / \(train / 1024)k train"
+                    ctxStr = "\(ctxK) ctx"
                 } else {
                     ctxStr = ""
                 }
 
-                // Params + size
                 let sizeInfo = [m.formattedParams, m.formattedSize].compactMap { $0 }.joined(separator: "  ")
-
-                // Pad model ID for alignment
                 let idPadded = m.modelID.padding(toLength: maxIDLen + 2, withPad: " ", startingAt: 0)
                 let ctxPadded = ctxStr.padding(toLength: 22, withPad: " ", startingAt: 0)
-
                 let currentMark = isCurrent ? "  \u{1B}[32m✓ current\u{1B}[0m" : ""
 
                 if isSelected {
@@ -606,7 +528,7 @@ final class ConfigureTUI {
         print("\n\u{1B}[2mj/k ↑↓ navigate · Enter to set as default · q/Esc back\u{1B}[0m")
     }
 
-    // MARK: - Data helpers
+    // MARK: - Data Helpers
 
     private func refreshModels() async {
         await ModelCacheStandalone.shared.refresh(providers: providers)
@@ -621,7 +543,7 @@ final class ConfigureTUI {
         personaModels = (try? await SettingsStore.shared.allPersonaModels()) ?? []
     }
 
-    // MARK: - Terminal helpers
+    // MARK: - Terminal Helpers
 
     private func terminalSize() -> (rows: Int, cols: Int) {
         var ws = winsize()
@@ -657,90 +579,4 @@ final class ConfigureTUI {
         t.c_lflag |= UInt(ECHO) | UInt(ICANON)
         tcsetattr(STDIN_FILENO, TCSANOW, &t)
     }
-}
-
-// MARK: - Standalone model cache (no gRPC server needed)
-
-actor ModelCacheStandalone {
-    static let shared = ModelCacheStandalone()
-    private var models: [RemoteModelInfo] = []
-    private init() {}
-
-    func refresh(providers: [ProviderConfig]) async {
-        var result: [RemoteModelInfo] = []
-        for p in providers where p.enabled {
-            result.append(contentsOf: await fetchModels(from: p))
-        }
-        if !result.isEmpty { models = result }
-    }
-
-    /// Merge newly fetched models for a single provider into the cache.
-    func merge(_ newModels: [RemoteModelInfo]) {
-        guard let providerID = newModels.first?.providerID else { return }
-        models.removeAll { $0.providerID == providerID }
-        models.append(contentsOf: newModels)
-    }
-
-    func allModels() -> [RemoteModelInfo] { models }
-}
-
-private func fetchModels(from provider: ProviderConfig) async -> [RemoteModelInfo] {
-    switch provider.type.lowercased() {
-    case "openai":
-        return await fetchOpenAIModels(provider: provider)
-    case "mlx":
-        return [RemoteModelInfo(providerID: provider.id, modelID: provider.id,
-                                contextWindow: provider.contextWindowOverride, isLoaded: true)]
-    case "mock":
-        return [RemoteModelInfo(providerID: provider.id, modelID: "mock",
-                                contextWindow: 8192, contextWindowTrain: 8192, isLoaded: true)]
-    default:
-        return []
-    }
-}
-
-private func fetchOpenAIModels(provider: ProviderConfig) async -> [RemoteModelInfo] {
-    guard provider.type.lowercased() == "openai",
-          let baseURL = provider.url, !baseURL.isEmpty else {
-        return [RemoteModelInfo(providerID: provider.id, modelID: provider.id)]
-    }
-    let urlStr = baseURL.hasSuffix("/") ? baseURL + "v1/models" : baseURL + "/v1/models"
-    guard let url = URL(string: urlStr) else { return [] }
-    var request = URLRequest(url: url, timeoutInterval: 10)
-    request.httpMethod = "GET"
-    if let key = provider.apiKey, !key.isEmpty, key.lowercased() != "none" {
-        request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-    }
-    do {
-        let (data, _) = try await URLSession.shared.data(for: request)
-        guard let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let dataArray = json["data"] as? [[String: Any]] else { return [] }
-        return dataArray.compactMap { entry -> RemoteModelInfo? in
-            guard let id = entry["id"] as? String else { return nil }
-            let meta = entry["meta"] as? [String: Any]
-            let nCtx = meta?["n_ctx"] as? Int
-            let nCtxTrain = meta?["n_ctx_train"] as? Int
-            let ctx = nCtx ?? nCtxTrain ?? provider.contextWindowOverride
-
-            let isLoaded: Bool?
-            if let loaded = entry["loaded"] as? Bool { isLoaded = loaded }
-            else if let status = entry["status"] as? String { isLoaded = status == "loaded" }
-            else if nCtx != nil { isLoaded = true }
-            else { isLoaded = nil }
-
-            let paramCount: Int?
-            if let p = meta?["n_params"] as? Int { paramCount = p }
-            else if let p = meta?["n_params"] as? Double { paramCount = Int(p) }
-            else { paramCount = nil }
-
-            let sizeBytes: Int?
-            if let s = meta?["size"] as? Int { sizeBytes = s }
-            else if let s = meta?["size"] as? Double { sizeBytes = Int(s) }
-            else { sizeBytes = nil }
-
-            return RemoteModelInfo(providerID: provider.id, modelID: id,
-                                   contextWindow: ctx, contextWindowTrain: nCtxTrain,
-                                   isLoaded: isLoaded, paramCount: paramCount, sizeBytes: sizeBytes)
-        }
-    } catch { return [] }
 }

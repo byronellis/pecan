@@ -41,6 +41,7 @@ public final class HTTPProxyServer {
     }
 
     public func shutdown() async throws {
+        await MLXServerManager.shared.shutdownAll()
         try await channel?.close().get()
         try await group.shutdownGracefully()
         serverLogger.info("HTTPProxyServer shut down.")
@@ -135,29 +136,30 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
     }
 
     private static func handleGetModels(context: ChannelHandlerContext) {
-        let config = ProxyConfig.load()
-        let modelIDs = Array(config.routing.keys).sorted()
-        
-        let modelsList = modelIDs.map { modelID -> [String: Any] in
-            return [
-                "id": modelID,
-                "object": "model",
-                "created": Int(Date().timeIntervalSince1970),
-                "owned_by": "pecan"
+        let box = ChannelBox(context: context)
+        Task {
+            let models = await ModelCacheStandalone.shared.allModels()
+            let modelsList = models.map { m -> [String: Any] in
+                return [
+                    "id": m.key,
+                    "object": "model",
+                    "created": Int(Date().timeIntervalSince1970),
+                    "owned_by": m.providerID
+                ]
+            }
+            
+            let responseObj: [String: Any] = [
+                "object": "list",
+                "data": modelsList
             ]
+            
+            guard let data = try? JSONSerialization.data(withJSONObject: responseObj) else {
+                sendErrorResponse(context: box.context, status: .internalServerError, message: "Serialization failed")
+                return
+            }
+            
+            sendJSONResponse(context: box.context, data: data)
         }
-        
-        let responseObj: [String: Any] = [
-            "object": "list",
-            "data": modelsList
-        ]
-        
-        guard let data = try? JSONSerialization.data(withJSONObject: responseObj) else {
-            sendErrorResponse(context: context, status: .internalServerError, message: "Serialization failed")
-            return
-        }
-        
-        sendJSONResponse(context: context, data: data)
     }
 
     private static func handleChatCompletions(context: ChannelHandlerContext, requestData: Data) {
@@ -167,22 +169,22 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
             return
         }
 
-        let config = ProxyConfig.load()
-        
-        // Resolve model routing
-        let canonicalModel = requestModel
-        guard let route = config.routing[canonicalModel],
-              let provider = config.providers[route.provider] else {
-            sendErrorResponse(context: context, status: .notFound, message: "No route defined for model '\(canonicalModel)'")
-            return
-        }
-
-        let targetModel = route.model ?? canonicalModel
-        let stream = json["stream"] as? Bool ?? false
         let box = ChannelBox(context: context)
 
         Task {
             do {
+                guard let (provider, targetModel) = await SettingsStore.shared.resolveProviderAndModel(requestModel: requestModel) else {
+                    sendErrorResponse(context: box.context, status: .notFound, message: "No route or provider found for model '\(requestModel)'")
+                    return
+                }
+
+                // Auto-launch local MLX server if not running
+                if provider.type.lowercased() == "mlx" {
+                    await MLXServerManager.shared.ensureRunning(provider: provider)
+                }
+
+                let stream = json["stream"] as? Bool ?? false
+
                 if provider.type.lowercased() == "anthropic" {
                     // Translate request payload: OpenAI -> Anthropic
                     let anthropicPayload = APIConverter.openAIToAnthropic(openAI: json, targetModel: targetModel)
@@ -216,7 +218,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                         sendJSONResponse(context: box.context, data: responseData)
                     }
                 } else {
-                    // Backend is OpenAI format (openai, local mlx, local llama.cpp etc.)
+                    // Backend is OpenAI format (openai, fireworks, local mlx, local llama.cpp etc.)
                     var openAIPayload = json
                     openAIPayload["model"] = targetModel
                     let payloadData = try JSONSerialization.data(withJSONObject: openAIPayload)
@@ -258,22 +260,22 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
             return
         }
 
-        let config = ProxyConfig.load()
-        
-        // Resolve model routing
-        let canonicalModel = requestModel
-        guard let route = config.routing[canonicalModel],
-              let provider = config.providers[route.provider] else {
-            sendErrorResponse(context: context, status: .notFound, message: "No route defined for model '\(canonicalModel)'")
-            return
-        }
-
-        let targetModel = route.model ?? canonicalModel
-        let stream = json["stream"] as? Bool ?? false
         let box = ChannelBox(context: context)
 
         Task {
             do {
+                guard let (provider, targetModel) = await SettingsStore.shared.resolveProviderAndModel(requestModel: requestModel) else {
+                    sendErrorResponse(context: box.context, status: .notFound, message: "No route or provider found for model '\(requestModel)'")
+                    return
+                }
+
+                // Auto-launch local MLX server if not running
+                if provider.type.lowercased() == "mlx" {
+                    await MLXServerManager.shared.ensureRunning(provider: provider)
+                }
+
+                let stream = json["stream"] as? Bool ?? false
+
                 if provider.type.lowercased() == "anthropic" {
                     // Straight forward to Anthropic
                     var anthropicPayload = json

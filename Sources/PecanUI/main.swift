@@ -54,7 +54,7 @@ func main() async throws {
     }
 
     if let first = args.first, first == "configure" || first == "config" {
-        print("Settings configuration manager not needed. Configure ~/.pecan/config.yaml directly.\r")
+        await runConfigureTUI()
         return
     }
 
@@ -133,10 +133,24 @@ func main() async throws {
               \(ansiCyan)/switch\(ansiReset) \(ansiDim)<name>\(ansiReset)    Switch to session by name
               \(ansiCyan)/close\(ansiReset)            Close the current session
               \(ansiCyan)/clear\(ansiReset)            Clear conversation history
+              \(ansiCyan)/config\(ansiReset)           Open Configuration Manager
               \(ansiCyan)/help\(ansiReset)             Show this help screen
               \(ansiCyan)/quit\(ansiReset)             Exit Pecan TUI
             """
             await TerminalManager.shared.printOutput(help)
+            continue
+        }
+
+        if trimmed == "/config" {
+            await runConfigureTUI()
+            // Redraw TUI screen
+            clearScreen()
+            moveTo(1, 1)
+            print("🥜 Pecan Local TUI".bold + "\r", terminator: "\n")
+            print("Embedded HTTP Proxy running...\r\n", terminator: "\n")
+            let activeTabs = await sessionState.agentTabList()
+            await TerminalManager.shared.updateAgentTabs(activeTabs)
+            await TerminalManager.shared.redrawPrompt()
             continue
         }
 
