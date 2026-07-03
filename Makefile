@@ -14,11 +14,9 @@ SWIFT         ?= swift
 all: release
 
 release:
-	$(SWIFT) build -c release --product pecan-server
 	$(SWIFT) build -c release --product pecan
 
 debug:
-	$(SWIFT) build --product pecan-server
 	$(SWIFT) build --product pecan
 
 clean:

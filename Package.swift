@@ -9,7 +9,6 @@ let package = Package(
         .macOS(.v15)
     ],
     products: [
-        .executable(name: "pecan-server", targets: ["PecanServer"]),
         .executable(name: "pecan", targets: ["PecanUI"]),
         .library(name: "PecanAgentCore", targets: ["PecanAgentCore"]),
     ],
@@ -44,7 +43,7 @@ let package = Package(
         ),
 
         // MARK: - HTTP LLM Proxy Server
-        .executableTarget(
+        .target(
             name: "PecanServer",
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
@@ -63,6 +62,7 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown"),
                 "PecanSettings",
                 "PecanAgentCore",
+                "PecanServer",
             ],
             path: "Sources/PecanUI"
         ),

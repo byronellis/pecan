@@ -7,69 +7,26 @@ import Glibc
 import ANSITerminal
 import PecanSettings
 import PecanAgentCore
+import PecanServer
 
 // MARK: - Server lifecycle helpers
 
-func findServerBinary() -> URL? {
-    if let envPath = ProcessInfo.processInfo.environment["PECAN_SERVER_PATH"] {
-        let url = URL(fileURLWithPath: envPath).standardizedFileURL
-        return FileManager.default.fileExists(atPath: url.path) ? url : nil
-    }
-    let execURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-    let candidate = execURL.deletingLastPathComponent().appendingPathComponent("pecan-server")
-    return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
-}
-
-func launchServer() throws {
-    guard let serverURL = findServerBinary() else {
-        throw NSError(domain: "Pecan", code: 2, userInfo: [
-            NSLocalizedDescriptionKey: "pecan-server not found alongside \(CommandLine.arguments[0])"
-        ])
-    }
-    let runDir = "\(FileManager.default.currentDirectoryPath)/.run"
-    try FileManager.default.createDirectory(atPath: runDir, withIntermediateDirectories: true)
-    let logPath = "\(runDir)/server.log"
-    FileManager.default.createFile(atPath: logPath, contents: nil)
-    let logHandle = try FileHandle(forWritingTo: URL(fileURLWithPath: logPath))
-
-    let process = Process()
-    process.executableURL = serverURL
-    process.currentDirectoryURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-    process.standardOutput = logHandle
-    process.standardError = logHandle
-    try process.run()
-    print("Server started (PID \(process.processIdentifier)), logs: \(logPath)\r")
-}
-
 func ensureServer(forceRestart: Bool) async throws -> Int {
-    let runDir = "\(FileManager.default.currentDirectoryPath)/.run"
-    let logPath = "\(runDir)/server.log"
-
-    if forceRestart, let existing = try? ServerStatus.read(), existing.isAlive {
-        print("Stopping server (PID \(existing.pid))...\r")
-        kill(existing.pid, SIGTERM)
-        for _ in 0..<20 {
-            try await Task.sleep(nanoseconds: 250_000_000)
-            if kill(existing.pid, 0) != 0 { break }
+    if forceRestart {
+        if let status = try? ServerStatus.read(), status.isAlive {
+            // Kill existing server process if it's a separate PID
+            if status.pid != ProcessInfo.processInfo.processIdentifier {
+                kill(status.pid, SIGTERM)
+            }
         }
         ServerStatus.remove()
-    }
-
-    if let status = try? ServerStatus.read(), status.isAlive {
+    } else if let status = try? ServerStatus.read(), status.isAlive {
         return status.port
     }
 
-    print("Starting pecan-server... (logs: \(logPath))\r")
-    try launchServer()
-    for _ in 0..<60 {
-        try await Task.sleep(nanoseconds: 500_000_000)
-        if let status = try? ServerStatus.read(), status.isAlive {
-            return status.port
-        }
-    }
-    throw NSError(domain: "Pecan", code: 1, userInfo: [
-        NSLocalizedDescriptionKey: "Server did not start within 30 seconds. Check logs: \(logPath)"
-    ])
+    // Start embedded HTTP server in background task inside this TUI process
+    let boundPort = try await startHTTPProxyServer(background: true)
+    return boundPort
 }
 
 // MARK: - Main TUI execution
@@ -78,10 +35,24 @@ func main() async throws {
     // Handle Ctrl+C (SIGINT)
     signal(SIGINT) { _ in
         print("\r\nExiting Pecan TUI...\r")
+        ServerStatus.remove()
         exit(0)
     }
 
     let args = CommandLine.arguments.dropFirst()
+    
+    // Standalone server mode subcommand: pecan server
+    if let first = args.first, first == "server" {
+        print("Starting standalone HTTP Proxy server mode...\r")
+        do {
+            try await startHTTPProxyServer(background: false)
+        } catch {
+            print("Server error: \(error.localizedDescription)\r")
+            exit(1)
+        }
+        return
+    }
+
     if let first = args.first, first == "configure" || first == "config" {
         print("Settings configuration manager not needed. Configure ~/.pecan/config.yaml directly.\r")
         return
@@ -102,7 +73,7 @@ func main() async throws {
         i += 1
     }
 
-    // Ensure proxy server is running
+    // Ensure proxy server is running (either existing external, or start new embedded)
     let serverPort: Int
     do {
         serverPort = try await ensureServer(forceRestart: cliForceRestart)
@@ -124,7 +95,7 @@ func main() async throws {
     clearScreen()
     moveTo(1, 1)
     print("🥜 Pecan Local TUI".bold + "\r", terminator: "\n")
-    print("LLM Proxy running at 127.0.0.1:\(serverPort)...\r\n", terminator: "\n")
+    print("Embedded HTTP Proxy running at 127.0.0.1:\(serverPort)...\r\n", terminator: "\n")
     
     let sessionState = SessionState()
     
@@ -240,6 +211,7 @@ func main() async throws {
     }
     
     await TerminalManager.shared.setInputActive(false)
+    ServerStatus.remove()
     print("\r\nExiting Pecan TUI...\r", terminator: "\n")
 }
 

@@ -4,12 +4,23 @@ import PecanSettings
 
 private let mainLogger = Logger(label: "com.pecan.server.main")
 
-func main() async throws {
-    LoggingSystem.bootstrap { label in
-        var handler = StreamLogHandler.standardError(label: label)
-        handler.logLevel = .info
-        return handler
+/// Starts the HTTP Proxy Server and returns the port it bound to.
+///
+/// - Parameter background: If true, returns immediately after binding. If false, enters an infinite sleep loop.
+@discardableResult
+public func startHTTPProxyServer(background: Bool) async throws -> Int {
+    // Bootstrap logger if needed
+    // (In case this is called from TUI, logging might already be set up, but let's do a basic stdout/stderr log check)
+    struct SimpleLogBootstrap {
+        static let once: Void = {
+            LoggingSystem.bootstrap { label in
+                var handler = StreamLogHandler.standardError(label: label)
+                handler.logLevel = .info
+                return handler
+            }
+        }()
     }
+    _ = SimpleLogBootstrap.once
 
     mainLogger.info("Starting Pecan LLM Proxy Server...")
 
@@ -18,8 +29,7 @@ func main() async throws {
     let defaultModel = config.defaultModel ?? "none"
     mainLogger.info("Config loaded (default model: \(defaultModel))")
 
-    // Start HTTP Proxy Server on a free port (port 0) or port 3000
-    // Let's bind to 0 to dynamically assign a port, or 3000. Bind to 3000 by default, fallback to 0 if busy.
+    // Bind to 3000 by default, fallback to dynamic port
     var port = 3000
     let server = HTTPProxyServer(host: "127.0.0.1", port: port)
     
@@ -47,28 +57,21 @@ func main() async throws {
         mainLogger.error("Failed to write server status: \(error)")
     }
 
-    // Handle shutdown signals
-    for sig in [SIGINT, SIGTERM] {
-        signal(sig) { _ in
-            ServerStatus.remove()
-            mainLogger.info("Shutting down...")
-            exit(0)
+    if !background {
+        // Handle shutdown signals
+        for sig in [SIGINT, SIGTERM] {
+            signal(sig) { _ in
+                ServerStatus.remove()
+                mainLogger.info("Shutting down...")
+                exit(0)
+            }
+        }
+
+        // Keep server running on main thread
+        while true {
+            try await Task.sleep(nanoseconds: 3_600_000_000_000) // 1 hour
         }
     }
 
-    // Keep server running
-    while true {
-        try await Task.sleep(nanoseconds: 3_600_000_000_000) // 1 hour
-    }
+    return boundPort
 }
-
-Task {
-    do {
-        try await main()
-    } catch {
-        mainLogger.critical("Server main crash: \(error)")
-        exit(1)
-    }
-}
-
-RunLoop.main.run()
