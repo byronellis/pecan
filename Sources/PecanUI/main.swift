@@ -229,6 +229,21 @@ func main() async throws {
                 let modelDisplay = agentConfig.model ?? "global default"
                 await TerminalManager.shared.printSystem("Agent '\(activeAgentID)' is using model: \(modelDisplay)")
             }
+            
+            // Trigger model cache refresh in background
+            await TerminalManager.shared.printSystem("Refreshing model lists from enabled providers in background...")
+            Task {
+                if let providers = try? await SettingsStore.shared.allProviders() {
+                    await ModelCacheStandalone.shared.refresh(providers: providers)
+                    for p in providers where p.enabled {
+                        let models = await fetchModels(from: p).map { $0.modelID }
+                        if !models.isEmpty {
+                            try? await SettingsStore.shared.syncActiveModels(providerID: p.id, activeModels: models)
+                        }
+                    }
+                    await TerminalManager.shared.printSystem("Model lists refreshed.")
+                }
+            }
             continue
         }
 
@@ -242,6 +257,21 @@ func main() async throws {
                 await TerminalManager.shared.printSystem("Updated model for agent '\(activeAgentID)' to \(modelDisplay)")
             } else {
                 await TerminalManager.shared.printSystem("No configured agent found for '\(activeAgentID)'")
+            }
+            
+            // Trigger model cache refresh in background
+            await TerminalManager.shared.printSystem("Refreshing model lists from enabled providers in background...")
+            Task {
+                if let providers = try? await SettingsStore.shared.allProviders() {
+                    await ModelCacheStandalone.shared.refresh(providers: providers)
+                    for p in providers where p.enabled {
+                        let models = await fetchModels(from: p).map { $0.modelID }
+                        if !models.isEmpty {
+                            try? await SettingsStore.shared.syncActiveModels(providerID: p.id, activeModels: models)
+                        }
+                    }
+                    await TerminalManager.shared.printSystem("Model lists refreshed.")
+                }
             }
             continue
         }
