@@ -223,13 +223,12 @@ public actor SettingsStore {
             let rows = try Row.fetchAll(db, sql: "SELECT * FROM providers ORDER BY id")
             return rows.map {
                 let id: String = $0["id"]
-                let keychainKey = KeychainHelper.get(key: id)
                 let dbKey: String? = $0["api_key"]
                 return ProviderConfig(
                     id: id,
                     type: $0["type"],
                     url: $0["url"],
-                    apiKey: keychainKey ?? dbKey,
+                    apiKey: dbKey,
                     huggingfaceRepo: $0["hf_repo"],
                     contextWindowOverride: $0["ctx_window_override"],
                     requestTimeout: $0["request_timeout"],
@@ -246,13 +245,12 @@ public actor SettingsStore {
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM providers WHERE id = ?", arguments: [id]) else {
                 return nil
             }
-            let keychainKey = KeychainHelper.get(key: id)
             let dbKey: String? = row["api_key"]
             return ProviderConfig(
                 id: row["id"],
                 type: row["type"],
                 url: row["url"],
-                apiKey: keychainKey ?? dbKey,
+                apiKey: dbKey,
                 huggingfaceRepo: row["hf_repo"],
                 contextWindowOverride: row["ctx_window_override"],
                 requestTimeout: row["request_timeout"],

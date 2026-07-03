@@ -451,19 +451,6 @@ final class ConfigureTUI {
             // ignore
         }
 
-        // Synchronize keys with local running server if active
-        if let port = (try? ServerStatus.read().port) {
-            let keys = KeychainHelper.getAllKeys()
-            if !keys.isEmpty, let data = try? JSONEncoder().encode(keys) {
-                let url = URL(string: "http://127.0.0.1:\(port)/v1/pecan/keys")!
-                var req = URLRequest(url: url)
-                req.httpMethod = "POST"
-                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                req.httpBody = data
-                _ = try? await URLSession.shared.data(for: req)
-            }
-        }
-
         shouldExit = true
     }
 
