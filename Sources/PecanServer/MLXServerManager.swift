@@ -1,94 +1,96 @@
 import Foundation
 import Logging
 import PecanSettings
+import MLXLMCommon
+import MLXLLM
+import MLXHuggingFace
+import HuggingFace
+import Tokenizers
 
 private let serverLogger = Logger(label: "com.pecan.mlx-manager")
 
 public actor MLXServerManager {
     public static let shared = MLXServerManager()
-    private var activeProcesses: [String: Process] = [:]
-
+    
+    private var currentModelContainer: ModelContainer? = nil
+    private var currentModelID: String? = nil
+    
     private init() {}
-
-    public func ensureRunning(provider: ProviderConfig) async {
-        guard provider.type.lowercased() == "mlx",
-              let repo = provider.huggingfaceRepo, !repo.isEmpty,
-              let urlStr = provider.url,
-              let url = URL(string: urlStr),
-              let host = url.host else { return }
-
-        let port = url.port ?? 8080
-
-        // Check if already running
-        if await isServerAlive(url: url) {
-            serverLogger.info("MLX server already running at \(urlStr)")
-            return
+    
+    public func getContainer(provider: ProviderConfig) async throws -> ModelContainer {
+        guard let repo = provider.huggingfaceRepo, !repo.isEmpty else {
+            throw NSError(domain: "MLXServerManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "Provider '\(provider.id)' does not specify a HuggingFace Repo."])
         }
-
-        // If a process is already tracked, terminate it to restart fresh
-        if let oldProc = activeProcesses[provider.id] {
-            oldProc.terminate()
-            activeProcesses.removeValue(forKey: provider.id)
-        }
-
-        serverLogger.info("Launching local MLX server for \(repo) on port \(port)...")
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        process.arguments = ["python3", "-m", "mlx_lm.server", "--model", repo, "--port", "\(port)", "--host", host]
         
-        let logsDir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/logs")
-        try? FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
-        let logPath = logsDir.appendingPathComponent("mlx-\(provider.id).log").path
-        FileManager.default.createFile(atPath: logPath, contents: nil)
-
-        if let logHandle = try? FileHandle(forWritingTo: URL(fileURLWithPath: logPath)) {
-            process.standardOutput = logHandle
-            process.standardError = logHandle
+        if let container = currentModelContainer, currentModelID == repo {
+            return container
         }
-
-        do {
-            try process.run()
-            activeProcesses[provider.id] = process
-            serverLogger.info("MLX server process started (PID \(process.processIdentifier)). Logs: \(logPath)")
-
-            // Wait for it to become alive (up to 45 seconds for model load)
-            for _ in 0..<90 {
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                if await isServerAlive(url: url) {
-                    serverLogger.info("MLX server is now online at \(urlStr)")
-                    return
-                }
-                if !process.isRunning {
-                    serverLogger.error("MLX server process exited prematurely. Check logs at: \(logPath)")
-                    break
-                }
-            }
-        } catch {
-            serverLogger.error("Failed to launch MLX server: \(error.localizedDescription)")
+        
+        // Unload old container if any
+        currentModelContainer = nil
+        currentModelID = repo
+        
+        serverLogger.info("Loading local MLX model '\(repo)' natively in-process using SwiftMLX...")
+        
+        // Use LLMModelFactory with MLXHuggingFace downloader and tokenizer loaders
+        let container = try await LLMModelFactory.shared.loadContainer(
+            from: #hubDownloader(),
+            using: #huggingFaceTokenizerLoader(),
+            configuration: ModelConfiguration(id: repo)
+        ) { progress in
+            let pct = Int(progress.fractionCompleted * 100)
+            serverLogger.info("Loading model progress: \(pct)%")
         }
+        
+        currentModelContainer = container
+        serverLogger.info("Model '\(repo)' successfully loaded into SwiftMLX memory.")
+        return container
     }
-
-    private func isServerAlive(url: URL) async -> Bool {
-        let checkURL = url.appendingPathComponent("v1/models")
-        var req = URLRequest(url: checkURL)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 1.0
-        do {
-            let (_, response) = try await URLSession.shared.data(for: req)
-            if let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) {
-                return true
+    
+    public func generateInProcess(
+        container: ModelContainer,
+        messages: [[String: String]],
+        parameters: GenerateParameters,
+        onChunk: @Sendable @escaping (String) -> Void
+    ) async throws -> String {
+        // 1. Format prompt using chat template
+        let formattedPrompt = try await container.perform { context in
+            let tokens = try context.tokenizer.applyChatTemplate(messages: messages)
+            return context.tokenizer.decode(tokenIds: tokens)
+        }
+        
+        // 2. Perform generation
+        let fullOutput = try await container.perform { context in
+            let input = try await context.processor.prepare(input: UserInput(prompt: formattedPrompt))
+            
+            var generatedText = ""
+            var currentLength = 0
+            
+            _ = try MLXLMCommon.generate(
+                input: input,
+                parameters: parameters,
+                context: context
+            ) { tokens in
+                // Decode full sequence generated so far
+                let text = context.tokenizer.decode(tokenIds: tokens)
+                // Extract only the new chunk
+                if text.count > currentLength {
+                    let chunk = String(text.dropFirst(currentLength))
+                    currentLength = text.count
+                    generatedText += chunk
+                    onChunk(chunk)
+                }
+                return .more
             }
-        } catch {}
-        return false
+            return generatedText
+        }
+        return fullOutput
     }
-
+    
     public func shutdownAll() {
-        for (id, proc) in activeProcesses {
-            if proc.isRunning {
-                serverLogger.info("Terminating MLX server process for \(id)...")
-                proc.terminate()
-            }
-        }
+        // Free memory by releasing the loaded model container
+        currentModelContainer = nil
+        currentModelID = nil
+        serverLogger.info("Unloaded all SwiftMLX models.")
     }
 }

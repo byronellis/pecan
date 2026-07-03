@@ -4,6 +4,7 @@ import NIOHTTP1
 import NIOPosix
 import PecanSettings
 import Logging
+import MLXLMCommon
 
 private let serverLogger = Logger(label: "com.pecan.proxy-server")
 
@@ -178,12 +179,114 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                     return
                 }
 
-                // Auto-launch local MLX server if not running
-                if provider.type.lowercased() == "mlx" {
-                    await MLXServerManager.shared.ensureRunning(provider: provider)
-                }
-
                 let stream = json["stream"] as? Bool ?? false
+
+                if provider.type.lowercased() == "mlx" {
+                    let container = try await MLXServerManager.shared.getContainer(provider: provider)
+                    
+                    var messagesList: [[String: String]] = []
+                    if let msgArray = json["messages"] as? [[String: Any]] {
+                        for msg in msgArray {
+                            if let role = msg["role"] as? String,
+                               let content = msg["content"] as? String {
+                                messagesList.append(["role": role, "content": content])
+                            }
+                        }
+                    }
+                    
+                    var genParams = GenerateParameters()
+                    if let maxT = json["max_tokens"] as? Int {
+                        genParams.maxTokens = maxT
+                    }
+                    if let temp = json["temperature"] as? Double {
+                        genParams.temperature = Float(temp)
+                    }
+                    if let topP = json["top_p"] as? Double {
+                        genParams.topP = Float(topP)
+                    }
+                    
+                    let modelName = targetModel
+                    let reqId = "chatcmpl-" + UUID().uuidString.prefix(12)
+                    let createdTime = Int(Date().timeIntervalSince1970)
+                    
+                    if stream {
+                        sendStreamHeaders(context: box.context)
+                        
+                        _ = try await MLXServerManager.shared.generateInProcess(
+                            container: container,
+                            messages: messagesList,
+                            parameters: genParams,
+                            onChunk: { chunk in
+                                let chunkJSON: [String: Any] = [
+                                    "id": reqId,
+                                    "object": "chat.completion.chunk",
+                                    "created": createdTime,
+                                    "model": modelName,
+                                    "choices": [[
+                                        "index": 0,
+                                        "delta": ["content": chunk],
+                                        "finish_reason": NSNull()
+                                    ]]
+                                ]
+                                if let d = try? JSONSerialization.data(withJSONObject: chunkJSON),
+                                   let s = String(data: d, encoding: .utf8) {
+                                    let event = "data: \(s)\n\n"
+                                    if let ed = event.data(using: .utf8) {
+                                        writeStreamChunk(context: box.context, data: ed)
+                                    }
+                                }
+                            }
+                        )
+                        
+                        let stopJSON: [String: Any] = [
+                            "id": reqId,
+                            "object": "chat.completion.chunk",
+                            "created": createdTime,
+                            "model": modelName,
+                            "choices": [[
+                                "index": 0,
+                                "delta": [:],
+                                "finish_reason": "stop"
+                            ]]
+                        ]
+                        if let d = try? JSONSerialization.data(withJSONObject: stopJSON),
+                           let s = String(data: d, encoding: .utf8),
+                           let ed = "data: \(s)\n\ndata: [DONE]\n\n".data(using: .utf8) {
+                            writeStreamChunk(context: box.context, data: ed)
+                        }
+                        sendStreamEnd(context: box.context)
+                    } else {
+                        let responseText = try await MLXServerManager.shared.generateInProcess(
+                            container: container,
+                            messages: messagesList,
+                            parameters: genParams,
+                            onChunk: { _ in }
+                        )
+                        
+                        let responseJSON: [String: Any] = [
+                            "id": reqId,
+                            "object": "chat.completion",
+                            "created": createdTime,
+                            "model": modelName,
+                            "choices": [[
+                                "index": 0,
+                                "message": [
+                                    "role": "assistant",
+                                    "content": responseText
+                                ],
+                                "finish_reason": "stop"
+                            ]],
+                            "usage": [
+                                "prompt_tokens": 0,
+                                "completion_tokens": 0,
+                                "total_tokens": 0
+                            ]
+                        ]
+                        let responseData = try JSONSerialization.data(withJSONObject: responseJSON)
+                        sendJSONResponse(context: box.context, data: responseData)
+                    }
+                    return
+                }
 
                 if provider.type.lowercased() == "anthropic" {
                     // Translate request payload: OpenAI -> Anthropic
@@ -269,12 +372,112 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                     return
                 }
 
-                // Auto-launch local MLX server if not running
-                if provider.type.lowercased() == "mlx" {
-                    await MLXServerManager.shared.ensureRunning(provider: provider)
-                }
-
                 let stream = json["stream"] as? Bool ?? false
+
+                if provider.type.lowercased() == "mlx" {
+                    let container = try await MLXServerManager.shared.getContainer(provider: provider)
+                    
+                    var messagesList: [[String: String]] = []
+                    if let system = json["system"] as? String {
+                        messagesList.append(["role": "system", "content": system])
+                    }
+                    if let msgArray = json["messages"] as? [[String: Any]] {
+                        for msg in msgArray {
+                            if let role = msg["role"] as? String,
+                               let content = msg["content"] as? String {
+                                messagesList.append(["role": role, "content": content])
+                            }
+                        }
+                    }
+                    
+                    var genParams = GenerateParameters()
+                    if let maxT = json["max_tokens"] as? Int {
+                        genParams.maxTokens = maxT
+                    }
+                    if let temp = json["temperature"] as? Double {
+                        genParams.temperature = Float(temp)
+                    }
+                    if let topP = json["top_p"] as? Double {
+                        genParams.topP = Float(topP)
+                    }
+                    
+                    let modelName = targetModel
+                    let reqId = "msg_" + UUID().uuidString.prefix(12)
+                    
+                    if stream {
+                        sendStreamHeaders(context: box.context)
+                        
+                        // Send start event
+                        let startJSON: [String: Any] = [
+                            "type": "message_start",
+                            "message": [
+                                "id": reqId,
+                                "type": "message",
+                                "role": "assistant",
+                                "content": [],
+                                "model": modelName
+                            ]
+                        ]
+                        if let d = try? JSONSerialization.data(withJSONObject: startJSON),
+                           let s = String(data: d, encoding: .utf8),
+                           let ed = "data: \(s)\n\n".data(using: .utf8) {
+                            writeStreamChunk(context: box.context, data: ed)
+                        }
+                        
+                        _ = try await MLXServerManager.shared.generateInProcess(
+                            container: container,
+                            messages: messagesList,
+                            parameters: genParams,
+                            onChunk: { chunk in
+                                let chunkJSON: [String: Any] = [
+                                    "type": "content_block_delta",
+                                    "index": 0,
+                                    "delta": [
+                                        "type": "text_delta",
+                                        "text": chunk
+                                    ]
+                                ]
+                                if let d = try? JSONSerialization.data(withJSONObject: chunkJSON),
+                                   let s = String(data: d, encoding: .utf8) {
+                                    let event = "data: \(s)\n\n"
+                                    if let ed = event.data(using: .utf8) {
+                                        writeStreamChunk(context: box.context, data: ed)
+                                    }
+                                }
+                            }
+                        )
+                        
+                        let stopJSON: [String: Any] = ["type": "message_stop"]
+                        if let d = try? JSONSerialization.data(withJSONObject: stopJSON),
+                           let s = String(data: d, encoding: .utf8),
+                           let ed = "data: \(s)\n\n".data(using: .utf8) {
+                            writeStreamChunk(context: box.context, data: ed)
+                        }
+                        sendStreamEnd(context: box.context)
+                    } else {
+                        let responseText = try await MLXServerManager.shared.generateInProcess(
+                            container: container,
+                            messages: messagesList,
+                            parameters: genParams,
+                            onChunk: { _ in }
+                        )
+                        
+                        let responseJSON: [String: Any] = [
+                            "id": reqId,
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [[
+                                "type": "text",
+                                "text": responseText
+                            ]],
+                            "model": modelName,
+                            "stop_reason": "end_turn"
+                        ]
+                        let responseData = try JSONSerialization.data(withJSONObject: responseJSON)
+                        sendJSONResponse(context: box.context, data: responseData)
+                    }
+                    return
+                }
 
                 if provider.type.lowercased() == "anthropic" {
                     // Straight forward to Anthropic
