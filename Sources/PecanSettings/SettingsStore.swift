@@ -77,6 +77,21 @@ public struct KeychainHelper {
         return saveDictionary(dict)
     }
 
+    public static func setMultiple(_ keys: [String: String]) -> Bool {
+        var dict = loadDictionary()
+        var changed = false
+        for (k, v) in keys {
+            if dict[k] != v {
+                dict[k] = v
+                changed = true
+            }
+        }
+        if changed {
+            return saveDictionary(dict)
+        }
+        return true
+    }
+
     public static func get(key: String) -> String? {
         let dict = loadDictionary()
         return dict[key]

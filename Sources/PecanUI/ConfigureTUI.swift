@@ -389,12 +389,19 @@ final class ConfigureTUI {
             KeychainHelper.delete(key: id)
         }
         
-        // Write the configured settings back to SQLite DB and Keychain
+        // Collect all keychain keys to write
+        var keychainKeys: [String: String] = [:]
         for p in inMemoryProviders {
             if let key = p.apiKey, !key.isEmpty, key != "keychain" {
-                _ = KeychainHelper.set(key: p.id, value: key)
+                keychainKeys[p.id] = key
             }
-            
+        }
+        if !keychainKeys.isEmpty {
+            _ = KeychainHelper.setMultiple(keychainKeys)
+        }
+        
+        // Write the configured settings back to SQLite DB and Keychain
+        for p in inMemoryProviders {
             let hasKey = (p.apiKey != nil && !p.apiKey!.isEmpty)
             let dbKey = hasKey ? "keychain" : nil
             

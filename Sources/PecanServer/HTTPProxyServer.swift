@@ -1099,85 +1099,111 @@ extension HTTPProxyHandler {
     // MARK: - HTTP Writing Utilities
 
     private static func sendStreamHeaders(context: ChannelHandlerContext) {
-        var headers = HTTPHeaders()
-        headers.add(name: "Content-Type", value: "text/event-stream")
-        headers.add(name: "Cache-Control", value: "no-cache")
-        headers.add(name: "Connection", value: "keep-alive")
-        headers.add(name: "Access-Control-Allow-Origin", value: "*")
-        headers.add(name: "Access-Control-Allow-Methods", value: "POST, GET, OPTIONS")
-        headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization")
-        
-        let head = HTTPResponseHead(version: .http1_1, status: .ok, headers: headers)
-        context.write(self.wrapOutboundOut(.head(head)), promise: nil)
-        context.flush()
+        let box = ChannelBox(context: context)
+        context.eventLoop.execute {
+            var headers = HTTPHeaders()
+            headers.add(name: "Content-Type", value: "text/event-stream")
+            headers.add(name: "Cache-Control", value: "no-cache")
+            headers.add(name: "Connection", value: "keep-alive")
+            headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            headers.add(name: "Access-Control-Allow-Methods", value: "POST, GET, OPTIONS")
+            headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization")
+            
+            let head = HTTPResponseHead(version: .http1_1, status: .ok, headers: headers)
+            box.context.write(self.wrapOutboundOut(.head(head)), promise: nil)
+            box.context.flush()
+        }
     }
 
     private static func writeStreamChunk(context: ChannelHandlerContext, data: Data) {
-        var buffer = context.channel.allocator.buffer(capacity: data.count)
-        buffer.writeBytes(data)
-        context.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
-        context.flush()
+        let box = ChannelBox(context: context)
+        context.eventLoop.execute {
+            var buffer = box.context.channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            box.context.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+            box.context.flush()
+        }
     }
 
     private static func sendStreamEnd(context: ChannelHandlerContext) {
-        context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        let box = ChannelBox(context: context)
+        context.eventLoop.execute {
+            box.context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        }
     }
 
     private static func sendJSONResponse(context: ChannelHandlerContext, data: Data) {
-        var headers = HTTPHeaders()
-        headers.add(name: "Content-Type", value: "application/json")
-        headers.add(name: "Content-Length", value: "\(data.count)")
-        headers.add(name: "Access-Control-Allow-Origin", value: "*")
-        headers.add(name: "Access-Control-Allow-Methods", value: "POST, GET, OPTIONS")
-        headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization")
-        
-        let head = HTTPResponseHead(version: .http1_1, status: .ok, headers: headers)
-        context.write(self.wrapOutboundOut(.head(head)), promise: nil)
-        
-        var buffer = context.channel.allocator.buffer(capacity: data.count)
-        buffer.writeBytes(data)
-        context.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
-        
-        context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        let box = ChannelBox(context: context)
+        context.eventLoop.execute {
+            var headers = HTTPHeaders()
+            headers.add(name: "Content-Type", value: "application/json")
+            headers.add(name: "Content-Length", value: "\(data.count)")
+            headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            headers.add(name: "Access-Control-Allow-Methods", value: "POST, GET, OPTIONS")
+            headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization")
+            
+            let head = HTTPResponseHead(version: .http1_1, status: .ok, headers: headers)
+            box.context.write(self.wrapOutboundOut(.head(head)), promise: nil)
+            
+            var buffer = box.context.channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            box.context.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+            
+            box.context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        }
     }
 
     private static func sendCORSResponse(context: ChannelHandlerContext, status: HTTPResponseStatus) {
-        var headers = HTTPHeaders()
-        headers.add(name: "Access-Control-Allow-Origin", value: "*")
-        headers.add(name: "Access-Control-Allow-Methods", value: "POST, GET, OPTIONS")
-        headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization")
-        headers.add(name: "Content-Length", value: "0")
-        
-        let head = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
-        context.write(self.wrapOutboundOut(.head(head)), promise: nil)
-        context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        let box = ChannelBox(context: context)
+        context.eventLoop.execute {
+            var headers = HTTPHeaders()
+            headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            headers.add(name: "Access-Control-Allow-Methods", value: "POST, GET, OPTIONS")
+            headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization")
+            headers.add(name: "Content-Length", value: "0")
+            
+            let head = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
+            box.context.write(self.wrapOutboundOut(.head(head)), promise: nil)
+            box.context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+        }
     }
 
     private static func sendErrorResponse(context: ChannelHandlerContext, status: HTTPResponseStatus, message: String) {
-        let errJSON: [String: Any] = [
-            "error": [
-                "message": message,
-                "type": "proxy_error",
-                "code": status.code
+        let box = ChannelBox(context: context)
+        context.eventLoop.execute {
+            let errJSON: [String: Any] = [
+                "error": [
+                    "message": message,
+                    "type": "proxy_error",
+                    "code": status.code
+                ]
             ]
-        ]
-        guard let data = try? JSONSerialization.data(withJSONObject: errJSON) else {
-            sendCORSResponse(context: context, status: status)
-            return
+            guard let data = try? JSONSerialization.data(withJSONObject: errJSON) else {
+                // Inline sendCORSResponse logic
+                var headers = HTTPHeaders()
+                headers.add(name: "Access-Control-Allow-Origin", value: "*")
+                headers.add(name: "Access-Control-Allow-Methods", value: "POST, GET, OPTIONS")
+                headers.add(name: "Access-Control-Allow-Headers", value: "Content-Type, Authorization")
+                headers.add(name: "Content-Length", value: "0")
+                let head = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
+                box.context.write(self.wrapOutboundOut(.head(head)), promise: nil)
+                box.context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+                return
+            }
+            
+            var headers = HTTPHeaders()
+            headers.add(name: "Content-Type", value: "application/json")
+            headers.add(name: "Content-Length", value: "\(data.count)")
+            headers.add(name: "Access-Control-Allow-Origin", value: "*")
+            
+            let head = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
+            box.context.write(self.wrapOutboundOut(.head(head)), promise: nil)
+            
+            var buffer = box.context.channel.allocator.buffer(capacity: data.count)
+            buffer.writeBytes(data)
+            box.context.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
+            
+            box.context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
         }
-        
-        var headers = HTTPHeaders()
-        headers.add(name: "Content-Type", value: "application/json")
-        headers.add(name: "Content-Length", value: "\(data.count)")
-        headers.add(name: "Access-Control-Allow-Origin", value: "*")
-        
-        let head = HTTPResponseHead(version: .http1_1, status: status, headers: headers)
-        context.write(self.wrapOutboundOut(.head(head)), promise: nil)
-        
-        var buffer = context.channel.allocator.buffer(capacity: data.count)
-        buffer.writeBytes(data)
-        context.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
-        
-        context.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
     }
 }
