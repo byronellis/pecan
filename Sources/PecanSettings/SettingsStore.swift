@@ -6,29 +6,52 @@ import Security
 public struct KeychainHelper {
     public static let service = "com.pecan.provider-keys"
 
+    /// In-process cache: once a key is read from Keychain (which may prompt), we
+    /// remember it for the rest of the process lifetime so subsequent reads are
+    /// free and silent. Cleared only when a key is explicitly updated or deleted.
+    private nonisolated(unsafe) static var cache: [String: String] = [:]
+    private static let lock = NSLock()
+
     public static func set(key: String, value: String) -> Bool {
         guard let data = value.data(using: .utf8) else { return false }
-        
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key
         ]
-        
+
         SecItemDelete(query as CFDictionary)
-        
+
+        // kSecAttrAccessibleAfterFirstUnlock: no user-interaction prompt at runtime;
+        // only requires the device to have been unlocked once since boot.
         let attributes: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: key,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
             kSecValueData as String: data
         ]
-        
+
         let status = SecItemAdd(attributes as CFDictionary, nil)
-        return status == errSecSuccess
+        if status == errSecSuccess {
+            lock.lock()
+            cache[key] = value
+            lock.unlock()
+            return true
+        }
+        return false
     }
 
     public static func get(key: String) -> String? {
+        // Return cached value if available — avoids repeated Keychain prompts.
+        lock.lock()
+        if let cached = cache[key] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -36,18 +59,26 @@ public struct KeychainHelper {
             kSecReturnData as String: kCFBooleanTrue!,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
-        
+
         var dataTypeRef: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &dataTypeRef)
-        
-        guard status == errSecSuccess, let data = dataTypeRef as? Data else {
+
+        guard status == errSecSuccess, let data = dataTypeRef as? Data,
+              let value = String(data: data, encoding: .utf8) else {
             return nil
         }
-        
-        return String(data: data, encoding: .utf8)
+
+        lock.lock()
+        cache[key] = value
+        lock.unlock()
+        return value
     }
 
     public static func delete(key: String) {
+        lock.lock()
+        cache.removeValue(forKey: key)
+        lock.unlock()
+
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
@@ -56,6 +87,7 @@ public struct KeychainHelper {
         SecItemDelete(query as CFDictionary)
     }
 }
+
 
 /// Persistent settings store at ~/.pecan/settings.db.
 /// Replaces the old ~/.pecan/config.yaml.
