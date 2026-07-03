@@ -55,6 +55,10 @@ final class ConfigureTUI {
     private var editEnabled: Bool = false
     private var editActiveModels: Set<String> = []
 
+    // Custom model ID manual insertion state
+    private var isAddingModelID = false
+    private var newModelIDBuffer = ""
+
     // Directory Explorer state
     private var isShowingDirExplorer = false
     private var explorerPath: String = ""
@@ -334,6 +338,41 @@ final class ConfigureTUI {
     }
 
     private func handleFormKey(_ key: InputKey, isNew: Bool, index: Int?) async -> Bool {
+        if isAddingModelID {
+            switch key {
+            case .enter:
+                let mName = newModelIDBuffer.trimmingCharacters(in: .whitespaces)
+                if !mName.isEmpty {
+                    editActiveModels.insert(mName)
+                    let pid = editID.isEmpty ? "new_custom" : editID
+                    var avail = inMemoryAvailableModels[pid] ?? []
+                    if !avail.contains(mName) {
+                        avail.append(mName)
+                        inMemoryAvailableModels[pid] = avail.sorted()
+                    }
+                    rebuildFormFields(index: index)
+                }
+                isAddingModelID = false
+                newModelIDBuffer = ""
+                return true
+            case .escape:
+                isAddingModelID = false
+                newModelIDBuffer = ""
+                return true
+            case .character(let c):
+                newModelIDBuffer.append(c)
+                return true
+            case .backspace:
+                if !newModelIDBuffer.isEmpty {
+                    newModelIDBuffer.removeLast()
+                }
+                return true
+            default:
+                break
+            }
+            return true
+        }
+
         if formEditingField != nil {
             switch key {
             case .enter:
@@ -439,6 +478,7 @@ final class ConfigureTUI {
         }
 
         baseFields.append("Refresh Model List")
+        baseFields.append("Add Active Model ID")
         
         // Append loaded available models
         let pid = editID.isEmpty ? "new_custom" : editID
@@ -572,6 +612,9 @@ final class ConfigureTUI {
             // Launch directory explorer
             openDirectoryExplorer()
             
+        } else if label.contains("Add Active Model ID") {
+            isAddingModelID = true
+            newModelIDBuffer = ""
         } else if label.contains("Refresh Model List") {
             // Trigger loading models
             await refreshActiveModelList(index: index)
@@ -643,11 +686,11 @@ final class ConfigureTUI {
                 return
             }
             
-            let fetched = await fetchRemoteModels(url: urlToFetch, apiKey: resolvedKey)
-            if fetched.isEmpty {
-                formError = "Failed to fetch models from API. Verify endpoint or credentials."
+            let result = await fetchRemoteModels(url: urlToFetch, apiKey: resolvedKey)
+            if let error = result.error {
+                formError = "Error: \(error)"
             } else {
-                inMemoryAvailableModels[pid] = fetched
+                inMemoryAvailableModels[pid] = result.models
             }
         }
         
@@ -773,7 +816,7 @@ final class ConfigureTUI {
         return models.sorted()
     }
 
-    private func fetchRemoteModels(url: String, apiKey: String) async -> [String] {
+    private func fetchRemoteModels(url: String, apiKey: String) async -> (models: [String], error: String?) {
         var cleanURL = url
         if !cleanURL.hasSuffix("/models") {
             if cleanURL.hasSuffix("/") {
@@ -783,7 +826,9 @@ final class ConfigureTUI {
             }
         }
         
-        guard let requestURL = URL(string: cleanURL) else { return [] }
+        guard let requestURL = URL(string: cleanURL) else {
+            return ([], "Invalid URL format.")
+        }
         var request = URLRequest(url: requestURL)
         request.httpMethod = "GET"
         request.timeoutInterval = 10.0
@@ -794,8 +839,17 @@ final class ConfigureTUI {
         
         do {
             let (data, response) = try await URLSession.shared.data(for: request)
-            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
-                return []
+            guard let httpResponse = response as? HTTPURLResponse else {
+                return ([], "No HTTP response received.")
+            }
+            if httpResponse.statusCode == 401 {
+                return ([], "Unauthorized (401) - invalid API Key.")
+            }
+            if httpResponse.statusCode == 403 {
+                return ([], "Forbidden (403) - access denied.")
+            }
+            if httpResponse.statusCode != 200 {
+                return ([], "HTTP Error \(httpResponse.statusCode).")
             }
             
             struct ModelItem: Codable {
@@ -806,9 +860,9 @@ final class ConfigureTUI {
             }
             
             let decoded = try JSONDecoder().decode(ModelResponse.self, from: data)
-            return decoded.data.map { $0.id }.sorted()
+            return (decoded.data.map { $0.id }.sorted(), nil)
         } catch {
-            return []
+            return ([], error.localizedDescription)
         }
     }
 
@@ -1090,6 +1144,14 @@ final class ConfigureTUI {
             } else if label.contains("Refresh Model List") {
                 let display = isSelected ? "[ \(label) ]" : "  [\(label)]"
                 buffer.writeString(x: contentX + 2, y: y, string: display, style: isSelected ? style : BIOSStyle.fgCyan + BIOSStyle.bold)
+            } else if label.contains("Add Active Model ID") {
+                if isAddingModelID {
+                    let display = "Enter Model ID:       \(newModelIDBuffer)█"
+                    buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                } else {
+                    let display = isSelected ? "[ \(label) ]" : "  [\(label)]"
+                    buffer.writeString(x: contentX + 2, y: y, string: display, style: isSelected ? style : BIOSStyle.fgCyan + BIOSStyle.bold)
+                }
             } else if label.contains("Active Status") {
                 let valStr = editEnabled ? "Yes (Active)" : "No (Inactive)"
                 let display = "Active Status:         \(valStr)"
