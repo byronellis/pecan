@@ -12,6 +12,19 @@ public struct KeychainHelper {
     private nonisolated(unsafe) static var cache: [String: String]? = nil
     private static let lock = NSLock()
 
+    public static func setCache(_ dict: [String: String]) {
+        lock.lock()
+        cache = dict
+        lock.unlock()
+    }
+
+    public static func getCache() -> [String: String]? {
+        lock.lock()
+        let c = cache
+        lock.unlock()
+        return c
+    }
+
     private static func loadDictionary() -> [String: String] {
         lock.lock()
         if let cached = cache {
@@ -95,6 +108,10 @@ public struct KeychainHelper {
     public static func get(key: String) -> String? {
         let dict = loadDictionary()
         return dict[key]
+    }
+
+    public static func getAllKeys() -> [String: String] {
+        return loadDictionary()
     }
 
     public static func delete(key: String) {

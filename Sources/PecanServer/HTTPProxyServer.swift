@@ -131,8 +131,33 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
             let data = Data(body.readableBytesView)
             handleAnthropicMessages(context: context, requestData: data)
             
+        case (.POST, "/v1/pecan/keys"), (.POST, "/pecan/keys"):
+            guard let body = body else {
+                sendErrorResponse(context: context, status: .badRequest, message: "Missing request body")
+                return
+            }
+            let data = Data(body.readableBytesView)
+            handleSyncKeys(context: context, requestData: data)
+            
         default:
             sendErrorResponse(context: context, status: .notFound, message: "Endpoint \(head.method) \(path) not found")
+        }
+    }
+
+    private static func handleSyncKeys(context: ChannelHandlerContext, requestData: Data) {
+        let box = ChannelBox(context: context)
+        guard let keys = (try? JSONDecoder().decode([String: String].self, from: requestData)) else {
+            sendErrorResponse(context: box.context, status: .badRequest, message: "Invalid sync keys payload")
+            return
+        }
+        
+        KeychainHelper.setCache(keys)
+        
+        let response: [String: Any] = ["status": "ok"]
+        if let resData = try? JSONSerialization.data(withJSONObject: response) {
+            sendJSONResponse(context: box.context, data: resData)
+        } else {
+            sendErrorResponse(context: box.context, status: .internalServerError, message: "Failed to serialize response")
         }
     }
 

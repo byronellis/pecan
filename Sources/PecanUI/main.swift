@@ -92,6 +92,9 @@ func main() async throws {
         print("Error starting proxy server: \(error.localizedDescription)\r")
         exit(1)
     }
+    
+    // Sync keychain keys to the server
+    await syncKeysToServer(port: serverPort)
 
     // Set project context path
     let projectDir = FileManager.default.currentDirectoryPath
@@ -292,6 +295,21 @@ func main() async throws {
     await TerminalManager.shared.setInputActive(false)
     ServerStatus.remove()
     print("\r\nExiting Pecan TUI...\r", terminator: "\n")
+}
+
+func syncKeysToServer(port: Int) async {
+    let keys = KeychainHelper.getAllKeys()
+    guard !keys.isEmpty else { return }
+    
+    guard let data = try? JSONEncoder().encode(keys) else { return }
+    
+    let url = URL(string: "http://127.0.0.1:\(port)/v1/pecan/keys")!
+    var req = URLRequest(url: url)
+    req.httpMethod = "POST"
+    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    req.httpBody = data
+    
+    _ = try? await URLSession.shared.data(for: req)
 }
 
 // Start TUI
