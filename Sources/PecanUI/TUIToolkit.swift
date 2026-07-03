@@ -130,23 +130,24 @@ class TUIBuffer {
         var output = ""
         output += "\u{1B}[H" // Move to 1,1
         
+        let defaultStyle = BIOSStyle.bgBlue + BIOSStyle.fgWhite
+        
         for y in 0..<height {
             var currentStyle = ""
             for x in 0..<width {
                 let cell = cells[y * width + x]
-                if cell.style != currentStyle {
-                    output += BIOSStyle.reset + cell.style
-                    currentStyle = cell.style
+                let cellStyle = cell.style.isEmpty ? defaultStyle : cell.style
+                if cellStyle != currentStyle {
+                    output += BIOSStyle.reset + cellStyle
+                    currentStyle = cellStyle
                 }
                 output += String(cell.char)
-            }
-            if !currentStyle.isEmpty {
-                output += BIOSStyle.reset
             }
             if y < height - 1 {
                 output += "\r\n"
             }
         }
+        output += BIOSStyle.reset
         return output
     }
 }

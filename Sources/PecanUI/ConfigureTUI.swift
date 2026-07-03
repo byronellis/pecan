@@ -49,12 +49,14 @@ final class ConfigureTUI {
         }
 
         enableRawMode()
-        print("\u{1B}[?25l", terminator: "") // hide cursor
+        // Enter alternate screen buffer and hide cursor
+        print("\u{1B}[?1049h\u{1B}[?25l", terminator: "")
+        fflush(stdout)
+        
         defer {
-            print("\u{1B}[?25h", terminator: "") // show cursor
+            // Exit alternate screen buffer and show cursor
+            print("\u{1B}[?1049l\u{1B}[?25h", terminator: "")
             disableRawMode()
-            // Clear screen when leaving
-            print("\u{1B}[2J\u{1B}[H", terminator: "")
             fflush(stdout)
         }
 
@@ -289,7 +291,8 @@ final class ConfigureTUI {
         buffer.writeString(x: 0, y: helpY, string: helpBar.padding(toLength: w, withPad: " ", startingAt: 0), style: BIOSStyle.reverse + BIOSStyle.bold)
         
         let credit = " Pecan UI Config Editor v2.0"
-        buffer.writeString(x: 0, y: h - 1, string: credit.padding(toLength: w, withPad: " ", startingAt: 0), style: BIOSStyle.fgGray)
+        // Pad to w - 1 to leave the bottom-right character blank, preventing automatic cursor wrap scroll.
+        buffer.writeString(x: 0, y: h - 1, string: credit.padding(toLength: w - 1, withPad: " ", startingAt: 0), style: BIOSStyle.fgGray)
 
         print(buffer.renderString(), terminator: "")
         fflush(stdout)
