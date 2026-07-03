@@ -27,6 +27,8 @@ final class ConfigureTUI {
 
     // Memory-only configuration state
     private var inMemoryProviders: [ProviderConfig] = []
+    private var inMemoryActiveModels: [String: [String]] = [:]     // provider_id -> active model IDs
+    private var inMemoryAvailableModels: [String: [String]] = [:]  // provider_id -> all discovered/fetched model IDs
     
     // Sub-navigation inside providers screen
     private enum SubScreen {
@@ -51,6 +53,24 @@ final class ConfigureTUI {
     private var editKey: String = ""
     private var editHF: String = ""
     private var editEnabled: Bool = false
+    private var editActiveModels: Set<String> = []
+
+    // Directory Explorer state
+    private var isShowingDirExplorer = false
+    private var explorerPath: String = ""
+    private var explorerLeftItems: [String] = []
+    private var explorerLeftSelectedIndex: Int = 0
+    private var explorerRightItems: [String] = []
+
+    // Model Info Modal state
+    private var isShowingModelModal = false
+    private var modalModelID: String = ""
+    private var modalModelCostIn: String = ""
+    private var modalModelCostOut: String = ""
+    private var modalModelCtx: String = ""
+
+    // Loading indicator state
+    private var isFetchingModels = false
 
     init() {
         let items = [
@@ -86,7 +106,7 @@ final class ConfigureTUI {
             inMemoryProviders.append(ProviderConfig(id: "mlx", type: "mlx", url: "http://127.0.0.1:8080/v1", enabled: false))
         }
         
-        // 2. Add "Fireworks.ai"
+        // 2. Add "Fireworks.AI"
         if let fireworks = existing.first(where: { $0.id == "fireworks" }) {
             inMemoryProviders.append(fireworks)
         } else {
@@ -104,6 +124,16 @@ final class ConfigureTUI {
         for p in existing {
             if p.id != "mlx" && p.id != "fireworks" && p.id != "huggingface" {
                 inMemoryProviders.append(p)
+            }
+        }
+
+        // Load active models from DB for each loaded provider
+        for p in inMemoryProviders {
+            let active = (try? await SettingsStore.shared.activeModels(providerID: p.id)) ?? []
+            inMemoryActiveModels[p.id] = active
+            
+            if p.id == "mlx", let repo = p.huggingfaceRepo {
+                inMemoryAvailableModels["mlx"] = scanMLXModels(dirPath: repo)
             }
         }
 
@@ -126,7 +156,13 @@ final class ConfigureTUI {
             if let key = nextKey() {
                 var handled = false
                 
-                if splitLayout.activePane == .mainPanel {
+                if isShowingModelModal {
+                    // Modal absorbs all keys to close
+                    isShowingModelModal = false
+                    handled = true
+                } else if isShowingDirExplorer {
+                    handled = handleExplorerKey(key)
+                } else if splitLayout.activePane == .mainPanel {
                     handled = await handleMainPanelKey(key)
                 }
                 
@@ -157,7 +193,7 @@ final class ConfigureTUI {
     private func updateSize() {
         var ws = winsize()
         if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &ws) == 0, ws.ws_col > 0, ws.ws_row > 0 {
-            termRows = Int(ws.ws_row) - 1 // Subtract 1 to guarantee no cursor wrap scrolling
+            termRows = Int(ws.ws_row) - 1
             termCols = Int(ws.ws_col)
         } else {
             termRows = 23
@@ -192,6 +228,15 @@ final class ConfigureTUI {
             }
             yaml += "    use_streaming: \(p.useStreaming)\n"
             yaml += "    enabled: \(p.enabled)\n"
+            
+            // Serialize active models list
+            let active = inMemoryActiveModels[p.id] ?? []
+            if !active.isEmpty {
+                yaml += "    active_models:\n"
+                for model in active {
+                    yaml += "      - \(model)\n"
+                }
+            }
         }
         return yaml
     }
@@ -210,7 +255,6 @@ final class ConfigureTUI {
         
         // Write the configured settings back to SQLite DB and Keychain
         for p in inMemoryProviders {
-            // Write API key to Keychain if it's set and not the placeholder "keychain"
             if let key = p.apiKey, !key.isEmpty, key != "keychain" {
                 _ = KeychainHelper.set(key: p.id, value: key)
             }
@@ -230,6 +274,10 @@ final class ConfigureTUI {
                 enabled: p.enabled
             )
             try? await SettingsStore.shared.upsertProvider(config)
+            
+            // Sync active models in the transient DB
+            let active = inMemoryActiveModels[p.id] ?? []
+            try? await SettingsStore.shared.syncActiveModels(providerID: p.id, activeModels: active)
         }
 
         let defaultModel = try? await SettingsStore.shared.globalDefault()
@@ -249,7 +297,7 @@ final class ConfigureTUI {
         shouldExit = true
     }
 
-    // MARK: - Main Panel Handlers
+    // MARK: - Main Panel Key Handlers
 
     private func handleMainPanelKey(_ key: InputKey) async -> Bool {
         let selectedID = sidebarMenu.selectedIndex.map { sidebarMenu.items[$0].id }
@@ -309,6 +357,18 @@ final class ConfigureTUI {
             return true
         }
         
+        // Modal / Details Key shortcut: pressing 'i' opens model information modal
+        if formFieldIndex < formFields.count {
+            let label = formFields[formFieldIndex]
+            if label.hasPrefix("model:") {
+                let modelID = String(label.dropFirst(6))
+                if case .character(let c) = key, c == "i" || c == "I" {
+                    showModelModal(modelID: modelID)
+                    return true
+                }
+            }
+        }
+
         switch key {
         case .arrowDown:
             formFieldIndex = (formFieldIndex + 1) % formFields.count
@@ -329,6 +389,8 @@ final class ConfigureTUI {
         return false
     }
 
+    // MARK: - Form Action Handlers
+
     private func enterEditForm(index: Int) {
         let p = inMemoryProviders[index]
         editID = p.id
@@ -337,20 +399,14 @@ final class ConfigureTUI {
         editKey = p.apiKey ?? ""
         editHF = p.huggingfaceRepo ?? ""
         editEnabled = p.enabled
+        editActiveModels = Set(inMemoryActiveModels[p.id] ?? [])
         
         formFieldIndex = 0
         formEditingField = nil
         formEditBuffer = ""
         formError = ""
         
-        switch p.id {
-        case "mlx":
-            formFields = ["Model Dir / HF Repo", "Active Status", "Save Details", "Cancel"]
-        case "fireworks", "huggingface":
-            formFields = ["API Access Key", "Active Status", "Save Details", "Cancel"]
-        default:
-            formFields = ["ID / Name", "Base API URL", "API Access Key", "Active Status", "Save Details", "Delete Provider", "Cancel"]
-        }
+        rebuildFormFields(index: index)
         subScreen = .edit(index)
     }
 
@@ -361,14 +417,46 @@ final class ConfigureTUI {
         editKey = ""
         editHF = ""
         editEnabled = false
+        editActiveModels = []
         
         formFieldIndex = 0
         formEditingField = nil
         formEditBuffer = ""
         formError = ""
         
-        formFields = ["ID / Name", "Base API URL", "API Access Key", "Active Status", "Save Details", "Cancel"]
+        rebuildFormFields(index: nil)
         subScreen = .addCustom
+    }
+
+    private func rebuildFormFields(index: Int?) {
+        var baseFields: [String] = []
+        if editType == "mlx" {
+            baseFields = ["Model Dir / HF Repo", "Active Status"]
+        } else if editType == "fireworks" || editType == "huggingface" {
+            baseFields = ["API Access Key", "Active Status"]
+        } else {
+            baseFields = ["ID / Name", "Base API URL", "API Access Key", "Active Status"]
+        }
+
+        baseFields.append("Refresh Model List")
+        
+        // Append loaded available models
+        let pid = editID.isEmpty ? "new_custom" : editID
+        let available = inMemoryAvailableModels[pid] ?? []
+        for model in available {
+            baseFields.append("model:\(model)")
+        }
+        
+        baseFields.append("Save Details")
+        if index != nil && editType == "openai" { // Custom OpenAI models can be deleted
+            baseFields.append("Delete Provider")
+        }
+        baseFields.append("Cancel")
+        
+        self.formFields = baseFields
+        if formFieldIndex >= formFields.count {
+            formFieldIndex = 0
+        }
     }
 
     private func applyEditBuffer() {
@@ -401,27 +489,41 @@ final class ConfigureTUI {
             }
             
             if editType == "mlx" {
-                if editEnabled && editHF.isEmpty {
-                    formError = "Model Dir/HF Repo is required to activate."
-                    return
-                }
-            } else if editType == "fireworks" || editType == "huggingface" {
-                if editEnabled && editKey.isEmpty {
-                    formError = "API key is required to activate."
-                    return
-                }
-            } else {
-                if editURL.isEmpty {
-                    formError = "Base API URL is required."
+                if editHF.isEmpty {
+                    formError = "Model Dir is required for Local MLX."
                     return
                 }
                 
-                let exists = inMemoryProviders.enumerated().contains { (idx, p) in
-                    p.id == editID && (index == nil || idx != index!)
-                }
-                if exists {
-                    formError = "Provider ID already exists."
+                let models = scanMLXModels(dirPath: editHF)
+                if models.isEmpty {
+                    formError = "No MLX models (.safetensors / config.json) found in directory."
                     return
+                }
+                
+                if editEnabled && editActiveModels.isEmpty {
+                    formError = "Must activate at least 1 local model to enable MLX."
+                    return
+                }
+            } else {
+                if editType == "fireworks" || editType == "huggingface" {
+                    if editEnabled && editKey.isEmpty {
+                        formError = "API key is required to activate."
+                        return
+                    }
+                } else {
+                    // Custom OpenAI
+                    if editURL.isEmpty {
+                        formError = "Base API URL is required."
+                        return
+                    }
+                    
+                    let exists = inMemoryProviders.enumerated().contains { (idx, p) in
+                        p.id == editID && (index == nil || idx != index!)
+                    }
+                    if exists {
+                        formError = "Provider ID already exists."
+                        return
+                    }
                 }
             }
             
@@ -443,12 +545,18 @@ final class ConfigureTUI {
                 inMemoryProviders.append(config)
             }
             
+            // Sync memory active models list
+            inMemoryActiveModels[editID] = Array(editActiveModels).sorted()
+            
             subScreen = .list
             listSelectedIndex = 0
             
         } else if label.contains("Delete Provider") {
             if let idx = index {
+                let p = inMemoryProviders[idx]
                 inMemoryProviders.remove(at: idx)
+                inMemoryActiveModels.removeValue(forKey: p.id)
+                inMemoryAvailableModels.removeValue(forKey: p.id)
             }
             subScreen = .list
             listSelectedIndex = 0
@@ -459,6 +567,22 @@ final class ConfigureTUI {
             
         } else if label.contains("Active Status") {
             editEnabled = !editEnabled
+            
+        } else if label.contains("Model Dir / HF Repo") {
+            // Launch directory explorer
+            openDirectoryExplorer()
+            
+        } else if label.contains("Refresh Model List") {
+            // Trigger loading models
+            await refreshActiveModelList(index: index)
+            
+        } else if label.hasPrefix("model:") {
+            let mName = String(label.dropFirst(6))
+            if editActiveModels.contains(mName) {
+                editActiveModels.remove(mName)
+            } else {
+                editActiveModels.insert(mName)
+            }
             
         } else {
             startEditingField(index: formFieldIndex)
@@ -479,7 +603,240 @@ final class ConfigureTUI {
         }
     }
 
-    // MARK: - Rendering
+    private func refreshActiveModelList(index: Int?) async {
+        isFetchingModels = true
+        formError = ""
+        render() // Render loading state immediately
+        
+        let pid = editID.isEmpty ? "new_custom" : editID
+        
+        if editType == "mlx" {
+            if editHF.isEmpty {
+                formError = "Please specify a Model Directory first."
+                isFetchingModels = false
+                return
+            }
+            let models = scanMLXModels(dirPath: editHF)
+            inMemoryAvailableModels[pid] = models
+            if models.isEmpty {
+                formError = "No MLX models detected on disk."
+            }
+        } else {
+            // Remote fetch
+            var resolvedKey = editKey
+            if resolvedKey.isEmpty || resolvedKey == "keychain" {
+                resolvedKey = KeychainHelper.get(key: pid) ?? ""
+            }
+            
+            let urlToFetch: String
+            if editType == "fireworks" {
+                urlToFetch = "https://api.fireworks.ai/inference/v1"
+            } else if editType == "huggingface" {
+                urlToFetch = "https://api-inference.huggingface.co/v1"
+            } else {
+                urlToFetch = editURL
+            }
+            
+            if urlToFetch.isEmpty {
+                formError = "API URL is required to fetch models."
+                isFetchingModels = false
+                return
+            }
+            
+            let fetched = await fetchRemoteModels(url: urlToFetch, apiKey: resolvedKey)
+            if fetched.isEmpty {
+                formError = "Failed to fetch models from API. Verify endpoint or credentials."
+            } else {
+                inMemoryAvailableModels[pid] = fetched
+            }
+        }
+        
+        isFetchingModels = false
+        rebuildFormFields(index: index)
+    }
+
+    // MARK: - Directory Explorer
+
+    private func openDirectoryExplorer() {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        explorerPath = FileManager.default.fileExists(atPath: editHF) ? editHF : home
+        explorerLeftSelectedIndex = 0
+        isShowingDirExplorer = true
+        refreshExplorer()
+    }
+
+    private func refreshExplorer() {
+        let contents = getDirectoryContents(path: explorerPath)
+        explorerLeftItems = [".."] + contents
+        if explorerLeftSelectedIndex >= explorerLeftItems.count {
+            explorerLeftSelectedIndex = 0
+        }
+        
+        if explorerLeftItems.isEmpty {
+            explorerRightItems = []
+        } else {
+            let selectedItem = explorerLeftItems[explorerLeftSelectedIndex]
+            let subPath: String
+            if selectedItem == ".." {
+                subPath = (explorerPath as NSString).deletingLastPathComponent
+            } else {
+                subPath = (explorerPath as NSString).appendingPathComponent(selectedItem)
+            }
+            explorerRightItems = getFolderContentsPreview(path: subPath)
+        }
+    }
+
+    private func getDirectoryContents(path: String) -> [String] {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(atPath: path) else { return [] }
+        return contents.filter { name in
+            if name.hasPrefix(".") { return false }
+            let fullPath = (path as NSString).appendingPathComponent(name)
+            var isDir: ObjCBool = false
+            return fm.fileExists(atPath: fullPath, isDirectory: &isDir) && isDir.boolValue
+        }.sorted()
+    }
+
+    private func getFolderContentsPreview(path: String) -> [String] {
+        let fm = FileManager.default
+        guard let contents = try? fm.contentsOfDirectory(atPath: path) else { return [] }
+        return contents.filter { !$0.hasPrefix(".") }.sorted()
+    }
+
+    private func handleExplorerKey(_ key: InputKey) -> Bool {
+        switch key {
+        case .arrowDown:
+            explorerLeftSelectedIndex = (explorerLeftSelectedIndex + 1) % explorerLeftItems.count
+            refreshExplorer()
+            return true
+        case .arrowUp:
+            explorerLeftSelectedIndex = (explorerLeftSelectedIndex - 1 + explorerLeftItems.count) % explorerLeftItems.count
+            refreshExplorer()
+            return true
+        case .enter:
+            let selectedItem = explorerLeftItems[explorerLeftSelectedIndex]
+            if selectedItem == ".." {
+                explorerPath = (explorerPath as NSString).deletingLastPathComponent
+            } else {
+                explorerPath = (explorerPath as NSString).appendingPathComponent(selectedItem)
+            }
+            explorerLeftSelectedIndex = 0
+            refreshExplorer()
+            return true
+        case .character(let c):
+            if c == "s" || c == "S" {
+                editHF = explorerPath
+                isShowingDirExplorer = false
+                // Auto trigger scan of models on select
+                let pid = editID.isEmpty ? "new_custom" : editID
+                inMemoryAvailableModels[pid] = scanMLXModels(dirPath: editHF)
+                rebuildFormFields(index: subScreenIndex())
+                return true
+            } else if c == "c" || c == "C" {
+                isShowingDirExplorer = false
+                return true
+            }
+        case .escape:
+            isShowingDirExplorer = false
+            return true
+        default:
+            break
+        }
+        return false
+    }
+
+    private func subScreenIndex() -> Int? {
+        if case .edit(let idx) = subScreen {
+            return idx
+        }
+        return nil
+    }
+
+    // MARK: - Scanning & Fetching Helpers
+
+    private func scanMLXModels(dirPath: String) -> [String] {
+        let fm = FileManager.default
+        var models: [String] = []
+        guard !dirPath.isEmpty, fm.fileExists(atPath: dirPath) else { return [] }
+        guard let items = try? fm.contentsOfDirectory(atPath: dirPath) else { return [] }
+        
+        for item in items {
+            let itemPath = (dirPath as NSString).appendingPathComponent(item)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: itemPath, isDirectory: &isDir), isDir.boolValue {
+                let configPath = (itemPath as NSString).appendingPathComponent("config.json")
+                if fm.fileExists(atPath: configPath) {
+                    models.append(item)
+                }
+            }
+        }
+        return models.sorted()
+    }
+
+    private func fetchRemoteModels(url: String, apiKey: String) async -> [String] {
+        var cleanURL = url
+        if !cleanURL.hasSuffix("/models") {
+            if cleanURL.hasSuffix("/") {
+                cleanURL += "models"
+            } else {
+                cleanURL += "/models"
+            }
+        }
+        
+        guard let requestURL = URL(string: cleanURL) else { return [] }
+        var request = URLRequest(url: requestURL)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 10.0
+        
+        if !apiKey.isEmpty {
+            request.addValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        
+        do {
+            let (data, response) = try await URLSession.shared.data(for: request)
+            guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
+                return []
+            }
+            
+            struct ModelItem: Codable {
+                let id: String
+            }
+            struct ModelResponse: Codable {
+                let data: [ModelItem]
+            }
+            
+            let decoded = try JSONDecoder().decode(ModelResponse.self, from: data)
+            return decoded.data.map { $0.id }.sorted()
+        } catch {
+            return []
+        }
+    }
+
+    private func showModelModal(modelID: String) {
+        modalModelID = modelID
+        
+        if editType == "mlx" {
+            modalModelCostIn = "Free (Local inference)"
+            modalModelCostOut = "Free (Local inference)"
+            modalModelCtx = "Bounded by device Unified Memory (RAM)"
+        } else if editType == "fireworks" {
+            modalModelCostIn = "$0.20 per M tokens (est.)"
+            modalModelCostOut = "$0.80 per M tokens (est.)"
+            modalModelCtx = "8k - 32k tokens"
+        } else if editType == "huggingface" {
+            modalModelCostIn = "Free / Serverless inference"
+            modalModelCostOut = "Free / Serverless inference"
+            modalModelCtx = "Varies by HF model endpoint"
+        } else {
+            modalModelCostIn = "Subject to custom host billing"
+            modalModelCostOut = "Subject to custom host billing"
+            modalModelCtx = "Configured host standard limits"
+        }
+        
+        isShowingModelModal = true
+    }
+
+    // MARK: - Rendering Layouts
 
     private func render() {
         buffer.clear(style: BIOSStyle.bgBlue + BIOSStyle.fgWhite)
@@ -566,46 +923,55 @@ final class ConfigureTUI {
         let contentW = mainW - 4
         let contentH = splitH - 3
 
-        switch selectedID {
-        case "providers":
-            renderProvidersScreen(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
-            
-        case "save":
-            let text = [
-                "Save changes and write a new config.yaml.",
-                "",
-                "Press [Enter] to confirm and exit.",
-                "Press [ESC] to return to the Sidebar."
-            ]
-            drawTextCentered(text: text, x: contentX, y: contentY, w: contentW, h: contentH, style: BIOSStyle.fgYellow + BIOSStyle.bold)
-            
-        case "cancel":
-            let text = [
-                "Discard changes and exit.",
-                "Your config.yaml will not be modified.",
-                "",
-                "Press [Enter] to confirm and exit.",
-                "Press [ESC] to return to the Sidebar."
-            ]
-            drawTextCentered(text: text, x: contentX, y: contentY, w: contentW, h: contentH, style: BIOSStyle.fgWhite)
-            
-        default:
-            let text = [
-                "Welcome to Pecan Onboarding!",
-                "",
-                "This configuration utility helps you setup",
-                "your AI providers (OpenAI, Anthropic, MLX, etc.)",
-                "and set defaults for your pecan server.",
-                "",
-                "Use [↑/↓ Arrows] to navigate items in the sidebar.",
-                "Press [Enter] to select and edit.",
-                "",
-                "Quick Shortcuts:",
-                "  [P] Configure Providers",
-                "  [S] Save and Finish",
-                "  [C] Cancel and Finish"
-            ]
-            drawTextCentered(text: text, x: contentX, y: contentY, w: contentW, h: contentH, style: BIOSStyle.fgWhite)
+        if isShowingDirExplorer {
+            renderDirExplorer(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
+        } else {
+            switch selectedID {
+            case "providers":
+                renderProvidersScreen(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
+                
+            case "save":
+                let text = [
+                    "Save changes and write a new config.yaml.",
+                    "",
+                    "Press [Enter] to confirm and exit.",
+                    "Press [ESC] to return to the Sidebar."
+                ]
+                drawTextCentered(text: text, x: contentX, y: contentY, w: contentW, h: contentH, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                
+            case "cancel":
+                let text = [
+                    "Discard changes and exit.",
+                    "Your config.yaml will not be modified.",
+                    "",
+                    "Press [Enter] to confirm and exit.",
+                    "Press [ESC] to return to the Sidebar."
+                ]
+                drawTextCentered(text: text, x: contentX, y: contentY, w: contentW, h: contentH, style: BIOSStyle.fgWhite)
+                
+            default:
+                let text = [
+                    "Welcome to Pecan Onboarding!",
+                    "",
+                    "This configuration utility helps you setup",
+                    "your AI providers (OpenAI, Anthropic, MLX, etc.)",
+                    "and set defaults for your pecan server.",
+                    "",
+                    "Use [↑/↓ Arrows] to navigate items in the sidebar.",
+                    "Press [Enter] to select and edit.",
+                    "",
+                    "Quick Shortcuts:",
+                    "  [P] Configure Providers",
+                    "  [S] Save and Finish",
+                    "  [C] Cancel and Finish"
+                ]
+                drawTextCentered(text: text, x: contentX, y: contentY, w: contentW, h: contentH, style: BIOSStyle.fgWhite)
+            }
+        }
+
+        // Float Modal on top of everything if active
+        if isShowingModelModal {
+            renderModelModal()
         }
 
         // 3. Draw Help Bar at the bottom
@@ -644,21 +1010,33 @@ final class ConfigureTUI {
                     buffer.writeString(x: contentX + 2, y: y, string: cursor, style: style)
                     buffer.writeString(x: contentX + 4, y: y, string: statusBadge, style: isSelected ? style : badgeStyle)
                     
-                    let idStr = p.id.padding(toLength: 15, withPad: " ", startingAt: 0)
+                    // Format display names professionally
+                    let dispName: String
+                    if p.id == "mlx" {
+                        dispName = "Local MLX Models"
+                    } else if p.id == "fireworks" {
+                        dispName = "Fireworks.AI"
+                    } else if p.id == "huggingface" {
+                        dispName = "Huggingface"
+                    } else {
+                        dispName = p.id
+                    }
+                    
+                    let idStr = dispName.padding(toLength: 20, withPad: " ", startingAt: 0)
                     buffer.writeString(x: contentX + 16, y: y, string: idStr, style: style)
                     
                     let detail: String
                     if p.id == "mlx" {
-                        detail = p.huggingfaceRepo.map { "model: \($0)" } ?? "mlx local"
+                        detail = p.huggingfaceRepo.map { "models at \($0)" } ?? "model dir unset"
                     } else if p.id == "fireworks" {
-                        detail = "fireworks endpoint"
+                        detail = "fireworks.ai endpoint"
                     } else if p.id == "huggingface" {
-                        detail = "huggingface endpoint"
+                        detail = "huggingface serverless API"
                     } else {
                         detail = p.url ?? ""
                     }
-                    let truncatedDetail = detail.count > (contentW - 30) ? String(detail.prefix(contentW - 33)) + "..." : detail
-                    buffer.writeString(x: contentX + 32, y: y, string: truncatedDetail, style: isSelected ? style : BIOSStyle.fgGray)
+                    let truncatedDetail = detail.count > (contentW - 38) ? String(detail.prefix(contentW - 41)) + "..." : detail
+                    buffer.writeString(x: contentX + 38, y: y, string: truncatedDetail, style: isSelected ? style : BIOSStyle.fgGray)
                 } else {
                     buffer.writeString(x: contentX + 2, y: y, string: cursor + "[+] Add Custom OpenAI Provider", style: style)
                 }
@@ -670,9 +1048,28 @@ final class ConfigureTUI {
     }
 
     private func drawForm(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
-        buffer.writeString(x: contentX, y: contentY, string: "Edit Provider Parameters:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+        if isFetchingModels {
+            let loadingText = [
+                "📡 Fetching available models list from endpoint...",
+                "Please wait a moment..."
+            ]
+            drawTextCentered(text: loadingText, x: contentX, y: contentY, w: contentW, h: contentH, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+            return
+        }
+
+        buffer.writeString(x: contentX, y: contentY, string: "Edit Parameters & Models:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
         
-        for idx in 0..<formFields.count {
+        // Scroll logic for form fields (especially when models table is long)
+        let maxDisplayLines = contentH - 4
+        var startIdx = 0
+        if formFieldIndex >= maxDisplayLines {
+            startIdx = formFieldIndex - maxDisplayLines + 1
+        }
+        
+        var displayCount = 0
+        for idx in startIdx..<formFields.count {
+            if displayCount >= maxDisplayLines { break }
+            
             let label = formFields[idx]
             let isSelected = (formFieldIndex == idx)
             let isEditingThis = (formEditingField == idx)
@@ -684,17 +1081,48 @@ final class ConfigureTUI {
                 style = BIOSStyle.selection + BIOSStyle.bold
             }
             
-            let y = contentY + 2 + idx
-            let labelPadded = label.padding(toLength: 22, withPad: " ", startingAt: 0)
+            let y = contentY + 2 + displayCount
+            displayCount += 1
             
             if label.contains("Save Details") || label.contains("Cancel") || label.contains("Delete Provider") {
                 let display = isSelected ? "[ \(label) ]" : "  [\(label)]"
                 buffer.writeString(x: contentX + 2, y: y, string: display, style: style)
+            } else if label.contains("Refresh Model List") {
+                let display = isSelected ? "[ \(label) ]" : "  [\(label)]"
+                buffer.writeString(x: contentX + 2, y: y, string: display, style: isSelected ? style : BIOSStyle.fgCyan + BIOSStyle.bold)
             } else if label.contains("Active Status") {
                 let valStr = editEnabled ? "Yes (Active)" : "No (Inactive)"
-                let display = "\(labelPadded): \(valStr)"
+                let display = "Active Status:         \(valStr)"
                 buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: style)
+            } else if label.hasPrefix("model:") {
+                // Render Model Table Row
+                let modelID = String(label.dropFirst(6))
+                let isActive = editActiveModels.contains(modelID)
+                let checkStr = isActive ? "[X]" : "[ ]"
+                let checkStyle = isActive ? BIOSStyle.fgCyan + BIOSStyle.bold : BIOSStyle.fgGray
+                
+                buffer.writeString(x: contentX + 2, y: y, string: cursor, style: style)
+                buffer.writeString(x: contentX + 4, y: y, string: checkStr, style: isSelected ? style : checkStyle)
+                
+                // Format cost column
+                let costStr: String
+                if editType == "mlx" {
+                    costStr = "Free (Local)"
+                } else if editType == "fireworks" {
+                    costStr = "$0.20/$0.80 M"
+                } else if editType == "huggingface" {
+                    costStr = "Free / Server"
+                } else {
+                    costStr = "Host billing"
+                }
+                
+                let modelIDCol = modelID.count > (contentW - 25) ? String(modelID.prefix(contentW - 28)) + "..." : modelID
+                let modelIDPadded = modelIDCol.padding(toLength: contentW - 22, withPad: " ", startingAt: 0)
+                
+                buffer.writeString(x: contentX + 8, y: y, string: modelIDPadded, style: style)
+                buffer.writeString(x: contentX + contentW - 13, y: y, string: costStr, style: isSelected ? style : BIOSStyle.fgGray)
             } else {
+                let labelPadded = label.padding(toLength: 22, withPad: " ", startingAt: 0)
                 var valStr = ""
                 if label.contains("ID / Name") {
                     valStr = editID
@@ -717,8 +1145,70 @@ final class ConfigureTUI {
         }
         
         if !formError.isEmpty {
-            buffer.writeString(x: contentX + 2, y: contentY + 2 + formFields.count + 1, string: "⚠ \(formError)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
+            buffer.writeString(x: contentX + 2, y: contentY + contentH - 1, string: "⚠ \(formError)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
         }
+    }
+
+    private func renderDirExplorer(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        buffer.writeString(x: contentX, y: contentY, string: "Select Local Model Directory:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+        
+        let pathStr = explorerPath.count > (contentW - 8) ? "..." + String(explorerPath.suffix(contentW - 11)) : explorerPath
+        buffer.writeString(x: contentX, y: contentY + 1, string: "Path: \(pathStr)", style: BIOSStyle.fgYellow)
+        
+        let colW = (contentW - 2) / 2
+        let listH = contentH - 4
+        
+        // Draw Left Box (Folders)
+        buffer.drawBox(x: contentX, y: contentY + 2, w: colW, h: listH, title: "FOLDERS", borderStyle: .single, boxStyle: BIOSStyle.fgGray, titleStyle: BIOSStyle.fgCyan)
+        
+        // Draw Right Box (Preview)
+        buffer.drawBox(x: contentX + colW + 1, y: contentY + 2, w: colW, h: listH, title: "CONTENTS PREVIEW", borderStyle: .single, boxStyle: BIOSStyle.fgGray, titleStyle: BIOSStyle.fgCyan)
+        
+        // Populate Left Pane
+        for idx in 0..<min(listH - 2, explorerLeftItems.count) {
+            let item = explorerLeftItems[idx]
+            let isSelected = (explorerLeftSelectedIndex == idx)
+            let style = isSelected ? BIOSStyle.selection + BIOSStyle.bold : BIOSStyle.fgWhite
+            
+            let display = isSelected ? "▶ \(item)" : "  \(item)"
+            let truncated = display.count > (colW - 3) ? String(display.prefix(colW - 6)) + "..." : display
+            buffer.writeString(x: contentX + 1, y: contentY + 3 + idx, string: truncated.padding(toLength: colW - 2, withPad: " ", startingAt: 0), style: style)
+        }
+        
+        // Populate Right Pane (Preview)
+        for idx in 0..<min(listH - 2, explorerRightItems.count) {
+            let item = explorerRightItems[idx]
+            let style = BIOSStyle.fgGray
+            let truncated = item.count > (colW - 3) ? String(item.prefix(colW - 6)) + "..." : item
+            buffer.writeString(x: contentX + colW + 2, y: contentY + 3 + idx, string: truncated, style: style)
+        }
+        
+        // Instructions
+        let instructions = " [↑/↓] Navigate  [Enter] Open  [S] Select Folder  [C] Cancel "
+        buffer.writeStringCentered(x: contentX, y: contentY + listH + 2, w: contentW, string: instructions, style: BIOSStyle.reverse + BIOSStyle.bold)
+    }
+
+    private func renderModelModal() {
+        let modalW = 55
+        let modalH = 12
+        let modalX = (termCols - modalW) / 2
+        let modalY = (termRows - modalH) / 2
+        
+        buffer.drawBox(x: modalX, y: modalY, w: modalW, h: modalH, title: "MODEL INFORMATION", borderStyle: .double, boxStyle: BIOSStyle.fgYellow + BIOSStyle.bold, titleStyle: BIOSStyle.fgYellow + BIOSStyle.bold)
+        
+        // Truncate Model ID inside modal nicely
+        let truncID = modalModelID.count > (modalW - 14) ? String(modalModelID.prefix(modalW - 17)) + "..." : modalModelID
+        buffer.writeString(x: modalX + 2, y: modalY + 2, string: "Model ID:     \(truncID)", style: BIOSStyle.fgWhite)
+        buffer.writeString(x: modalX + 2, y: modalY + 3, string: "Host Engine:  \(editID.uppercased())", style: BIOSStyle.fgWhite)
+        
+        buffer.writeString(x: modalX + 2, y: modalY + 5, string: "Input Cost:   \(modalModelCostIn)", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+        buffer.writeString(x: modalX + 2, y: modalY + 6, string: "Output Cost:  \(modalModelCostOut)", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+        
+        // Wrap context limit nicely
+        let truncCtx = modalModelCtx.count > (modalW - 16) ? String(modalModelCtx.prefix(modalW - 19)) + "..." : modalModelCtx
+        buffer.writeString(x: modalX + 2, y: modalY + 8, string: "Context Size: \(truncCtx)", style: BIOSStyle.fgWhite)
+        
+        buffer.writeStringCentered(x: modalX, y: modalY + modalH - 2, w: modalW, string: "Press [Any Key] to close", style: BIOSStyle.reverse + BIOSStyle.bold)
     }
 
     private func drawTextCentered(text: [String], x: Int, y: Int, w: Int, h: Int, style: String = "") {

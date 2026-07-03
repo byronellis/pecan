@@ -110,6 +110,14 @@ public actor SettingsStore {
                     model_key TEXT NOT NULL
                 )
             """)
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS provider_models (
+                    provider_id TEXT NOT NULL,
+                    model_id TEXT NOT NULL,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    PRIMARY KEY (provider_id, model_id)
+                )
+            """)
         }
         self.db = queue
         try migrateFromYAMLIfNeeded(queue: queue)
@@ -190,6 +198,25 @@ public actor SettingsStore {
         guard let db else { throw SettingsError.notOpen }
         try db.write { db in
             try db.execute(sql: "DELETE FROM providers WHERE id = ?", arguments: [id])
+            try db.execute(sql: "DELETE FROM provider_models WHERE provider_id = ?", arguments: [id])
+        }
+    }
+
+    public func activeModels(providerID: String) throws -> [String] {
+        guard let db else { throw SettingsError.notOpen }
+        return try db.read { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT model_id FROM provider_models WHERE provider_id = ? AND enabled = 1 ORDER BY model_id", arguments: [providerID])
+            return rows.map { $0["model_id"] }
+        }
+    }
+
+    public func syncActiveModels(providerID: String, activeModels: [String]) throws {
+        guard let db else { throw SettingsError.notOpen }
+        try db.write { db in
+            try db.execute(sql: "DELETE FROM provider_models WHERE provider_id = ?", arguments: [providerID])
+            for model in activeModels {
+                try db.execute(sql: "INSERT INTO provider_models (provider_id, model_id, enabled) VALUES (?, ?, 1)", arguments: [providerID, model])
+            }
         }
     }
 
@@ -337,6 +364,13 @@ public actor SettingsStore {
                     arguments: [key, model.type, model.url, model.apiKey,
                                 model.hfRepo, model.contextWindow, model.enabled ? 1 : 0]
                 )
+                // Migrate active_models!
+                for activeModel in model.activeModels {
+                    try db.execute(
+                        sql: "INSERT OR IGNORE INTO provider_models (provider_id, model_id, enabled) VALUES (?, ?, 1)",
+                        arguments: [key, activeModel]
+                    )
+                }
             }
             if let defaultModel = parsed.defaultModel {
                 try db.execute(
@@ -361,6 +395,7 @@ public actor SettingsStore {
         var hfRepo: String?
         var contextWindow: Int?
         var enabled: Bool = true
+        var activeModels: [String] = []
     }
 
     private struct YAMLConfig {
@@ -383,7 +418,7 @@ public actor SettingsStore {
             let indent = line.prefix(while: { $0 == " " }).count
 
             if indent == 0 {
-                inModels = trimmed.hasPrefix("models:")
+                inModels = trimmed.hasPrefix("models:") || trimmed.hasPrefix("providers:")
                 inTools = trimmed.hasPrefix("tools:")
                 currentModel = nil
                 if trimmed.hasPrefix("default_model:") {
@@ -395,19 +430,27 @@ public actor SettingsStore {
                 currentModel = String(trimmed.dropLast())
                 result.models[currentModel!] = YAMLModel()
             } else if inModels, let key = currentModel, indent >= 4 {
-                let kv = trimmed.components(separatedBy: ":").map { $0.trimmingCharacters(in: .whitespaces) }
-                guard kv.count >= 2 else { continue }
-                let val = kv.dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
-                    .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
-                switch kv[0] {
-                case "provider":    result.models[key]?.type = val
-                case "url":         result.models[key]?.url = val.isEmpty ? nil : val
-                case "api_key":     result.models[key]?.apiKey = val.isEmpty ? nil : val
-                case "huggingface_repo": result.models[key]?.hfRepo = val.isEmpty ? nil : val
-                case "context_window": result.models[key]?.contextWindow = Int(val)
-                case "enabled":     result.models[key]?.enabled = (val == "true" || val == "yes" || val == "1")
-                case "active":      result.models[key]?.enabled = (val == "true" || val == "yes" || val == "1")
-                default: break
+                if trimmed.hasPrefix("-") {
+                    let mName = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                    if !mName.isEmpty {
+                        result.models[key]?.activeModels.append(mName)
+                    }
+                } else {
+                    let kv = trimmed.components(separatedBy: ":").map { $0.trimmingCharacters(in: .whitespaces) }
+                    guard kv.count >= 2 else { continue }
+                    let val = kv.dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
+                        .trimmingCharacters(in: CharacterSet(charactersIn: "\"'"))
+                    switch kv[0] {
+                    case "provider":    result.models[key]?.type = val
+                    case "url":         result.models[key]?.url = val.isEmpty ? nil : val
+                    case "api_key":     result.models[key]?.apiKey = val.isEmpty ? nil : val
+                    case "huggingface_repo": result.models[key]?.hfRepo = val.isEmpty ? nil : val
+                    case "context_window": result.models[key]?.contextWindow = Int(val)
+                    case "enabled":     result.models[key]?.enabled = (val == "true" || val == "yes" || val == "1")
+                    case "active":      result.models[key]?.enabled = (val == "true" || val == "yes" || val == "1")
+                    default: break
+                    }
                 }
             } else if inTools && indent >= 2 {
                 let kv = trimmed.components(separatedBy: ":").map { $0.trimmingCharacters(in: .whitespaces) }
