@@ -29,13 +29,14 @@ struct BorderStyle: Sendable {
 
 // MARK: - ANSI Color Constants for BIOS Look
 enum BIOSStyle {
-    static let bgBlue      = "\u{1B}[44m" // Universal Blue background
-    static let fgWhite     = "\u{1B}[97m" // Bright white foreground
-    static let fgGray      = "\u{1B}[90m" // Gray / bright black
-    static let fgYellow    = "\u{1B}[93m" // Bright yellow
-    static let fgCyan      = "\u{1B}[96m" // Bright cyan
-    static let bgCyan      = "\u{1B}[46m" // Cyan background
-    static let reverse     = "\u{1B}[7m"
+    static let bgBlue      = "\u{1B}[44m"       // Universal standard Blue background (renders dark blue in CMUX and Terminal)
+    static let fgWhite     = "\u{1B}[38;5;15m"  // 256-color Bright white foreground
+    static let fgGray      = "\u{1B}[38;5;244m" // 256-color Dim gray
+    static let fgYellow    = "\u{1B}[38;5;220m" // 256-color Bright yellow (for shortcuts/hotkeys)
+    static let fgCyan      = "\u{1B}[38;5;81m"  // 256-color Cyan
+    static let bgCyan      = "\u{1B}[48;5;81m"  // 256-color Cyan background
+    static let reverse     = "\u{1B}[47m\u{1B}[30m" // Explicit White background, Black text (for help bar, high contrast)
+    static let selection   = "\u{1B}[46m\u{1B}[30m" // Explicit Cyan background, Black text (for active selection, high contrast)
     static let bold        = "\u{1B}[1m"
     static let dim         = "\u{1B}[2m"
     static let reset       = "\u{1B}[0m"

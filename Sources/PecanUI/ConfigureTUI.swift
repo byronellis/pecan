@@ -182,7 +182,7 @@ final class ConfigureTUI {
             var style = BIOSStyle.fgWhite
             if isSelected {
                 if activePane == .sidebar {
-                    style = BIOSStyle.reverse + BIOSStyle.bold + BIOSStyle.fgYellow
+                    style = BIOSStyle.selection + BIOSStyle.bold
                 } else {
                     style = BIOSStyle.bold + BIOSStyle.fgCyan
                 }
