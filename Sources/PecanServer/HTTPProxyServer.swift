@@ -524,10 +524,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
                 req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                var key = judgeProvider.apiKey
-                if key == "keychain" {
-                    key = KeychainHelper.get(key: judgeProvider.id)
-                }
+                let key = KeychainHelper.resolveKey(providerID: judgeProvider.id, providerType: judgeProvider.type, dbKey: judgeProvider.apiKey)
                 if let key = key, key != "none" {
                     req.setValue(key, forHTTPHeaderField: "x-api-key")
                 }
@@ -552,10 +549,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                var key = judgeProvider.apiKey
-                if key == "keychain" {
-                    key = KeychainHelper.get(key: judgeProvider.id)
-                }
+                let key = KeychainHelper.resolveKey(providerID: judgeProvider.id, providerType: judgeProvider.type, dbKey: judgeProvider.apiKey)
                 if let key = key, key != "none" {
                     req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
                 }
@@ -749,10 +743,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
             req.httpMethod = "POST"
             req.setValue("application/json", forHTTPHeaderField: "Content-Type")
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-            var key = provider.apiKey
-            if key == "keychain" {
-                key = KeychainHelper.get(key: provider.id)
-            }
+            let key = KeychainHelper.resolveKey(providerID: provider.id, providerType: provider.type, dbKey: provider.apiKey)
             if let key = key, key != "none" {
                 req.setValue(key, forHTTPHeaderField: "x-api-key")
             }
@@ -815,10 +806,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
         var req = URLRequest(url: targetURL)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        var key = provider.apiKey
-        if key == "keychain" {
-            key = KeychainHelper.get(key: provider.id)
-        }
+        let key = KeychainHelper.resolveKey(providerID: provider.id, providerType: provider.type, dbKey: provider.apiKey)
         if let key = key, key != "none" {
             req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
         }

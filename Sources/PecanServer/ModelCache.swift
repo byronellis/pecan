@@ -53,10 +53,7 @@ private func fetchOpenAIModels(provider: ProviderConfig) async -> [RemoteModelIn
     guard let url = URL(string: urlStr) else { return [] }
     var request = URLRequest(url: url, timeoutInterval: 10)
     request.httpMethod = "GET"
-    var key = provider.apiKey
-    if key == "keychain" {
-        key = KeychainHelper.get(key: provider.id)
-    }
+    let key = KeychainHelper.resolveKey(providerID: provider.id, providerType: provider.type, dbKey: provider.apiKey)
     if let key = key, !key.isEmpty, key.lowercased() != "none" {
         request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
     }

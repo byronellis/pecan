@@ -119,6 +119,41 @@ public struct KeychainHelper {
         dict.removeValue(forKey: key)
         _ = saveDictionary(dict)
     }
+
+    public static func resolveKey(providerID: String, providerType: String, dbKey: String?) -> String? {
+        let env = ProcessInfo.processInfo.environment
+        let idLower = providerID.lowercased()
+        let typeLower = providerType.lowercased()
+        
+        if idLower.contains("fireworks") || typeLower == "fireworks" {
+            if let envKey = env["FIREWORKS_API_KEY"], !envKey.isEmpty {
+                return envKey
+            }
+        }
+        
+        if idLower.contains("huggingface") || idLower.contains("hf") || typeLower == "huggingface" {
+            if let envKey = env["HF_TOKEN"] ?? env["HF_API_KEY"] ?? env["HUGGING_FACE_HUB_TOKEN"], !envKey.isEmpty {
+                return envKey
+            }
+        }
+
+        if idLower.contains("openai") || typeLower == "openai" {
+            if let envKey = env["OPENAI_API_KEY"], !envKey.isEmpty {
+                return envKey
+            }
+        }
+
+        if idLower.contains("anthropic") || typeLower == "anthropic" {
+            if let envKey = env["ANTHROPIC_API_KEY"], !envKey.isEmpty {
+                return envKey
+            }
+        }
+        
+        if dbKey == "keychain" {
+            return get(key: providerID)
+        }
+        return dbKey
+    }
 }
 
 
