@@ -137,13 +137,13 @@ public struct KeychainHelper {
             }
         }
 
-        if idLower.contains("openai") || typeLower == "openai" {
+        if idLower.contains("openai") {
             if let envKey = env["OPENAI_API_KEY"], !envKey.isEmpty {
                 return envKey
             }
         }
 
-        if idLower.contains("anthropic") || typeLower == "anthropic" {
+        if idLower.contains("anthropic") {
             if let envKey = env["ANTHROPIC_API_KEY"], !envKey.isEmpty {
                 return envKey
             }
