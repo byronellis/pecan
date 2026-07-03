@@ -199,6 +199,31 @@ public actor SettingsStore {
             if !columnNames.contains("use_streaming") {
                 try db.execute(sql: "ALTER TABLE providers ADD COLUMN use_streaming INTEGER DEFAULT 1")
             }
+            
+            let providerCount = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM providers") ?? 0
+            if providerCount == 0 {
+                // OpenAI
+                try db.execute(sql: """
+                    INSERT INTO providers (id, type, url, api_key, enabled)
+                    VALUES ('openai', 'openai', 'https://api.openai.com', NULL, 1)
+                """)
+                // Anthropic
+                try db.execute(sql: """
+                    INSERT INTO providers (id, type, url, api_key, enabled)
+                    VALUES ('anthropic', 'anthropic', 'https://api.anthropic.com', NULL, 1)
+                """)
+                // Fireworks.AI
+                try db.execute(sql: """
+                    INSERT INTO providers (id, type, url, api_key, enabled)
+                    VALUES ('fireworks', 'fireworks', 'https://api.fireworks.ai', NULL, 1)
+                """)
+                // Hugging Face
+                try db.execute(sql: """
+                    INSERT INTO providers (id, type, url, api_key, enabled)
+                    VALUES ('huggingface', 'huggingface', 'https://api-inference.huggingface.co', NULL, 1)
+                """)
+            }
+
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS global (
                     key TEXT PRIMARY KEY,
