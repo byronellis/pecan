@@ -1384,10 +1384,18 @@ final class ConfigureTUI {
                 buffer.writeString(x: contentX + 2, y: y, string: display, style: isSelected ? style : BIOSStyle.fgCyan + BIOSStyle.bold)
             } else if label.contains("Add Active Model ID") {
                 if isAddingModelID {
-                    let pre = String(newModelIDBuffer.prefix(newModelIDCursor))
-                    let post = String(newModelIDBuffer.dropFirst(newModelIDCursor))
-                    let display = "Enter Model ID:       \(pre)█\(post)"
-                    buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    let prefixStr = cursor + "Enter Model ID:       "
+                    buffer.writeString(x: contentX + 2, y: y, string: prefixStr + String(newModelIDBuffer.prefix(newModelIDCursor)), style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    let curX = contentX + 2 + prefixStr.count + newModelIDCursor
+                    if newModelIDCursor < newModelIDBuffer.count {
+                        let idx = newModelIDBuffer.index(newModelIDBuffer.startIndex, offsetBy: newModelIDCursor)
+                        let ch = String(newModelIDBuffer[idx])
+                        let rest = String(newModelIDBuffer[newModelIDBuffer.index(after: idx)...])
+                        buffer.writeString(x: curX, y: y, string: ch, style: BIOSStyle.reverse + BIOSStyle.bold)
+                        buffer.writeString(x: curX + 1, y: y, string: rest, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    } else {
+                        buffer.writeString(x: curX, y: y, string: " ", style: BIOSStyle.reverse + BIOSStyle.bold)
+                    }
                 } else {
                     let display = isSelected ? "[ \(label) ]" : "  [\(label)]"
                     buffer.writeString(x: contentX + 2, y: y, string: display, style: isSelected ? style : BIOSStyle.fgCyan + BIOSStyle.bold)
@@ -1441,10 +1449,19 @@ final class ConfigureTUI {
                     let shownBuf = isPassword
                         ? String(repeating: "•", count: formEditBuffer.count)
                         : formEditBuffer
-                    let pre  = String(shownBuf.prefix(formEditCursor))
-                    let post = String(shownBuf.dropFirst(formEditCursor))
-                    let display = "\(labelPadded): \(pre)█\(post)"
-                    buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    let prefixStr = cursor + labelPadded + ": "
+                    let pre = String(shownBuf.prefix(formEditCursor))
+                    buffer.writeString(x: contentX + 2, y: y, string: prefixStr + pre, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    let curX = contentX + 2 + prefixStr.count + formEditCursor
+                    if formEditCursor < shownBuf.count {
+                        let idx = shownBuf.index(shownBuf.startIndex, offsetBy: formEditCursor)
+                        let ch = String(shownBuf[idx])
+                        let rest = String(shownBuf[shownBuf.index(after: idx)...])
+                        buffer.writeString(x: curX, y: y, string: ch, style: BIOSStyle.reverse + BIOSStyle.bold)
+                        buffer.writeString(x: curX + 1, y: y, string: rest, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    } else {
+                        buffer.writeString(x: curX, y: y, string: " ", style: BIOSStyle.reverse + BIOSStyle.bold)
+                    }
                 } else {
                     let display = "\(labelPadded): \(valStr.isEmpty ? "(empty)" : valStr)"
                     buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: style)
