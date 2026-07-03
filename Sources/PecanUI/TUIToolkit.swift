@@ -29,7 +29,7 @@ struct BorderStyle: Sendable {
 
 // MARK: - ANSI Color Constants for BIOS Look
 enum BIOSStyle {
-    static let bgBlue      = "\u{1B}[44m"       // Universal standard Blue background (renders dark blue in CMUX and Terminal)
+    static let bgBlue      = "\u{1B}[48;2;0;0;128m" // 24-bit Truecolor Navy Blue background (renders identically in CMUX and Terminal.app)
     static let fgWhite     = "\u{1B}[38;5;15m"  // 256-color Bright white foreground
     static let fgGray      = "\u{1B}[38;5;244m" // 256-color Dim gray
     static let fgYellow    = "\u{1B}[38;5;220m" // 256-color Bright yellow (for shortcuts/hotkeys)
