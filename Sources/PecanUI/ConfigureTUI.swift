@@ -78,6 +78,7 @@ final class ConfigureTUI {
 
     // Loading indicator state
     private var isFetchingModels = false
+    private var modifiedProviderIDs: Set<String> = []
 
     // MARK: - Routing Screen State
     private var routingConfig = RoutingConfig()
@@ -463,6 +464,44 @@ final class ConfigureTUI {
         return refs
     }
 
+    private func refreshModifiedProvidersIfNeeded() async {
+        guard !modifiedProviderIDs.isEmpty else { return }
+        isFetchingModels = true
+        render() // Render the loading state/indicator immediately
+        
+        for pid in modifiedProviderIDs {
+            guard let provider = inMemoryProviders.first(where: { $0.id == pid }) else { continue }
+            if !provider.enabled {
+                continue
+            }
+            
+            if provider.id == "mlx" {
+                if let repo = provider.huggingfaceRepo {
+                    inMemoryAvailableModels["mlx"] = scanMLXModels(dirPath: repo)
+                }
+            } else if provider.id == "anthropic" {
+                inMemoryAvailableModels["anthropic"] = [
+                    "claude-3-5-sonnet",
+                    "claude-3-5-haiku",
+                    "claude-3-opus"
+                ]
+            } else if provider.id == "mock" {
+                inMemoryAvailableModels["mock"] = ["mock"]
+            } else {
+                let resolvedKey = KeychainHelper.get(key: pid) ?? provider.apiKey ?? ""
+                if let url = provider.url, !url.isEmpty {
+                    let result = await fetchRemoteModels(url: url, apiKey: resolvedKey)
+                    if !result.models.isEmpty {
+                        inMemoryAvailableModels[pid] = result.models
+                    }
+                }
+            }
+        }
+        
+        modifiedProviderIDs.removeAll()
+        isFetchingModels = false
+    }
+
     private func refreshAllProviderModels() async {
         var didUpdate = false
         for p in inMemoryProviders where p.enabled {
@@ -541,7 +580,8 @@ final class ConfigureTUI {
         if routingFieldIndex >= routingFields.count { routingFieldIndex = 0 }
     }
 
-    private func openRoutingPicker(target: String) {
+    private func openRoutingPicker(target: String) async {
+        await refreshModifiedProvidersIfNeeded()
         routingPickerTarget = target
         routingPickerItems = allAvailableModelRefs()
         routingPickerIndex = 0
@@ -659,15 +699,15 @@ final class ConfigureTUI {
     private func handleRoutingEnter() async {
         let label = routingFields[routingFieldIndex]
         if label == "Default Provider/Model" {
-            openRoutingPicker(target: "default")
+            await openRoutingPicker(target: "default")
         } else if label == "Judge Provider/Model" {
-            openRoutingPicker(target: "judge")
+            await openRoutingPicker(target: "judge")
         } else if label == "Context Window Fallback" {
-            openRoutingPicker(target: "ctx")
+            await openRoutingPicker(target: "ctx")
         } else if label == "Content Policy Fallback" {
-            openRoutingPicker(target: "content")
+            await openRoutingPicker(target: "content")
         } else if label == "Add Fallback" {
-            openRoutingPicker(target: "fb:-1")
+            await openRoutingPicker(target: "fb:-1")
         } else if label == "Add Budget Limit" {
             // Add budget for first provider without one
             let budgetedIDs = Set(routingConfig.providerBudgets.map { $0.providerID })
@@ -686,7 +726,7 @@ final class ConfigureTUI {
         } else if label.hasPrefix("fallback:") {
             let parts = label.components(separatedBy: ":")
             if let idx = Int(parts[safe: 1] ?? "") {
-                openRoutingPicker(target: "fb:\(idx)")
+                await openRoutingPicker(target: "fb:\(idx)")
             }
         } else if label.hasPrefix("budget:") {
             let parts = label.components(separatedBy: ":")
@@ -1229,6 +1269,7 @@ final class ConfigureTUI {
             } else {
                 inMemoryProviders.append(config)
             }
+            modifiedProviderIDs.insert(editID)
             
             // Sync memory active models list
             inMemoryActiveModels[editID] = Array(editActiveModels).sorted()
@@ -2216,7 +2257,8 @@ final class ConfigureTUI {
         agentsError = ""
     }
 
-    private func openAgentsPicker(target: String) {
+    private func openAgentsPicker(target: String) async {
+        await refreshModifiedProvidersIfNeeded()
         agentsPickerTarget = target
         
         var items = ["Default Model"]
@@ -2539,7 +2581,7 @@ final class ConfigureTUI {
         } else if fieldName == "Active Status" {
             editAgentEnabled.toggle()
         } else if fieldName == "Model Override" {
-            openAgentsPicker(target: "model")
+            await openAgentsPicker(target: "model")
         } else {
             // ID of built-in agent is read-only
             if fieldName == "Agent ID" && !isNew {
