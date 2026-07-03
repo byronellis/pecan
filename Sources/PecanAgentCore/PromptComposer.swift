@@ -145,7 +145,7 @@ public actor PromptComposer {
         let promptsPath = homeDir.appendingPathComponent(".pecan/prompts")
 
         if !fm.fileExists(atPath: promptsPath.path) {
-            try? fm.createDirectory(at: promptsPath, withIntermediateDirectories: true)
+            return
         }
 
         guard let files = try? fm.contentsOfDirectory(atPath: promptsPath.path) else { return }

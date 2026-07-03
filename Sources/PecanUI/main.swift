@@ -41,6 +41,17 @@ func main() async throws {
 
     let args = CommandLine.arguments.dropFirst()
     
+    // Ensure config.yaml is present on startup
+    let configPath = ProxyConfig.configFilePath
+    if !FileManager.default.fileExists(atPath: configPath) && args.first != "configure" && args.first != "config" && args.first != "server" {
+        print("config.yaml not found at \(configPath). Entering Onboarding Configuration...\r\n")
+        await runConfigureTUI()
+        if !FileManager.default.fileExists(atPath: configPath) {
+            print("Configuration was cancelled or not saved. Exiting.\r")
+            exit(0)
+        }
+    }
+    
     // Standalone server mode subcommand: pecan server
     if let first = args.first, first == "server" {
         print("Starting standalone HTTP Proxy server mode...\r")

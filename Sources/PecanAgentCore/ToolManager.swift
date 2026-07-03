@@ -95,7 +95,7 @@ public actor ToolManager {
         let toolsPath = homeDir.appendingPathComponent(".pecan/tools")
 
         if !fm.fileExists(atPath: toolsPath.path) {
-            try? fm.createDirectory(at: toolsPath, withIntermediateDirectories: true)
+            return
         }
 
         guard let files = try? fm.contentsOfDirectory(atPath: toolsPath.path) else { return }

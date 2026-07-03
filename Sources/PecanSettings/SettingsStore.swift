@@ -1,5 +1,61 @@
 import Foundation
 import GRDB
+import Security
+
+// MARK: - Keychain Secrets Support
+public struct KeychainHelper {
+    public static let service = "com.pecan.provider-keys"
+
+    public static func set(key: String, value: String) -> Bool {
+        guard let data = value.data(using: .utf8) else { return false }
+        
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        
+        SecItemDelete(query as CFDictionary)
+        
+        let attributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecValueData as String: data
+        ]
+        
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        return status == errSecSuccess
+    }
+
+    public static func get(key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: kCFBooleanTrue!,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        
+        var dataTypeRef: AnyObject?
+        let status = SecItemCopyMatching(query as CFDictionary, &dataTypeRef)
+        
+        guard status == errSecSuccess, let data = dataTypeRef as? Data else {
+            return nil
+        }
+        
+        return String(data: data, encoding: .utf8)
+    }
+
+    public static func delete(key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+}
 
 /// Persistent settings store at ~/.pecan/settings.db.
 /// Replaces the old ~/.pecan/config.yaml.
@@ -13,10 +69,14 @@ public actor SettingsStore {
     // MARK: - Setup
 
     public func open() throws {
-        let dir = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan")
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let path = dir.appendingPathComponent("settings.db").path
-        let queue = try DatabaseQueue(path: path)
+        // Automatically clean up old persistent settings.db if present to avoid pollution
+        let oldDbPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/settings.db").path
+        if FileManager.default.fileExists(atPath: oldDbPath) {
+            try? FileManager.default.removeItem(atPath: oldDbPath)
+        }
+
+        // Open an in-memory database so settings.db is never written to disk
+        let queue = try DatabaseQueue()
         try queue.write { db in
             try db.execute(sql: """
                 CREATE TABLE IF NOT EXISTS providers (
@@ -61,17 +121,22 @@ public actor SettingsStore {
         guard let db else { throw SettingsError.notOpen }
         return try db.read { db in
             let rows = try Row.fetchAll(db, sql: "SELECT * FROM providers ORDER BY id")
-            return rows.map { ProviderConfig(
-                id: $0["id"],
-                type: $0["type"],
-                url: $0["url"],
-                apiKey: $0["api_key"],
-                huggingfaceRepo: $0["hf_repo"],
-                contextWindowOverride: $0["ctx_window_override"],
-                requestTimeout: $0["request_timeout"],
-                useStreaming: ($0["use_streaming"] as Int? ?? 1) != 0,
-                enabled: ($0["enabled"] as Int) != 0
-            )}
+            return rows.map {
+                let id: String = $0["id"]
+                let keychainKey = KeychainHelper.get(key: id)
+                let dbKey: String? = $0["api_key"]
+                return ProviderConfig(
+                    id: id,
+                    type: $0["type"],
+                    url: $0["url"],
+                    apiKey: keychainKey ?? dbKey,
+                    huggingfaceRepo: $0["hf_repo"],
+                    contextWindowOverride: $0["ctx_window_override"],
+                    requestTimeout: $0["request_timeout"],
+                    useStreaming: ($0["use_streaming"] as Int? ?? 1) != 0,
+                    enabled: ($0["enabled"] as Int) != 0
+                )
+            }
         }
     }
 
@@ -81,11 +146,13 @@ public actor SettingsStore {
             guard let row = try Row.fetchOne(db, sql: "SELECT * FROM providers WHERE id = ?", arguments: [id]) else {
                 return nil
             }
+            let keychainKey = KeychainHelper.get(key: id)
+            let dbKey: String? = row["api_key"]
             return ProviderConfig(
                 id: row["id"],
                 type: row["type"],
                 url: row["url"],
-                apiKey: row["api_key"],
+                apiKey: keychainKey ?? dbKey,
                 huggingfaceRepo: row["hf_repo"],
                 contextWindowOverride: row["ctx_window_override"],
                 requestTimeout: row["request_timeout"],
@@ -265,10 +332,10 @@ public actor SettingsStore {
                 try db.execute(
                     sql: """
                         INSERT OR IGNORE INTO providers (id, type, url, api_key, hf_repo, ctx_window_override, enabled)
-                        VALUES (?, ?, ?, ?, ?, ?, 1)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """,
                     arguments: [key, model.type, model.url, model.apiKey,
-                                model.hfRepo, model.contextWindow]
+                                model.hfRepo, model.contextWindow, model.enabled ? 1 : 0]
                 )
             }
             if let defaultModel = parsed.defaultModel {
@@ -293,6 +360,7 @@ public actor SettingsStore {
         var apiKey: String?
         var hfRepo: String?
         var contextWindow: Int?
+        var enabled: Bool = true
     }
 
     private struct YAMLConfig {
@@ -337,6 +405,8 @@ public actor SettingsStore {
                 case "api_key":     result.models[key]?.apiKey = val.isEmpty ? nil : val
                 case "huggingface_repo": result.models[key]?.hfRepo = val.isEmpty ? nil : val
                 case "context_window": result.models[key]?.contextWindow = Int(val)
+                case "enabled":     result.models[key]?.enabled = (val == "true" || val == "yes" || val == "1")
+                case "active":      result.models[key]?.enabled = (val == "true" || val == "yes" || val == "1")
                 default: break
                 }
             } else if inTools && indent >= 2 {

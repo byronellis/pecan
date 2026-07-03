@@ -19,7 +19,7 @@ public actor HookManager {
         let hooksPath = homeDir.appendingPathComponent(".pecan/hooks")
 
         if !fm.fileExists(atPath: hooksPath.path) {
-            try? fm.createDirectory(at: hooksPath, withIntermediateDirectories: true)
+            return
         }
 
         guard let files = try? fm.contentsOfDirectory(atPath: hooksPath.path) else { return }
