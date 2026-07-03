@@ -29,12 +29,12 @@ struct BorderStyle: Sendable {
 
 // MARK: - ANSI Color Constants for BIOS Look
 enum BIOSStyle {
-    static let bgBlue      = "\u{1B}[48;5;18m" // Dark blue background
-    static let fgWhite     = "\u{1B}[38;5;15m" // Bright white foreground
-    static let fgGray      = "\u{1B}[38;5;244m" // Dim gray
-    static let fgYellow    = "\u{1B}[38;5;220m" // Bright yellow (for shortcuts/hotkeys)
-    static let fgCyan      = "\u{1B}[38;5;81m"  // Cyan
-    static let bgCyan      = "\u{1B}[48;5;81m"
+    static let bgBlue      = "\u{1B}[44m" // Universal Blue background
+    static let fgWhite     = "\u{1B}[97m" // Bright white foreground
+    static let fgGray      = "\u{1B}[90m" // Gray / bright black
+    static let fgYellow    = "\u{1B}[93m" // Bright yellow
+    static let fgCyan      = "\u{1B}[96m" // Bright cyan
+    static let bgCyan      = "\u{1B}[46m" // Cyan background
     static let reverse     = "\u{1B}[7m"
     static let bold        = "\u{1B}[1m"
     static let dim         = "\u{1B}[2m"

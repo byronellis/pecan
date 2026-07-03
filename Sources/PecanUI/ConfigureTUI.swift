@@ -87,10 +87,10 @@ final class ConfigureTUI {
     private func updateSize() {
         var ws = winsize()
         if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &ws) == 0, ws.ws_col > 0, ws.ws_row > 0 {
-            termRows = Int(ws.ws_row)
+            termRows = Int(ws.ws_row) - 1 // Subtract 1 to guarantee no cursor wrap scrolling
             termCols = Int(ws.ws_col)
         } else {
-            termRows = 24
+            termRows = 23
             termCols = 80
         }
         buffer.resize(width: termCols, height: termRows)
