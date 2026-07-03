@@ -89,8 +89,10 @@ public actor LocalSession {
             }
             
             let config = ProxyConfig.load()
-            let defaultModel = config.defaultModel ?? "claude-3-5-sonnet"
-            params["model"] = defaultModel
+            let activeAgentID = await PromptComposer.shared.activePersonaName ?? "general"
+            let agentConfig = try? await SettingsStore.shared.agent(id: activeAgentID)
+            let resolvedModel = (agentConfig?.enabled == true ? agentConfig?.model : nil) ?? config.defaultModel ?? "claude-3-5-sonnet"
+            params["model"] = resolvedModel
             
             let url = URL(string: "http://127.0.0.1:\(serverPort)/v1/chat/completions")!
             var request = URLRequest(url: url)

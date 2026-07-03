@@ -11,15 +11,18 @@ public actor SubagentSession {
     nonisolated let agentID: String
     let toolManager: ToolManager
     let toolTags: Set<String>
+    let model: String?
     private var messages: [[String: Any]] = []
 
     public init(
         toolManager: ToolManager = .shared,
-        toolTags: Set<String> = ["core", "web", "skills"]
+        toolTags: Set<String> = ["core", "web", "skills"],
+        model: String? = nil
     ) {
         self.agentID = "sub-\(UUID().uuidString.prefix(8))"
         self.toolManager = toolManager
         self.toolTags = toolTags
+        self.model = model
     }
 
     /// Run the subagent to completion and return its final response.
@@ -107,8 +110,8 @@ public actor SubagentSession {
         }
 
         let config = ProxyConfig.load()
-        let defaultModel = config.defaultModel ?? "claude-3-5-sonnet"
-        params["model"] = defaultModel
+        let activeModel = self.model ?? config.defaultModel ?? "claude-3-5-sonnet"
+        params["model"] = activeModel
 
         let port = (try? ServerStatus.read().port) ?? 3000
         let url = URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!

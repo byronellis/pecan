@@ -79,9 +79,57 @@ final class ConfigureTUI {
     // Loading indicator state
     private var isFetchingModels = false
 
+    // MARK: - Routing Screen State
+    private var routingConfig = RoutingConfig()
+    /// Flat list of field labels for the routing form
+    private var routingFields: [String] = []
+    private var routingFieldIndex: Int = 0
+    /// Are we editing a text sub-field on the routing screen?
+    private var routingEditingField: Int? = nil
+    private var routingEditBuffer: String = ""
+    private var routingEditCursor: Int = 0
+    /// Picker state: choose a provider+model from configured providers
+    private var routingPickerActive = false
+    private var routingPickerTarget = ""   // which field the picker writes to
+    private var routingPickerIndex = 0
+    private var routingPickerItems: [(provider: String, model: String)] = []
+    /// Fallback chain entry being edited (index into fallbackChain, or -1 for new)
+    private var routingFallbackEditIndex = -1
+
+    // MARK: - Agents Screen State
+    private enum AgentsSubScreen {
+        case list
+        case edit(Int)
+        case addCustom
+    }
+    private var inMemoryAgents: [AgentConfig] = []
+    private var agentsSubScreen: AgentsSubScreen = .list
+    private var agentsListSelectedIndex: Int = 0
+    private var agentsFields: [String] = []
+    private var agentsFieldIndex: Int = 0
+    private var agentsEditingField: Int? = nil
+    private var agentsEditBuffer: String = ""
+    private var agentsEditCursor: Int = 0
+    private var agentsError: String = ""
+    private var agentsPickerActive = false
+    private var agentsPickerIndex = 0
+    private var agentsPickerItems: [String] = []
+    private var agentsPickerTarget = ""
+
+    // Values of the agent currently being edited
+    private var editAgentID: String = ""
+    private var editAgentName: String = ""
+    private var editAgentDescription: String = ""
+    private var editAgentSystemPrompt: String = ""
+    private var editAgentModel: String? = nil
+    private var editAgentEnabled: Bool = true
+    private var editAgentAllowedToolTags: [String] = []
+
     init() {
         let items = [
             TUIMenuItem(id: "providers", label: "Configure Providers", hotkey: "P", isAction: false),
+            TUIMenuItem(id: "routing",   label: "Configure Routing",   hotkey: "R", isAction: false),
+            TUIMenuItem(id: "agents",    label: "Configure Agents",    hotkey: "A", isAction: false),
             TUIMenuItem(id: "save", label: "Save and Finish", hotkey: "S", isAction: true, action: { [weak self] in
                 await self?.saveAndFinish()
             }),
@@ -134,6 +182,13 @@ final class ConfigureTUI {
             }
         }
 
+        // Load routing config
+        routingConfig = (try? await SettingsStore.shared.loadRoutingConfig()) ?? RoutingConfig()
+        rebuildRoutingFields()
+
+        // Load agents config
+        inMemoryAgents = (try? await SettingsStore.shared.allAgents()) ?? []
+
         // Load active models from DB for each loaded provider
         for p in inMemoryProviders {
             let active = (try? await SettingsStore.shared.activeModels(providerID: p.id)) ?? []
@@ -159,9 +214,15 @@ final class ConfigureTUI {
         updateSize()
         render()
 
+        // Trigger startup model refresh
+        Task {
+            await refreshAllProviderModels()
+        }
+
         while !shouldExit {
             if let key = nextKey() {
                 var handled = false
+                let oldSelectedID = sidebarMenu.selectedIndex.map { sidebarMenu.items[$0].id }
                 
                 if isShowingModelModal {
                     // Modal absorbs all keys to close
@@ -178,6 +239,13 @@ final class ConfigureTUI {
                     if handled && splitLayout.activePane == .sidebar {
                         subScreen = .list
                         listSelectedIndex = 0
+                    }
+                }
+                
+                let newSelectedID = sidebarMenu.selectedIndex.map { sidebarMenu.items[$0].id }
+                if newSelectedID == "routing" && oldSelectedID != "routing" {
+                    Task {
+                        await refreshAllProviderModels()
                     }
                 }
                 
@@ -245,6 +313,66 @@ final class ConfigureTUI {
                 }
             }
         }
+        
+        // Write the routing config section
+        yaml += "routing:\n"
+        yaml += "  strategy: \(routingConfig.strategy.rawValue)\n"
+        yaml += "  default_route:\n"
+        yaml += "    provider: \(routingConfig.defaultRoute.providerID)\n"
+        yaml += "    model: \(routingConfig.defaultRoute.modelID)\n"
+        if let judge = routingConfig.autoJudgeModel {
+            yaml += "  auto_judge_model:\n"
+            yaml += "    provider: \(judge.providerID)\n"
+            yaml += "    model: \(judge.modelID)\n"
+        }
+        if !routingConfig.fallbackChain.isEmpty {
+            yaml += "  fallback_chain:\n"
+            for fb in routingConfig.fallbackChain {
+                yaml += "    - provider: \(fb.providerID)\n"
+                yaml += "      model: \(fb.modelID)\n"
+            }
+        }
+        if let ctx = routingConfig.contextWindowFallback {
+            yaml += "  context_window_fallback:\n"
+            yaml += "    provider: \(ctx.providerID)\n"
+            yaml += "    model: \(ctx.modelID)\n"
+        }
+        if let content = routingConfig.contentPolicyFallback {
+            yaml += "  content_policy_fallback:\n"
+            yaml += "    provider: \(content.providerID)\n"
+            yaml += "    model: \(content.modelID)\n"
+        }
+        yaml += "  circuit_breaker:\n"
+        yaml += "    enabled: \(routingConfig.circuitBreakerEnabled)\n"
+        yaml += "    fail_threshold: \(routingConfig.circuitBreakerFailThreshold)\n"
+        yaml += "    cooldown_seconds: \(routingConfig.circuitBreakerCooldownSeconds)\n"
+        yaml += "  budgets:\n"
+        yaml += "    enabled: \(routingConfig.budgetEnabled)\n"
+        if !routingConfig.providerBudgets.isEmpty {
+            yaml += "    provider_budgets:\n"
+            for b in routingConfig.providerBudgets {
+                yaml += "      \(b.providerID): \(b.dailyLimitUSD)\n"
+            }
+        }
+        
+        // Write the agents config section
+        if !inMemoryAgents.isEmpty {
+            yaml += "agents:\n"
+            for a in inMemoryAgents {
+                yaml += "  \(a.id):\n"
+                yaml += "    name: \"\(a.name)\"\n"
+                yaml += "    description: \"\(a.description)\"\n"
+                yaml += "    system_prompt: \"\(a.systemPrompt)\"\n"
+                if let model = a.model {
+                    yaml += "    model: \"\(model)\"\n"
+                } else {
+                    yaml += "    model: null\n"
+                }
+                yaml += "    enabled: \(a.enabled)\n"
+                yaml += "    allowed_tool_tags: \"\(a.allowedToolTags.joined(separator: ","))\"\n"
+            }
+        }
+        
         return yaml
     }
 
@@ -287,6 +415,23 @@ final class ConfigureTUI {
             try? await SettingsStore.shared.syncActiveModels(providerID: p.id, activeModels: active)
         }
 
+        // Sync custom subagents deletion in DB
+        let existingAgents = (try? await SettingsStore.shared.allAgents()) ?? []
+        let existingAgentIDs = Set(existingAgents.map { $0.id })
+        let inMemoryAgentIDs = Set(inMemoryAgents.map { $0.id })
+        let agentsToDelete = existingAgentIDs.subtracting(inMemoryAgentIDs)
+        for id in agentsToDelete {
+            try? await SettingsStore.shared.deleteAgent(id: id)
+        }
+        
+        // Save agents
+        for a in inMemoryAgents {
+            try? await SettingsStore.shared.saveAgent(a)
+        }
+
+        // Save routing config
+        try? await SettingsStore.shared.saveRoutingConfig(routingConfig)
+
         let defaultModel = try? await SettingsStore.shared.globalDefault()
         let yaml = serializeToYAML(providers: inMemoryProviders, defaultModel: defaultModel)
         let path = ProxyConfig.configFilePath
@@ -304,10 +449,401 @@ final class ConfigureTUI {
         shouldExit = true
     }
 
+    // MARK: - Routing Screen Logic
+
+    /// All (providerID, modelID) pairs currently available across configured active models.
+    private func allAvailableModelRefs() -> [(provider: String, model: String)] {
+        var refs: [(provider: String, model: String)] = []
+        for p in inMemoryProviders where p.enabled {
+            let active = inMemoryActiveModels[p.id] ?? []
+            let available = inMemoryAvailableModels[p.id] ?? []
+            let combined = Array(Set(active + available)).sorted()
+            for m in combined { refs.append((p.id, m)) }
+        }
+        return refs
+    }
+
+    private func refreshAllProviderModels() async {
+        var didUpdate = false
+        for p in inMemoryProviders where p.enabled {
+            let pid = p.id
+            let existing = inMemoryAvailableModels[pid] ?? []
+            if pid == "mlx" {
+                if let repo = p.huggingfaceRepo {
+                    let models = scanMLXModels(dirPath: repo)
+                    if models != existing {
+                        inMemoryAvailableModels["mlx"] = models
+                        didUpdate = true
+                    }
+                }
+            } else if pid == "anthropic" {
+                let models = [
+                    "claude-3-5-sonnet",
+                    "claude-3-5-haiku",
+                    "claude-3-opus"
+                ]
+                if models != existing {
+                    inMemoryAvailableModels["anthropic"] = models
+                    didUpdate = true
+                }
+            } else if pid == "mock" {
+                let models = ["mock"]
+                if models != existing {
+                    inMemoryAvailableModels["mock"] = models
+                    didUpdate = true
+                }
+            } else {
+                let resolvedKey = KeychainHelper.get(key: pid) ?? ""
+                if let url = p.url, !url.isEmpty {
+                    let result = await fetchRemoteModels(url: url, apiKey: resolvedKey)
+                    if !result.models.isEmpty && result.models != existing {
+                        inMemoryAvailableModels[pid] = result.models
+                        didUpdate = true
+                    }
+                }
+            }
+        }
+        if didUpdate {
+            rebuildRoutingFields()
+            render()
+        }
+    }
+
+    private func rebuildRoutingFields() {
+        var fields: [String] = []
+        fields.append("── DEFAULT ROUTE ──")
+        fields.append("Default Provider/Model")
+        fields.append("── STRATEGY ──")
+        for s in RoutingStrategy.allCases {
+            fields.append("strategy:\(s.rawValue)")
+        }
+        fields.append("── AUTOMATIC ROUTING ──")
+        fields.append("Judge Provider/Model")
+        fields.append("── FALLBACKS ──")
+        for (i, fb) in routingConfig.fallbackChain.enumerated() {
+            fields.append("fallback:\(i):\(fb.providerID)/\(fb.modelID)")
+        }
+        fields.append("Add Fallback")
+        fields.append("Context Window Fallback")
+        fields.append("Content Policy Fallback")
+        fields.append("── CIRCUIT BREAKER ──")
+        fields.append("Circuit Breaker Enabled")
+        fields.append("Fail Threshold")
+        fields.append("Cooldown (seconds)")
+        fields.append("── BUDGETS ──")
+        fields.append("Budget Limits Enabled")
+        for (i, b) in routingConfig.providerBudgets.enumerated() {
+            fields.append("budget:\(i):\(b.providerID)")
+        }
+        fields.append("Add Budget Limit")
+        fields.append("Save Routing")
+        self.routingFields = fields
+        if routingFieldIndex >= routingFields.count { routingFieldIndex = 0 }
+    }
+
+    private func openRoutingPicker(target: String) {
+        routingPickerTarget = target
+        routingPickerItems = allAvailableModelRefs()
+        routingPickerIndex = 0
+        routingPickerActive = true
+    }
+
+    private func applyRoutingPicker() {
+        guard routingPickerIndex < routingPickerItems.count else { return }
+        let sel = routingPickerItems[routingPickerIndex]
+        let ref = ModelRef(providerID: sel.provider, modelID: sel.model)
+        switch routingPickerTarget {
+        case "default":  routingConfig.defaultRoute = ref
+        case "judge":    routingConfig.autoJudgeModel = ref
+        case "ctx":      routingConfig.contextWindowFallback = ref
+        case "content":  routingConfig.contentPolicyFallback = ref
+        default:
+            if routingPickerTarget.hasPrefix("fb:") {
+                let idx = Int(routingPickerTarget.dropFirst(3)) ?? -1
+                if idx == -1 {
+                    routingConfig.fallbackChain.append(ref)
+                } else if idx < routingConfig.fallbackChain.count {
+                    routingConfig.fallbackChain[idx] = ref
+                }
+            }
+        }
+        rebuildRoutingFields()
+    }
+
+    private func handleRoutingKey(_ key: InputKey) async -> Bool {
+        // ── Picker mode ──────────────────────────────────────────────────────
+        if routingPickerActive {
+            switch key {
+            case .arrowDown:
+                routingPickerIndex = (routingPickerIndex + 1) % max(1, routingPickerItems.count)
+            case .arrowUp:
+                routingPickerIndex = (routingPickerIndex - 1 + max(1, routingPickerItems.count)) % max(1, routingPickerItems.count)
+            case .enter:
+                applyRoutingPicker()
+                routingPickerActive = false
+            case .escape:
+                routingPickerActive = false
+            default: break
+            }
+            return true
+        }
+
+        // ── Text field editing mode ───────────────────────────────────────────
+        if routingEditingField != nil {
+            switch key {
+            case .enter:  applyRoutingEditBuffer(); return true
+            case .escape: routingEditingField = nil; routingEditBuffer = ""; routingEditCursor = 0; return true
+            case .character(let c):   leInsert(c, buf: &routingEditBuffer, cur: &routingEditCursor); return true
+            case .backspace:          leBackspace(buf: &routingEditBuffer, cur: &routingEditCursor); return true
+            case .delete:             leDeleteForward(buf: &routingEditBuffer, cur: &routingEditCursor); return true
+            case .arrowLeft, .ctrlB:  leMoveLeft(buf: &routingEditBuffer, cur: &routingEditCursor); return true
+            case .arrowRight, .ctrlF: leMoveRight(buf: &routingEditBuffer, cur: &routingEditCursor); return true
+            case .ctrlA:              leMoveHome(buf: &routingEditBuffer, cur: &routingEditCursor); return true
+            case .ctrlE:              leMoveEnd(buf: &routingEditBuffer, cur: &routingEditCursor); return true
+            case .ctrlK:              leKillToEnd(buf: &routingEditBuffer, cur: &routingEditCursor, ring: &formKillRing); return true
+            case .ctrlU:              leKillToStart(buf: &routingEditBuffer, cur: &routingEditCursor, ring: &formKillRing); return true
+            case .ctrlW:              leKillWordBackward(buf: &routingEditBuffer, cur: &routingEditCursor, ring: &formKillRing); return true
+            case .ctrlY:              leYank(buf: &routingEditBuffer, cur: &routingEditCursor, ring: formKillRing); return true
+            default: break
+            }
+            return true
+        }
+
+        // ── Navigation & actions ─────────────────────────────────────────────
+        switch key {
+        case .arrowDown:
+            routingFieldIndex = (routingFieldIndex + 1) % routingFields.count
+            // skip section headers
+            while routingFields[routingFieldIndex].hasPrefix("──") {
+                routingFieldIndex = (routingFieldIndex + 1) % routingFields.count
+            }
+            return true
+        case .arrowUp:
+            routingFieldIndex = (routingFieldIndex - 1 + routingFields.count) % routingFields.count
+            while routingFields[routingFieldIndex].hasPrefix("──") {
+                routingFieldIndex = (routingFieldIndex - 1 + routingFields.count) % routingFields.count
+            }
+            return true
+        case .escape:
+            splitLayout.activePane = .sidebar
+            return true
+        case .enter:
+            await handleRoutingEnter()
+            return true
+        default:
+            break
+        }
+        return false
+    }
+
+    private func applyRoutingEditBuffer() {
+        guard let fi = routingEditingField else { return }
+        let label = routingFields[fi]
+        let val = routingEditBuffer.trimmingCharacters(in: .whitespacesAndNewlines)
+        if label == "Fail Threshold" {
+            routingConfig.circuitBreakerFailThreshold = Int(val) ?? routingConfig.circuitBreakerFailThreshold
+        } else if label == "Cooldown (seconds)" {
+            routingConfig.circuitBreakerCooldownSeconds = Int(val) ?? routingConfig.circuitBreakerCooldownSeconds
+        } else if label.hasPrefix("budget:") {
+            let parts = label.components(separatedBy: ":")
+            if let idx = Int(parts[safe: 1] ?? ""), idx < routingConfig.providerBudgets.count {
+                routingConfig.providerBudgets[idx].dailyLimitUSD = Double(val) ?? routingConfig.providerBudgets[idx].dailyLimitUSD
+            }
+        }
+        routingEditingField = nil
+        routingEditBuffer = ""
+        routingEditCursor = 0
+        rebuildRoutingFields()
+    }
+
+    private func handleRoutingEnter() async {
+        let label = routingFields[routingFieldIndex]
+        if label == "Default Provider/Model" {
+            openRoutingPicker(target: "default")
+        } else if label == "Judge Provider/Model" {
+            openRoutingPicker(target: "judge")
+        } else if label == "Context Window Fallback" {
+            openRoutingPicker(target: "ctx")
+        } else if label == "Content Policy Fallback" {
+            openRoutingPicker(target: "content")
+        } else if label == "Add Fallback" {
+            openRoutingPicker(target: "fb:-1")
+        } else if label == "Add Budget Limit" {
+            // Add budget for first provider without one
+            let budgetedIDs = Set(routingConfig.providerBudgets.map { $0.providerID })
+            let unbudgeted = inMemoryProviders.filter { !budgetedIDs.contains($0.id) }
+            if let first = unbudgeted.first {
+                routingConfig.providerBudgets.append(ProviderBudget(providerID: first.id, dailyLimitUSD: 10.0))
+                rebuildRoutingFields()
+            }
+        } else if label == "Circuit Breaker Enabled" {
+            routingConfig.circuitBreakerEnabled.toggle()
+        } else if label == "Budget Limits Enabled" {
+            routingConfig.budgetEnabled.toggle()
+        } else if label.hasPrefix("strategy:") {
+            let raw = String(label.dropFirst(9))
+            routingConfig.strategy = RoutingStrategy(rawValue: raw) ?? .simple
+        } else if label.hasPrefix("fallback:") {
+            let parts = label.components(separatedBy: ":")
+            if let idx = Int(parts[safe: 1] ?? "") {
+                openRoutingPicker(target: "fb:\(idx)")
+            }
+        } else if label.hasPrefix("budget:") {
+            let parts = label.components(separatedBy: ":")
+            if let idx = Int(parts[safe: 1] ?? ""), idx < routingConfig.providerBudgets.count {
+                routingEditingField = routingFieldIndex
+                routingEditBuffer = String(routingConfig.providerBudgets[idx].dailyLimitUSD)
+                routingEditCursor = routingEditBuffer.count
+            }
+        } else if label == "Fail Threshold" || label == "Cooldown (seconds)" {
+            routingEditingField = routingFieldIndex
+            routingEditBuffer = label == "Fail Threshold"
+                ? String(routingConfig.circuitBreakerFailThreshold)
+                : String(routingConfig.circuitBreakerCooldownSeconds)
+            routingEditCursor = routingEditBuffer.count
+        } else if label == "Save Routing" {
+            try? await SettingsStore.shared.saveRoutingConfig(routingConfig)
+            splitLayout.activePane = .sidebar
+        }
+    }
+
+    // MARK: - Routing Renderer
+
+    private func renderRoutingScreen(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        if routingPickerActive {
+            renderRoutingPicker(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
+            return
+        }
+
+        var y = contentY
+        let maxY = contentY + contentH - 1
+
+        for (i, label) in routingFields.enumerated() {
+            guard y <= maxY else { break }
+            let isSelected = (i == routingFieldIndex)
+            let selStyle = isSelected ? BIOSStyle.selection + BIOSStyle.bold : BIOSStyle.fgWhite
+            let cursor = isSelected ? "▶ " : "  "
+
+            if label.hasPrefix("──") {
+                // Section header
+                buffer.writeString(x: contentX, y: y, string: label, style: BIOSStyle.fgCyan + BIOSStyle.bold)
+                y += 1; continue
+            }
+
+            if label == "Default Provider/Model" {
+                let val = routingConfig.defaultRoute.providerID.isEmpty ? "(none selected)" : routingConfig.defaultRoute.display
+                buffer.writeString(x: contentX, y: y, string: cursor + "Default Route:         \(val)", style: selStyle)
+            } else if label.hasPrefix("strategy:") {
+                let raw = String(label.dropFirst(9))
+                let s = RoutingStrategy(rawValue: raw)!
+                let isActive = (routingConfig.strategy == s)
+                let indicator = isActive ? "(●) " : "( ) "
+                let style = isActive ? BIOSStyle.fgCyan + BIOSStyle.bold : (isSelected ? selStyle : BIOSStyle.fgGray)
+                buffer.writeString(x: contentX, y: y, string: cursor + indicator + s.displayName, style: style)
+            } else if label == "Judge Provider/Model" {
+                let enabled = routingConfig.strategy == .automatic
+                let val = routingConfig.autoJudgeModel?.display ?? "(none)"
+                let style = enabled ? selStyle : BIOSStyle.fgGray
+                buffer.writeString(x: contentX, y: y, string: cursor + "Judge Model:           \(val)" + (enabled ? "" : "  [inactive]"), style: style)
+            } else if label.hasPrefix("fallback:") {
+                let parts = label.components(separatedBy: ":")
+                let idx = Int(parts[safe: 1] ?? "") ?? 0
+                let fb = routingConfig.fallbackChain[safe: idx]
+                let val = fb?.display ?? "(empty)"
+                buffer.writeString(x: contentX, y: y, string: cursor + "  Fallback #\(idx + 1):         \(val)", style: selStyle)
+            } else if label == "Add Fallback" {
+                buffer.writeString(x: contentX, y: y, string: cursor + "[ Add Fallback Entry ]", style: isSelected ? selStyle : BIOSStyle.fgCyan)
+            } else if label == "Context Window Fallback" {
+                let val = routingConfig.contextWindowFallback?.display ?? "(none)"
+                buffer.writeString(x: contentX, y: y, string: cursor + "Context Overflow:      \(val)", style: selStyle)
+            } else if label == "Content Policy Fallback" {
+                let val = routingConfig.contentPolicyFallback?.display ?? "(none)"
+                buffer.writeString(x: contentX, y: y, string: cursor + "Content Refused:       \(val)", style: selStyle)
+            } else if label == "Circuit Breaker Enabled" {
+                let v = routingConfig.circuitBreakerEnabled ? "Yes" : "No"
+                buffer.writeString(x: contentX, y: y, string: cursor + "Circuit Breaker:       \(v)", style: selStyle)
+            } else if label == "Fail Threshold" {
+                let editing = routingEditingField == i
+                if editing {
+                    let pre = String(routingEditBuffer.prefix(routingEditCursor))
+                    let post = String(routingEditBuffer.dropFirst(routingEditCursor))
+                    buffer.writeString(x: contentX, y: y, string: cursor + "Fail Threshold:        \(pre)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    let cx = contentX + 2 + 23 + pre.count
+                    buffer.writeString(x: cx, y: y, string: post.isEmpty ? " " : String(post.prefix(1)), style: BIOSStyle.reverse + BIOSStyle.bold)
+                    if !post.isEmpty { buffer.writeString(x: cx + 1, y: y, string: String(post.dropFirst()), style: BIOSStyle.fgYellow + BIOSStyle.bold) }
+                } else {
+                    buffer.writeString(x: contentX, y: y, string: cursor + "Fail Threshold:        \(routingConfig.circuitBreakerFailThreshold)", style: selStyle)
+                }
+            } else if label == "Cooldown (seconds)" {
+                let editing = routingEditingField == i
+                if editing {
+                    let pre = String(routingEditBuffer.prefix(routingEditCursor))
+                    let post = String(routingEditBuffer.dropFirst(routingEditCursor))
+                    buffer.writeString(x: contentX, y: y, string: cursor + "Cooldown (secs):       \(pre)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    let cx = contentX + 2 + 23 + pre.count
+                    buffer.writeString(x: cx, y: y, string: post.isEmpty ? " " : String(post.prefix(1)), style: BIOSStyle.reverse + BIOSStyle.bold)
+                    if !post.isEmpty { buffer.writeString(x: cx + 1, y: y, string: String(post.dropFirst()), style: BIOSStyle.fgYellow + BIOSStyle.bold) }
+                } else {
+                    buffer.writeString(x: contentX, y: y, string: cursor + "Cooldown (secs):       \(routingConfig.circuitBreakerCooldownSeconds)", style: selStyle)
+                }
+            } else if label == "Budget Limits Enabled" {
+                let v = routingConfig.budgetEnabled ? "Yes" : "No"
+                buffer.writeString(x: contentX, y: y, string: cursor + "Daily Budgets:         \(v)", style: selStyle)
+            } else if label.hasPrefix("budget:") {
+                let parts = label.components(separatedBy: ":")
+                if let idx = Int(parts[safe: 1] ?? ""), let b = routingConfig.providerBudgets[safe: idx] {
+                    let editing = routingEditingField == i
+                    if editing {
+                        buffer.writeString(x: contentX, y: y, string: cursor + "  \(b.providerID) limit $:  \(routingEditBuffer)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    } else {
+                        buffer.writeString(x: contentX, y: y, string: cursor + "  \(b.providerID) limit $:  \(String(format: "%.2f", b.dailyLimitUSD))/day", style: selStyle)
+                    }
+                }
+            } else if label == "Add Budget Limit" {
+                buffer.writeString(x: contentX, y: y, string: cursor + "[ Add Budget Limit ]", style: isSelected ? selStyle : BIOSStyle.fgCyan)
+            } else if label == "Save Routing" {
+                buffer.writeString(x: contentX, y: y, string: cursor + "[ Save Routing Config ]", style: isSelected ? selStyle : BIOSStyle.fgWhite + BIOSStyle.bold)
+            } else {
+                buffer.writeString(x: contentX, y: y, string: cursor + label, style: selStyle)
+            }
+            y += 1
+        }
+
+        let hint = " [↑/↓] Navigate  [Enter] Select/Toggle  [Esc] Back "
+        buffer.writeStringCentered(x: contentX, y: maxY, w: contentW, string: hint, style: BIOSStyle.reverse)
+    }
+
+    private func renderRoutingPicker(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        buffer.writeString(x: contentX, y: contentY, string: "Select Provider / Model:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+        let listH = contentH - 3
+        buffer.drawBox(x: contentX, y: contentY + 1, w: contentW, h: listH, title: "AVAILABLE MODELS", borderStyle: .single, boxStyle: BIOSStyle.fgGray, titleStyle: BIOSStyle.fgCyan)
+
+        if routingPickerItems.isEmpty {
+            buffer.writeString(x: contentX + 2, y: contentY + 3, string: "No active models configured. Add models in Configure Providers first.", style: BIOSStyle.fgGray)
+        } else {
+            for (i, item) in routingPickerItems.prefix(listH - 2).enumerated() {
+                let sel = (i == routingPickerIndex)
+                let style = sel ? BIOSStyle.selection + BIOSStyle.bold : BIOSStyle.fgWhite
+                let c = sel ? "▶ " : "  "
+                buffer.writeString(x: contentX + 1, y: contentY + 2 + i, string: c + item.provider + " / " + item.model, style: style)
+            }
+        }
+        buffer.writeStringCentered(x: contentX, y: contentY + listH + 1, w: contentW, string: " [↑/↓] Navigate  [Enter] Select  [Esc] Cancel ", style: BIOSStyle.reverse)
+    }
+
     // MARK: - Main Panel Key Handlers
 
     private func handleMainPanelKey(_ key: InputKey) async -> Bool {
         let selectedID = sidebarMenu.selectedIndex.map { sidebarMenu.items[$0].id }
+
+        if selectedID == "routing" {
+            return await handleRoutingKey(key)
+        }
+
+        if selectedID == "agents" {
+            return await handleAgentsKey(key)
+        }
+
         guard selectedID == "providers" else { return false }
         
         switch subScreen {
@@ -1202,6 +1738,13 @@ final class ConfigureTUI {
             case .edit:        mainTitle = "EDIT PROVIDER DETAILS"
             case .addCustom:   mainTitle = "ADD CUSTOM PROVIDER"
             }
+        case "routing":   mainTitle = "ROUTING CONFIGURATION"
+        case "agents":
+            switch agentsSubScreen {
+            case .list:        mainTitle = "AGENTS CONFIGURATION"
+            case .edit:        mainTitle = "EDIT AGENT PARAMETERS"
+            case .addCustom:   mainTitle = "ADD CUSTOM SUBAGENT"
+            }
         case "save":      mainTitle = "SAVE & EXIT"
         case "cancel":    mainTitle = "CANCEL & EXIT"
         default:          mainTitle = "WELCOME"
@@ -1221,7 +1764,13 @@ final class ConfigureTUI {
             switch selectedID {
             case "providers":
                 renderProvidersScreen(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
-                
+
+            case "routing":
+                renderRoutingScreen(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
+
+            case "agents":
+                renderAgentsScreen(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
+
             case "save":
                 let text = [
                     "Save changes and write a new config.yaml.",
@@ -1254,6 +1803,8 @@ final class ConfigureTUI {
                     "",
                     "Quick Shortcuts:",
                     "  [P] Configure Providers",
+                    "  [R] Configure Routing",
+                    "  [A] Configure Agents",
                     "  [S] Save and Finish",
                     "  [C] Cancel and Finish"
                 ]
@@ -1268,7 +1819,7 @@ final class ConfigureTUI {
 
         // 3. Draw Help Bar at the bottom
         let helpY = h - 2
-        let helpBar = " [↑/↓] Navigate   [Enter] Select   [Esc] Back   [P] Providers   [S] Save   [C] Cancel"
+        let helpBar = " [↑/↓] Navigate   [Enter] Select   [Esc] Back   [P] Providers   [R] Routing   [A] Agents   [S] Save   [C] Cancel"
         buffer.writeString(x: 0, y: helpY, string: helpBar.padding(toLength: w, withPad: " ", startingAt: 0), style: BIOSStyle.reverse + BIOSStyle.bold)
         
         let credit = " Pecan UI Config Editor v2.0"
@@ -1540,6 +2091,473 @@ final class ConfigureTUI {
         let startY = y + max(0, (h - text.count) / 2)
         for (idx, line) in text.enumerated() {
             buffer.writeStringCentered(x: x, y: startY + idx, w: w, string: line, style: style)
+        }
+    }
+
+    // MARK: - Agents Helper Methods
+
+    private func rebuildAgentsFields() {
+        var fields: [String] = []
+        switch agentsSubScreen {
+        case .list:
+            break
+        case .edit(let idx):
+            if idx < inMemoryAgents.count {
+                let agent = inMemoryAgents[idx]
+                if agent.id == "general" || agent.id == "planning" || agent.id == "coordinator" {
+                    // Built-in agents have read-only ID
+                    fields.append("Agent ID")
+                } else {
+                    fields.append("Agent ID")
+                }
+            } else {
+                fields.append("Agent ID")
+            }
+            fields.append("Agent Name")
+            fields.append("Description")
+            fields.append("System Prompt")
+            fields.append("Model Override")
+            fields.append("Allowed Tool Tags")
+            fields.append("Active Status")
+            fields.append("Save Details")
+            fields.append("Cancel")
+            if idx < inMemoryAgents.count {
+                let agent = inMemoryAgents[idx]
+                if agent.id != "general" && agent.id != "planning" && agent.id != "coordinator" {
+                    fields.append("Delete Agent")
+                }
+            }
+        case .addCustom:
+            fields.append("Agent ID")
+            fields.append("Agent Name")
+            fields.append("Description")
+            fields.append("System Prompt")
+            fields.append("Model Override")
+            fields.append("Allowed Tool Tags")
+            fields.append("Active Status")
+            fields.append("Save Details")
+            fields.append("Cancel")
+        }
+        agentsFields = fields
+        if agentsFieldIndex >= agentsFields.count { agentsFieldIndex = 0 }
+    }
+
+    private func enterAgentEditForm(index: Int) {
+        guard index < inMemoryAgents.count else { return }
+        let a = inMemoryAgents[index]
+        editAgentID = a.id
+        editAgentName = a.name
+        editAgentDescription = a.description
+        editAgentSystemPrompt = a.systemPrompt
+        editAgentModel = a.model
+        editAgentEnabled = a.enabled
+        editAgentAllowedToolTags = a.allowedToolTags
+        
+        agentsSubScreen = .edit(index)
+        agentsFieldIndex = 0
+        agentsEditingField = nil
+        agentsError = ""
+        rebuildAgentsFields()
+    }
+
+    private func enterAgentAddForm() {
+        editAgentID = ""
+        editAgentName = ""
+        editAgentDescription = ""
+        editAgentSystemPrompt = ""
+        editAgentModel = nil
+        editAgentEnabled = true
+        editAgentAllowedToolTags = ["core", "web", "skills"]
+        
+        agentsSubScreen = .addCustom
+        agentsFieldIndex = 0
+        agentsEditingField = nil
+        agentsError = ""
+        rebuildAgentsFields()
+    }
+
+    private func saveAgentDetails(isNew: Bool, index: Int?) {
+        let cleanID = editAgentID.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if cleanID.isEmpty {
+            agentsError = "Agent ID is required."
+            return
+        }
+        if isNew {
+            if inMemoryAgents.contains(where: { $0.id == cleanID }) {
+                agentsError = "An agent with ID '\(cleanID)' already exists."
+                return
+            }
+        }
+        
+        let agent = AgentConfig(
+            id: cleanID,
+            name: editAgentName.isEmpty ? editAgentID : editAgentName,
+            description: editAgentDescription,
+            systemPrompt: editAgentSystemPrompt,
+            model: editAgentModel,
+            enabled: editAgentEnabled,
+            allowedToolTags: editAgentAllowedToolTags
+        )
+        
+        if isNew {
+            inMemoryAgents.append(agent)
+        } else if let idx = index, idx < inMemoryAgents.count {
+            inMemoryAgents[idx] = agent
+        }
+        
+        agentsSubScreen = .list
+        agentsError = ""
+    }
+
+    private func deleteAgentDetails(index: Int) {
+        guard index < inMemoryAgents.count else { return }
+        inMemoryAgents.remove(at: index)
+        agentsSubScreen = .list
+        agentsError = ""
+    }
+
+    private func openAgentsPicker(target: String) {
+        agentsPickerTarget = target
+        
+        var items = ["Default Model"]
+        let refs = allAvailableModelRefs()
+        for ref in refs {
+            items.append("\(ref.provider)/\(ref.model)")
+        }
+        agentsPickerItems = items
+        agentsPickerIndex = 0
+        agentsPickerActive = true
+    }
+
+    private func applyAgentsPicker() {
+        guard agentsPickerIndex < agentsPickerItems.count else { return }
+        let sel = agentsPickerItems[agentsPickerIndex]
+        if sel == "Default Model" {
+            editAgentModel = nil
+        } else {
+            editAgentModel = sel
+        }
+        agentsPickerActive = false
+    }
+
+    private func drawAgentForm(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        buffer.writeString(x: contentX, y: contentY, string: "Edit Agent Parameters:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+        
+        let maxDisplayLines = contentH - 4
+        var startIdx = 0
+        if agentsFieldIndex >= maxDisplayLines {
+            startIdx = agentsFieldIndex - maxDisplayLines + 1
+        }
+        
+        var displayCount = 0
+        for idx in startIdx..<agentsFields.count {
+            if displayCount >= maxDisplayLines { break }
+            
+            let label = agentsFields[idx]
+            let isSelected = (agentsFieldIndex == idx)
+            let isEditingThis = (agentsEditingField == idx)
+            let cursor = isSelected ? "▶ " : "  "
+            
+            var style = BIOSStyle.fgWhite
+            if isSelected {
+                style = BIOSStyle.selection + BIOSStyle.bold
+            }
+            
+            let y = contentY + 2 + displayCount
+            displayCount += 1
+            
+            if label == "Save Details" || label == "Cancel" || label == "Delete Agent" {
+                let display = isSelected ? "[ \(label) ]" : "  [\(label)]"
+                buffer.writeString(x: contentX + 2, y: y, string: display, style: style)
+            } else if label == "Active Status" {
+                let valStr = editAgentEnabled ? "Yes (Active)" : "No (Inactive)"
+                let display = "Active Status:         \(valStr)"
+                buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: style)
+            } else if label == "Model Override" {
+                let valStr = editAgentModel ?? "Default Model"
+                let display = "Model Override:        \(valStr)"
+                buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: style)
+            } else {
+                let labelPadded = label.padding(toLength: 22, withPad: " ", startingAt: 0)
+                var valStr = ""
+                if label == "Agent ID" {
+                    valStr = editAgentID
+                } else if label == "Agent Name" {
+                    valStr = editAgentName
+                } else if label == "Description" {
+                    valStr = editAgentDescription
+                } else if label == "System Prompt" {
+                    valStr = editAgentSystemPrompt
+                } else if label == "Allowed Tool Tags" {
+                    valStr = editAgentAllowedToolTags.joined(separator: ",")
+                }
+                
+                if isEditingThis {
+                    let prefixStr = cursor + labelPadded + ": "
+                    let pre = String(agentsEditBuffer.prefix(agentsEditCursor))
+                    buffer.writeString(x: contentX + 2, y: y, string: prefixStr + pre, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    let curX = contentX + 2 + prefixStr.count + agentsEditCursor
+                    if agentsEditCursor < agentsEditBuffer.count {
+                        let idx = agentsEditBuffer.index(agentsEditBuffer.startIndex, offsetBy: agentsEditCursor)
+                        let ch = String(agentsEditBuffer[idx])
+                        let rest = String(agentsEditBuffer[agentsEditBuffer.index(after: idx)...])
+                        buffer.writeString(x: curX, y: y, string: ch, style: BIOSStyle.reverse + BIOSStyle.bold)
+                        buffer.writeString(x: curX + 1, y: y, string: rest, style: BIOSStyle.fgYellow + BIOSStyle.bold)
+                    } else {
+                        buffer.writeString(x: curX, y: y, string: " ", style: BIOSStyle.reverse + BIOSStyle.bold)
+                    }
+                } else {
+                    let display = "\(labelPadded): \(valStr.isEmpty ? "(empty)" : valStr)"
+                    buffer.writeString(x: contentX + 2, y: y, string: cursor + display, style: style)
+                }
+            }
+        }
+        
+        if !agentsError.isEmpty {
+            buffer.writeString(x: contentX + 2, y: contentY + contentH - 1, string: "⚠ \(agentsError)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
+        }
+    }
+
+    private func renderAgentsScreen(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        if agentsPickerActive {
+            renderAgentsPicker(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
+            return
+        }
+        
+        switch agentsSubScreen {
+        case .list:
+            buffer.writeString(x: contentX, y: contentY, string: "Configure Agents & Subagents:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+            
+            for idx in 0..<(inMemoryAgents.count + 1) {
+                let isSelected = (agentsListSelectedIndex == idx) && (splitLayout.activePane == .mainPanel)
+                let cursor = isSelected ? "▶ " : "  "
+                
+                var style = BIOSStyle.fgWhite
+                if isSelected {
+                    style = BIOSStyle.selection + BIOSStyle.bold
+                }
+                
+                let y = contentY + 2 + idx
+                
+                if idx < inMemoryAgents.count {
+                    let a = inMemoryAgents[idx]
+                    let statusBadge = a.enabled ? "● Active  " : "○ Inactive"
+                    let badgeStyle = a.enabled ? BIOSStyle.fgCyan + BIOSStyle.bold : BIOSStyle.fgGray
+                    
+                    buffer.writeString(x: contentX + 2, y: y, string: cursor, style: style)
+                    buffer.writeString(x: contentX + 4, y: y, string: statusBadge, style: isSelected ? style : badgeStyle)
+                    
+                    let idStr = a.id.padding(toLength: 15, withPad: " ", startingAt: 0)
+                    buffer.writeString(x: contentX + 16, y: y, string: idStr, style: style)
+                    
+                    let modelStr = a.model ?? "Default"
+                    let modelPadded = modelStr.padding(toLength: 20, withPad: " ", startingAt: 0)
+                    buffer.writeString(x: contentX + 33, y: y, string: modelPadded, style: isSelected ? style : BIOSStyle.fgGray)
+                    
+                    let desc = a.description
+                    let truncatedDesc = desc.count > (contentW - 55) ? String(desc.prefix(contentW - 58)) + "..." : desc
+                    buffer.writeString(x: contentX + 55, y: y, string: truncatedDesc, style: isSelected ? style : BIOSStyle.fgGray)
+                } else {
+                    buffer.writeString(x: contentX + 2, y: y, string: cursor + "[+] Add Custom Subagent", style: style)
+                }
+            }
+            
+        case .edit, .addCustom:
+            drawAgentForm(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
+        }
+    }
+
+    private func renderAgentsPicker(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        buffer.writeString(x: contentX, y: contentY, string: "Select Model for Agent:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+        
+        let listH = contentH - 4
+        let startIdx = max(0, agentsPickerIndex - listH + 1)
+        
+        var displayCount = 0
+        for idx in startIdx..<agentsPickerItems.count {
+            if displayCount >= listH { break }
+            let item = agentsPickerItems[idx]
+            let isSelected = (agentsPickerIndex == idx)
+            let cursor = isSelected ? "▶ " : "  "
+            var style = BIOSStyle.fgWhite
+            if isSelected {
+                style = BIOSStyle.selection + BIOSStyle.bold
+            }
+            let y = contentY + 2 + displayCount
+            displayCount += 1
+            
+            buffer.writeString(x: contentX + 2, y: y, string: cursor + item, style: style)
+        }
+        
+        buffer.writeStringCentered(x: contentX, y: contentY + listH + 1, w: contentW, string: " [↑/↓] Navigate  [Enter] Select  [Esc] Cancel ", style: BIOSStyle.reverse)
+    }
+
+    private func handleAgentsKey(_ key: InputKey) async -> Bool {
+        if agentsPickerActive {
+            switch key {
+            case .arrowDown:
+                agentsPickerIndex = (agentsPickerIndex + 1) % max(1, agentsPickerItems.count)
+            case .arrowUp:
+                agentsPickerIndex = (agentsPickerIndex - 1 + max(1, agentsPickerItems.count)) % max(1, agentsPickerItems.count)
+            case .enter:
+                applyAgentsPicker()
+            case .escape:
+                agentsPickerActive = false
+            default:
+                break
+            }
+            return true
+        }
+        
+        switch agentsSubScreen {
+        case .list:
+            switch key {
+            case .arrowDown:
+                agentsListSelectedIndex = (agentsListSelectedIndex + 1) % (inMemoryAgents.count + 1)
+                return true
+            case .arrowUp:
+                agentsListSelectedIndex = (agentsListSelectedIndex - 1 + inMemoryAgents.count + 1) % (inMemoryAgents.count + 1)
+                return true
+            case .enter:
+                if agentsListSelectedIndex < inMemoryAgents.count {
+                    enterAgentEditForm(index: agentsListSelectedIndex)
+                } else {
+                    enterAgentAddForm()
+                }
+                return true
+            case .escape:
+                splitLayout.activePane = .sidebar
+                return true
+            default:
+                return false
+            }
+            
+        case .edit(let idx):
+            return await handleAgentFormKey(key, isNew: false, index: idx)
+        case .addCustom:
+            return await handleAgentFormKey(key, isNew: true, index: nil)
+        }
+    }
+
+    private func handleAgentFormKey(_ key: InputKey, isNew: Bool, index: Int?) async -> Bool {
+        if let editingIdx = agentsEditingField {
+            switch key {
+            case .arrowLeft:
+                if agentsEditCursor > 0 { agentsEditCursor -= 1 }
+                return true
+            case .arrowRight:
+                if agentsEditCursor < agentsEditBuffer.count { agentsEditCursor += 1 }
+                return true
+            case .ctrlA:
+                agentsEditCursor = 0
+                return true
+            case .ctrlE:
+                agentsEditCursor = agentsEditBuffer.count
+                return true
+            case .ctrlK:
+                if agentsEditCursor < agentsEditBuffer.count {
+                    let idx = agentsEditBuffer.index(agentsEditBuffer.startIndex, offsetBy: agentsEditCursor)
+                    formKillRing = String(agentsEditBuffer[idx...])
+                    agentsEditBuffer = String(agentsEditBuffer[..<idx])
+                }
+                return true
+            case .ctrlY:
+                if !formKillRing.isEmpty {
+                    let idx = agentsEditBuffer.index(agentsEditBuffer.startIndex, offsetBy: agentsEditCursor)
+                    agentsEditBuffer.insert(contentsOf: formKillRing, at: idx)
+                    agentsEditCursor += formKillRing.count
+                }
+                return true
+            case .backspace:
+                if agentsEditCursor > 0 {
+                    agentsEditCursor -= 1
+                    let idx = agentsEditBuffer.index(agentsEditBuffer.startIndex, offsetBy: agentsEditCursor)
+                    agentsEditBuffer.remove(at: idx)
+                }
+                return true
+            case .enter:
+                applyAgentEditBuffer(fieldIndex: editingIdx)
+                agentsEditingField = nil
+                return true
+            case .escape:
+                agentsEditingField = nil
+                return true
+            case .character(let c):
+                let idx = agentsEditBuffer.index(agentsEditBuffer.startIndex, offsetBy: agentsEditCursor)
+                agentsEditBuffer.insert(c, at: idx)
+                agentsEditCursor += 1
+                return true
+            default:
+                return false
+            }
+        }
+        
+        switch key {
+        case .arrowDown:
+            agentsFieldIndex = (agentsFieldIndex + 1) % max(1, agentsFields.count)
+            return true
+        case .arrowUp:
+            agentsFieldIndex = (agentsFieldIndex - 1 + max(1, agentsFields.count)) % max(1, agentsFields.count)
+            return true
+        case .enter:
+            await handleAgentFormEnter(isNew: isNew, index: index)
+            return true
+        case .escape:
+            agentsSubScreen = .list
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func applyAgentEditBuffer(fieldIndex: Int) {
+        let fieldName = agentsFields[fieldIndex]
+        if fieldName == "Agent ID" {
+            editAgentID = agentsEditBuffer
+        } else if fieldName == "Agent Name" {
+            editAgentName = agentsEditBuffer
+        } else if fieldName == "Description" {
+            editAgentDescription = agentsEditBuffer
+        } else if fieldName == "System Prompt" {
+            editAgentSystemPrompt = agentsEditBuffer
+        } else if fieldName == "Allowed Tool Tags" {
+            editAgentAllowedToolTags = agentsEditBuffer.components(separatedBy: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        }
+    }
+
+    private func handleAgentFormEnter(isNew: Bool, index: Int?) async {
+        let fieldName = agentsFields[agentsFieldIndex]
+        
+        if fieldName == "Save Details" {
+            saveAgentDetails(isNew: isNew, index: index)
+        } else if fieldName == "Cancel" {
+            agentsSubScreen = .list
+        } else if fieldName == "Delete Agent" {
+            if let idx = index {
+                deleteAgentDetails(index: idx)
+            }
+        } else if fieldName == "Active Status" {
+            editAgentEnabled.toggle()
+        } else if fieldName == "Model Override" {
+            openAgentsPicker(target: "model")
+        } else {
+            // ID of built-in agent is read-only
+            if fieldName == "Agent ID" && !isNew {
+                return
+            }
+            agentsEditingField = agentsFieldIndex
+            if fieldName == "Agent ID" {
+                agentsEditBuffer = editAgentID
+            } else if fieldName == "Agent Name" {
+                agentsEditBuffer = editAgentName
+            } else if fieldName == "Description" {
+                agentsEditBuffer = editAgentDescription
+            } else if fieldName == "System Prompt" {
+                agentsEditBuffer = editAgentSystemPrompt
+            } else if fieldName == "Allowed Tool Tags" {
+                agentsEditBuffer = editAgentAllowedToolTags.joined(separator: ",")
+            }
+            agentsEditCursor = agentsEditBuffer.count
         }
     }
 

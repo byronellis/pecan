@@ -24,13 +24,16 @@ public func startHTTPProxyServer(background: Bool) async throws -> Int {
 
     mainLogger.info("Starting Pecan LLM Proxy Server...")
 
+    // Open Settings Store
+    try? await SettingsStore.shared.open()
+
     // Trigger config loading/creation at startup
     let config = ProxyConfig.load()
     let defaultModel = config.defaultModel ?? "none"
     mainLogger.info("Config loaded (default model: \(defaultModel))")
 
     // Bind to 3000 by default, fallback to dynamic port
-    var port = 3000
+    let port = 3000
     let server = HTTPProxyServer(host: "127.0.0.1", port: port)
     
     let boundPort: Int

@@ -43,10 +43,19 @@ public actor SubagentPool {
             resolvedToolTags = ["core", "web", "skills"]
         }
 
+        // Resolve subagent model override from database if enabled
+        let resolvedModel: String?
+        if let agentConfig = try? await SettingsStore.shared.agent(id: persona.personaName), agentConfig.enabled {
+            resolvedModel = agentConfig.model
+        } else {
+            resolvedModel = nil
+        }
+
         // Create the session first to get its unique agentID for the context
         let session = SubagentSession(
             toolManager: .shared,
-            toolTags: resolvedToolTags
+            toolTags: resolvedToolTags,
+            model: resolvedModel
         )
         let agentID = session.agentID
 

@@ -144,6 +144,7 @@ func main() async throws {
               \(ansiCyan)/switch\(ansiReset) \(ansiDim)<name>\(ansiReset)    Switch to session by name
               \(ansiCyan)/close\(ansiReset)            Close the current session
               \(ansiCyan)/clear\(ansiReset)            Clear conversation history
+              \(ansiCyan)/model\(ansiReset) \(ansiDim)<name>\(ansiReset)    View/set model for current agent
               \(ansiCyan)/config\(ansiReset)           Open Configuration Manager
               \(ansiCyan)/help\(ansiReset)             Show this help screen
               \(ansiCyan)/quit\(ansiReset)             Exit Pecan TUI
@@ -218,6 +219,29 @@ func main() async throws {
             if let active = await sessionState.getActiveSession() {
                 await active.clearHistory()
                 await TerminalManager.shared.printSystem("History cleared.")
+            }
+            continue
+        }
+
+        if trimmed == "/model" {
+            let activeAgentID = await PromptComposer.shared.activePersonaName ?? "general"
+            if let agentConfig = try? await SettingsStore.shared.agent(id: activeAgentID) {
+                let modelDisplay = agentConfig.model ?? "global default"
+                await TerminalManager.shared.printSystem("Agent '\(activeAgentID)' is using model: \(modelDisplay)")
+            }
+            continue
+        }
+
+        if trimmed.hasPrefix("/model ") {
+            let modelName = String(trimmed.dropFirst("/model ".count)).trimmingCharacters(in: .whitespaces)
+            let activeAgentID = await PromptComposer.shared.activePersonaName ?? "general"
+            if var agentConfig = try? await SettingsStore.shared.agent(id: activeAgentID) {
+                agentConfig.model = (modelName.isEmpty || modelName.lowercased() == "default" || modelName.lowercased() == "none") ? nil : modelName
+                try? await SettingsStore.shared.saveAgent(agentConfig)
+                let modelDisplay = agentConfig.model ?? "global default"
+                await TerminalManager.shared.printSystem("Updated model for agent '\(activeAgentID)' to \(modelDisplay)")
+            } else {
+                await TerminalManager.shared.printSystem("No configured agent found for '\(activeAgentID)'")
             }
             continue
         }

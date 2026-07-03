@@ -174,182 +174,14 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
 
         Task {
             do {
-                guard let (provider, targetModel) = await SettingsStore.shared.resolveProviderAndModel(requestModel: requestModel) else {
-                    sendErrorResponse(context: box.context, status: .notFound, message: "No route or provider found for model '\(requestModel)'")
-                    return
-                }
-
                 let stream = json["stream"] as? Bool ?? false
-
-                if provider.type.lowercased() == "mlx" {
-                    let container = try await MLXServerManager.shared.getContainer(provider: provider)
-                    
-                    var messagesList: [[String: String]] = []
-                    if let msgArray = json["messages"] as? [[String: Any]] {
-                        for msg in msgArray {
-                            if let role = msg["role"] as? String,
-                               let content = msg["content"] as? String {
-                                messagesList.append(["role": role, "content": content])
-                            }
-                        }
-                    }
-                    
-                    var genParams = GenerateParameters()
-                    if let maxT = json["max_tokens"] as? Int {
-                        genParams.maxTokens = maxT
-                    }
-                    if let temp = json["temperature"] as? Double {
-                        genParams.temperature = Float(temp)
-                    }
-                    if let topP = json["top_p"] as? Double {
-                        genParams.topP = Float(topP)
-                    }
-                    
-                    let modelName = targetModel
-                    let reqId = "chatcmpl-" + UUID().uuidString.prefix(12)
-                    let createdTime = Int(Date().timeIntervalSince1970)
-                    
-                    if stream {
-                        sendStreamHeaders(context: box.context)
-                        
-                        _ = try await MLXServerManager.shared.generateInProcess(
-                            container: container,
-                            messages: messagesList,
-                            parameters: genParams,
-                            onChunk: { chunk in
-                                let chunkJSON: [String: Any] = [
-                                    "id": reqId,
-                                    "object": "chat.completion.chunk",
-                                    "created": createdTime,
-                                    "model": modelName,
-                                    "choices": [[
-                                        "index": 0,
-                                        "delta": ["content": chunk],
-                                        "finish_reason": NSNull()
-                                    ]]
-                                ]
-                                if let d = try? JSONSerialization.data(withJSONObject: chunkJSON),
-                                   let s = String(data: d, encoding: .utf8) {
-                                    let event = "data: \(s)\n\n"
-                                    if let ed = event.data(using: .utf8) {
-                                        writeStreamChunk(context: box.context, data: ed)
-                                    }
-                                }
-                            }
-                        )
-                        
-                        let stopJSON: [String: Any] = [
-                            "id": reqId,
-                            "object": "chat.completion.chunk",
-                            "created": createdTime,
-                            "model": modelName,
-                            "choices": [[
-                                "index": 0,
-                                "delta": [:],
-                                "finish_reason": "stop"
-                            ]]
-                        ]
-                        if let d = try? JSONSerialization.data(withJSONObject: stopJSON),
-                           let s = String(data: d, encoding: .utf8),
-                           let ed = "data: \(s)\n\ndata: [DONE]\n\n".data(using: .utf8) {
-                            writeStreamChunk(context: box.context, data: ed)
-                        }
-                        sendStreamEnd(context: box.context)
-                    } else {
-                        let responseText = try await MLXServerManager.shared.generateInProcess(
-                            container: container,
-                            messages: messagesList,
-                            parameters: genParams,
-                            onChunk: { _ in }
-                        )
-                        
-                        let responseJSON: [String: Any] = [
-                            "id": reqId,
-                            "object": "chat.completion",
-                            "created": createdTime,
-                            "model": modelName,
-                            "choices": [[
-                                "index": 0,
-                                "message": [
-                                    "role": "assistant",
-                                    "content": responseText
-                                ],
-                                "finish_reason": "stop"
-                            ]],
-                            "usage": [
-                                "prompt_tokens": 0,
-                                "completion_tokens": 0,
-                                "total_tokens": 0
-                            ]
-                        ]
-                        let responseData = try JSONSerialization.data(withJSONObject: responseJSON)
-                        sendJSONResponse(context: box.context, data: responseData)
-                    }
-                    return
-                }
-
-                if provider.type.lowercased() == "anthropic" {
-                    // Translate request payload: OpenAI -> Anthropic
-                    let anthropicPayload = APIConverter.openAIToAnthropic(openAI: json, targetModel: targetModel)
-                    let payloadData = try JSONSerialization.data(withJSONObject: anthropicPayload)
-                    
-                    guard let baseURL = provider.url,
-                          let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/messages" : baseURL + "/v1/messages") else {
-                        throw NSError(domain: "ProxyServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid provider URL"])
-                    }
-                    
-                    var req = URLRequest(url: targetURL)
-                    req.httpMethod = "POST"
-                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                    if let key = provider.apiKey, key != "none" {
-                        req.setValue(key, forHTTPHeaderField: "x-api-key")
-                    }
-                    req.httpBody = payloadData
-                    
-                    if stream {
-                        try await handleAnthropicStreamToOpenAI(box: box, request: req, requestModel: requestModel)
-                    } else {
-                        let (data, response) = try await URLSession.shared.data(for: req)
-                        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-                            let msg = String(data: data, encoding: .utf8) ?? "Anthropic API failure"
-                            throw NSError(domain: "ProxyServer", code: 2, userInfo: [NSLocalizedDescriptionKey: msg])
-                        }
-                        let anthropicResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-                        let openAIResponse = APIConverter.anthropicToOpenAIResponse(anthropic: anthropicResponse, requestModel: requestModel)
-                        let responseData = try JSONSerialization.data(withJSONObject: openAIResponse)
-                        sendJSONResponse(context: box.context, data: responseData)
-                    }
-                } else {
-                    // Backend is OpenAI format (openai, fireworks, local mlx, local llama.cpp etc.)
-                    var openAIPayload = json
-                    openAIPayload["model"] = targetModel
-                    let payloadData = try JSONSerialization.data(withJSONObject: openAIPayload)
-                    
-                    guard let baseURL = provider.url,
-                          let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions") else {
-                        throw NSError(domain: "ProxyServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid provider URL"])
-                    }
-                    
-                    var req = URLRequest(url: targetURL)
-                    req.httpMethod = "POST"
-                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    if let key = provider.apiKey, key != "none" {
-                        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-                    }
-                    req.httpBody = payloadData
-                    
-                    if stream {
-                        try await handleForwardStream(box: box, request: req)
-                    } else {
-                        let (data, response) = try await URLSession.shared.data(for: req)
-                        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-                            let msg = String(data: data, encoding: .utf8) ?? "OpenAI API failure"
-                            throw NSError(domain: "ProxyServer", code: 2, userInfo: [NSLocalizedDescriptionKey: msg])
-                        }
-                        sendJSONResponse(context: box.context, data: data)
-                    }
-                }
+                try await routeAndExecute(
+                    box: box,
+                    requestModel: requestModel,
+                    stream: stream,
+                    json: json,
+                    clientFormat: "openai"
+                )
             } catch {
                 sendErrorResponse(context: box.context, status: .internalServerError, message: error.localizedDescription)
             }
@@ -367,199 +199,686 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
 
         Task {
             do {
-                guard let (provider, targetModel) = await SettingsStore.shared.resolveProviderAndModel(requestModel: requestModel) else {
-                    sendErrorResponse(context: box.context, status: .notFound, message: "No route or provider found for model '\(requestModel)'")
-                    return
-                }
-
                 let stream = json["stream"] as? Bool ?? false
-
-                if provider.type.lowercased() == "mlx" {
-                    let container = try await MLXServerManager.shared.getContainer(provider: provider)
-                    
-                    var messagesList: [[String: String]] = []
-                    if let system = json["system"] as? String {
-                        messagesList.append(["role": "system", "content": system])
-                    }
-                    if let msgArray = json["messages"] as? [[String: Any]] {
-                        for msg in msgArray {
-                            if let role = msg["role"] as? String,
-                               let content = msg["content"] as? String {
-                                messagesList.append(["role": role, "content": content])
-                            }
-                        }
-                    }
-                    
-                    var genParams = GenerateParameters()
-                    if let maxT = json["max_tokens"] as? Int {
-                        genParams.maxTokens = maxT
-                    }
-                    if let temp = json["temperature"] as? Double {
-                        genParams.temperature = Float(temp)
-                    }
-                    if let topP = json["top_p"] as? Double {
-                        genParams.topP = Float(topP)
-                    }
-                    
-                    let modelName = targetModel
-                    let reqId = "msg_" + UUID().uuidString.prefix(12)
-                    
-                    if stream {
-                        sendStreamHeaders(context: box.context)
-                        
-                        // Send start event
-                        let startJSON: [String: Any] = [
-                            "type": "message_start",
-                            "message": [
-                                "id": reqId,
-                                "type": "message",
-                                "role": "assistant",
-                                "content": [],
-                                "model": modelName
-                            ]
-                        ]
-                        if let d = try? JSONSerialization.data(withJSONObject: startJSON),
-                           let s = String(data: d, encoding: .utf8),
-                           let ed = "data: \(s)\n\n".data(using: .utf8) {
-                            writeStreamChunk(context: box.context, data: ed)
-                        }
-                        
-                        _ = try await MLXServerManager.shared.generateInProcess(
-                            container: container,
-                            messages: messagesList,
-                            parameters: genParams,
-                            onChunk: { chunk in
-                                let chunkJSON: [String: Any] = [
-                                    "type": "content_block_delta",
-                                    "index": 0,
-                                    "delta": [
-                                        "type": "text_delta",
-                                        "text": chunk
-                                    ]
-                                ]
-                                if let d = try? JSONSerialization.data(withJSONObject: chunkJSON),
-                                   let s = String(data: d, encoding: .utf8) {
-                                    let event = "data: \(s)\n\n"
-                                    if let ed = event.data(using: .utf8) {
-                                        writeStreamChunk(context: box.context, data: ed)
-                                    }
-                                }
-                            }
-                        )
-                        
-                        let stopJSON: [String: Any] = ["type": "message_stop"]
-                        if let d = try? JSONSerialization.data(withJSONObject: stopJSON),
-                           let s = String(data: d, encoding: .utf8),
-                           let ed = "data: \(s)\n\n".data(using: .utf8) {
-                            writeStreamChunk(context: box.context, data: ed)
-                        }
-                        sendStreamEnd(context: box.context)
-                    } else {
-                        let responseText = try await MLXServerManager.shared.generateInProcess(
-                            container: container,
-                            messages: messagesList,
-                            parameters: genParams,
-                            onChunk: { _ in }
-                        )
-                        
-                        let responseJSON: [String: Any] = [
-                            "id": reqId,
-                            "type": "message",
-                            "role": "assistant",
-                            "content": [[
-                                "type": "text",
-                                "text": responseText
-                            ]],
-                            "model": modelName,
-                            "stop_reason": "end_turn"
-                        ]
-                        let responseData = try JSONSerialization.data(withJSONObject: responseJSON)
-                        sendJSONResponse(context: box.context, data: responseData)
-                    }
-                    return
-                }
-
-                if provider.type.lowercased() == "anthropic" {
-                    // Straight forward to Anthropic
-                    var anthropicPayload = json
-                    anthropicPayload["model"] = targetModel
-                    let payloadData = try JSONSerialization.data(withJSONObject: anthropicPayload)
-                    
-                    guard let baseURL = provider.url,
-                          let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/messages" : baseURL + "/v1/messages") else {
-                        throw NSError(domain: "ProxyServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid provider URL"])
-                    }
-                    
-                    var req = URLRequest(url: targetURL)
-                    req.httpMethod = "POST"
-                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
-                    if let key = provider.apiKey, key != "none" {
-                        req.setValue(key, forHTTPHeaderField: "x-api-key")
-                    }
-                    req.httpBody = payloadData
-                    
-                    if stream {
-                        try await handleForwardStream(box: box, request: req)
-                    } else {
-                        let (data, response) = try await URLSession.shared.data(for: req)
-                        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-                            let msg = String(data: data, encoding: .utf8) ?? "Anthropic API failure"
-                            throw NSError(domain: "ProxyServer", code: 2, userInfo: [NSLocalizedDescriptionKey: msg])
-                        }
-                        sendJSONResponse(context: box.context, data: data)
-                    }
-                } else {
-                    // Translate request payload: Anthropic -> OpenAI
-                    let openAIPayload = APIConverter.anthropicToOpenAI(anthropic: json, targetModel: targetModel)
-                    let payloadData = try JSONSerialization.data(withJSONObject: openAIPayload)
-                    
-                    guard let baseURL = provider.url,
-                          let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions") else {
-                        throw NSError(domain: "ProxyServer", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid provider URL"])
-                    }
-                    
-                    var req = URLRequest(url: targetURL)
-                    req.httpMethod = "POST"
-                    req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-                    if let key = provider.apiKey, key != "none" {
-                        req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
-                    }
-                    req.httpBody = payloadData
-                    
-                    if stream {
-                        try await handleOpenAIStreamToAnthropic(box: box, request: req, requestModel: requestModel)
-                    } else {
-                        let (data, response) = try await URLSession.shared.data(for: req)
-                        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-                            let msg = String(data: data, encoding: .utf8) ?? "OpenAI API failure"
-                            throw NSError(domain: "ProxyServer", code: 2, userInfo: [NSLocalizedDescriptionKey: msg])
-                        }
-                        let openAIResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
-                        let anthropicResponse = APIConverter.openAIToAnthropicResponse(openAI: openAIResponse, requestModel: requestModel)
-                        let responseData = try JSONSerialization.data(withJSONObject: anthropicResponse)
-                        sendJSONResponse(context: box.context, data: responseData)
-                    }
-                }
+                
+                // Translate Anthropic Request to OpenAI format so routeAndExecute can process it identically
+                let openAIPayload = APIConverter.anthropicToOpenAI(anthropic: json, targetModel: requestModel)
+                
+                try await routeAndExecute(
+                    box: box,
+                    requestModel: requestModel,
+                    stream: stream,
+                    json: openAIPayload,
+                    clientFormat: "anthropic"
+                )
             } catch {
                 sendErrorResponse(context: box.context, status: .internalServerError, message: error.localizedDescription)
             }
         }
     }
 
-    // MARK: - Streaming Relay
+    // MARK: - Routing Execution Engine
 
-    private static func handleForwardStream(box: ChannelBox, request: URLRequest) async throws {
-        sendStreamHeaders(context: box.context)
+    private static func routeAndExecute(
+        box: ChannelBox,
+        requestModel: String,
+        stream: Bool,
+        json: [String: Any],
+        clientFormat: String
+    ) async throws {
+        // 1. Resolve candidates using routing config
+        let candidates = await resolveCandidateRoutes(requestModel: requestModel, json: json)
         
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-            let errorMsg = "Stream request failed"
-            writeStreamChunk(context: box.context, data: "data: {\"error\": \"\(errorMsg)\"}\n\n".data(using: .utf8)!)
-            sendStreamEnd(context: box.context)
+        guard !candidates.isEmpty else {
+            sendErrorResponse(context: box.context, status: .notFound, message: "No route or provider found for model '\(requestModel)'")
             return
         }
 
+        var finalError: Error? = nil
+        let routingConfig = (try? await SettingsStore.shared.loadRoutingConfig()) ?? RoutingConfig()
+
+        for candidate in candidates {
+            let provider = candidate.provider
+            let targetModel = candidate.targetModel
+            
+            // 2. Check Circuit Breaker
+            if routingConfig.circuitBreakerEnabled {
+                let available = await CircuitBreaker.shared.isAvailable(providerID: provider.id)
+                if !available {
+                    serverLogger.warning("Provider \(provider.id) is cooled down / circuit-breaker active. Skipping...")
+                    continue
+                }
+            }
+
+            // 3. Check Budgets
+            if routingConfig.budgetEnabled {
+                if let limit = routingConfig.providerBudgets.first(where: { $0.providerID == provider.id }) {
+                    let withinBudget = await BudgetLimiter.shared.isWithinBudget(providerID: provider.id, dailyLimitUSD: limit.dailyLimitUSD)
+                    if !withinBudget {
+                        sendErrorResponse(context: box.context, status: .tooManyRequests, message: "Daily budget limit exceeded for provider \(provider.id)")
+                        return
+                    }
+                }
+            }
+
+            // 4. Attempt execution
+            do {
+                let (promptTok, compTok) = try await attemptRouteCompletion(
+                    box: box,
+                    provider: provider,
+                    targetModel: targetModel,
+                    stream: stream,
+                    json: json,
+                    requestModel: requestModel,
+                    clientFormat: clientFormat
+                )
+                
+                // 5. Record Success (Circuit Breaker)
+                if routingConfig.circuitBreakerEnabled {
+                    await CircuitBreaker.shared.recordSuccess(providerID: provider.id)
+                }
+
+                // 6. Record Budget spend
+                if routingConfig.budgetEnabled {
+                    await BudgetLimiter.shared.recordUsage(
+                        providerID: provider.id,
+                        providerType: provider.type,
+                        promptTokens: promptTok,
+                        completionTokens: compTok
+                    )
+                }
+                
+                // Success!
+                return
+            } catch {
+                serverLogger.error("Route to provider \(provider.id) (\(targetModel)) failed: \(error.localizedDescription)")
+                finalError = error
+                
+                // 7. Record Failure (Circuit Breaker)
+                if routingConfig.circuitBreakerEnabled {
+                    let threshold = routingConfig.circuitBreakerFailThreshold
+                    let cooldown = routingConfig.circuitBreakerCooldownSeconds
+                    await CircuitBreaker.shared.recordFailure(providerID: provider.id, threshold: threshold, cooldownSeconds: cooldown)
+                }
+                
+                // Check if we should route to context window fallback or content policy fallback!
+                if let routeErr = error as? RouteError {
+                    if routeErr.isContextWindowExceeded {
+                        if let fallbackRef = routingConfig.contextWindowFallback,
+                           let fallbackProvider = try? await SettingsStore.shared.provider(id: fallbackRef.providerID) {
+                            serverLogger.info("Context window exceeded. Falling back to context window fallback: \(fallbackRef.display)")
+                            do {
+                                let (pT, cT) = try await attemptRouteCompletion(
+                                    box: box,
+                                    provider: fallbackProvider,
+                                    targetModel: fallbackRef.modelID,
+                                    stream: stream,
+                                    json: json,
+                                    requestModel: requestModel,
+                                    clientFormat: clientFormat
+                                )
+                                if routingConfig.budgetEnabled {
+                                    await BudgetLimiter.shared.recordUsage(providerID: fallbackProvider.id, providerType: fallbackProvider.type, promptTokens: pT, completionTokens: cT)
+                                }
+                                return
+                            } catch {
+                                finalError = error
+                            }
+                        }
+                    } else if routeErr.isContentPolicyViolation {
+                        if let fallbackRef = routingConfig.contentPolicyFallback,
+                           let fallbackProvider = try? await SettingsStore.shared.provider(id: fallbackRef.providerID) {
+                            serverLogger.info("Content policy violation. Falling back to content policy fallback: \(fallbackRef.display)")
+                            do {
+                                let (pT, cT) = try await attemptRouteCompletion(
+                                    box: box,
+                                    provider: fallbackProvider,
+                                    targetModel: fallbackRef.modelID,
+                                    stream: stream,
+                                    json: json,
+                                    requestModel: requestModel,
+                                    clientFormat: clientFormat
+                                )
+                                if routingConfig.budgetEnabled {
+                                    await BudgetLimiter.shared.recordUsage(providerID: fallbackProvider.id, providerType: fallbackProvider.type, promptTokens: pT, completionTokens: cT)
+                                }
+                                return
+                            } catch {
+                                finalError = error
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // If all candidates failed
+        let errMsg = finalError?.localizedDescription ?? "All fallback routes failed"
+        sendErrorResponse(context: box.context, status: .internalServerError, message: errMsg)
+    }
+
+    private static func resolveCandidateRoutes(requestModel: String, json: [String: Any]) async -> [(provider: ProviderConfig, targetModel: String)] {
+        let routingConfig = (try? await SettingsStore.shared.loadRoutingConfig()) ?? RoutingConfig()
+        
+        var isExplicitRoute = false
+        if requestModel.contains("/") {
+            isExplicitRoute = true
+        }
+
+        var candidates: [(provider: ProviderConfig, targetModel: String)] = []
+
+        if isExplicitRoute {
+            // Explicitly requested specific provider/model
+            if let (provider, targetModel) = await SettingsStore.shared.resolveProviderAndModel(requestModel: requestModel) {
+                candidates.append((provider, targetModel))
+            }
+        } else {
+            // Apply routing strategy
+            switch routingConfig.strategy {
+            case .simple:
+                if let provider = try? await SettingsStore.shared.provider(id: routingConfig.defaultRoute.providerID) {
+                    candidates.append((provider, routingConfig.defaultRoute.modelID))
+                }
+            case .costBased:
+                // heuristic: MLX is free, Huggingface is free, Fireworks is paid.
+                if let providers = try? await SettingsStore.shared.allProviders() {
+                    let sorted = providers.filter { $0.enabled }.sorted { p1, p2 in
+                        let c1 = p1.type.lowercased() == "mlx" || p1.type.lowercased() == "huggingface" ? 0 : 1
+                        let c2 = p2.type.lowercased() == "mlx" || p2.type.lowercased() == "huggingface" ? 0 : 1
+                        return c1 < c2
+                    }
+                    for p in sorted {
+                        let active = (try? await SettingsStore.shared.activeModels(providerID: p.id)) ?? []
+                        if let first = active.first {
+                            candidates.append((p, first))
+                        }
+                    }
+                }
+            case .latencyBased:
+                // heuristic: MLX (local) is fastest, Huggingface is next, Fireworks is next
+                if let providers = try? await SettingsStore.shared.allProviders() {
+                    let sorted = providers.filter { $0.enabled }.sorted { p1, p2 in
+                        let c1 = p1.type.lowercased() == "mlx" ? 0 : (p1.type.lowercased() == "huggingface" ? 1 : 2)
+                        let c2 = p2.type.lowercased() == "mlx" ? 0 : (p2.type.lowercased() == "huggingface" ? 1 : 2)
+                        return c1 < c2
+                    }
+                    for p in sorted {
+                        let active = (try? await SettingsStore.shared.activeModels(providerID: p.id)) ?? []
+                        if let first = active.first {
+                            candidates.append((p, first))
+                        }
+                    }
+                }
+            case .automatic:
+                // Use a judge model!
+                if let judge = routingConfig.autoJudgeModel,
+                   let judgeProvider = try? await SettingsStore.shared.provider(id: judge.providerID) {
+                    
+                    var userPrompt = ""
+                    if let messages = json["messages"] as? [[String: Any]],
+                       let last = messages.last,
+                       let content = last["content"] as? String {
+                        userPrompt = content
+                    }
+                    
+                    var activeModelStrings: [String] = []
+                    var modelMap: [String: (ProviderConfig, String)] = [:]
+                    if let providers = try? await SettingsStore.shared.allProviders() {
+                        for p in providers where p.enabled {
+                            let active = (try? await SettingsStore.shared.activeModels(providerID: p.id)) ?? []
+                            for m in active {
+                                let key = "\(p.id)/\(m)"
+                                activeModelStrings.append(key)
+                                modelMap[key] = (p, m)
+                            }
+                        }
+                    }
+                    
+                    if !activeModelStrings.isEmpty {
+                        let judgeChoice = await callJudgeModel(
+                            judgeProvider: judgeProvider,
+                            judgeModel: judge.modelID,
+                            availableModels: activeModelStrings,
+                            userPrompt: userPrompt
+                        )
+                        if let choice = judgeChoice, let resolved = modelMap[choice] {
+                            serverLogger.info("Judge model selected route: \(choice)")
+                            candidates.append(resolved)
+                        }
+                    }
+                }
+                
+                // Fallback to default route if judge failed
+                if candidates.isEmpty {
+                    if let provider = try? await SettingsStore.shared.provider(id: routingConfig.defaultRoute.providerID) {
+                        candidates.append((provider, routingConfig.defaultRoute.modelID))
+                    }
+                }
+            }
+        }
+
+        // Always append fallback chain candidates
+        for fb in routingConfig.fallbackChain {
+            if let provider = try? await SettingsStore.shared.provider(id: fb.providerID) {
+                if !candidates.contains(where: { $0.provider.id == provider.id && $0.targetModel == fb.modelID }) {
+                    candidates.append((provider, fb.modelID))
+                }
+            }
+        }
+
+        // Final fallback: default route if candidates still empty
+        if candidates.isEmpty {
+            if let provider = try? await SettingsStore.shared.provider(id: routingConfig.defaultRoute.providerID) {
+                candidates.append((provider, routingConfig.defaultRoute.modelID))
+            }
+        }
+
+        return candidates
+    }
+
+    private static func callJudgeModel(
+        judgeProvider: ProviderConfig,
+        judgeModel: String,
+        availableModels: [String],
+        userPrompt: String
+    ) async -> String? {
+        let systemPrompt = """
+        You are a routing judge for an LLM proxy server.
+        Analyze the intent and complexity of the user's prompt, and choose the best model/provider.
+        Available options:
+        \(availableModels.joined(separator: "\n"))
+
+        Your response must be exactly the selected model name (e.g. "provider/model") and nothing else. No markdown, no quotes, no explanations.
+        """
+        
+        let messages: [[String: String]] = [
+            ["role": "system", "content": systemPrompt],
+            ["role": "user", "content": userPrompt]
+        ]
+        
+        serverLogger.info("Calling judge model \(judgeProvider.id)/\(judgeModel)...")
+        
+        do {
+            if judgeProvider.type.lowercased() == "mlx" {
+                let container = try await MLXServerManager.shared.getContainer(provider: judgeProvider)
+                var genParams = GenerateParameters()
+                genParams.maxTokens = 64
+                genParams.temperature = 0.0
+                let response = try await MLXServerManager.shared.generateInProcess(
+                    container: container,
+                    messages: messages,
+                    parameters: genParams,
+                    onChunk: { _ in }
+                )
+                return response.trimmingCharacters(in: .whitespacesAndNewlines)
+            } else if judgeProvider.type.lowercased() == "anthropic" {
+                let payload: [String: Any] = [
+                    "model": judgeModel,
+                    "system": systemPrompt,
+                    "messages": [["role": "user", "content": userPrompt]],
+                    "max_tokens": 64,
+                    "temperature": 0.0
+                ]
+                guard let baseURL = judgeProvider.url,
+                      let url = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/messages" : baseURL + "/v1/messages") else { return nil }
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+                if let key = judgeProvider.apiKey, key != "none" {
+                    req.setValue(key, forHTTPHeaderField: "x-api-key")
+                }
+                req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+                
+                let (data, response) = try await URLSession.shared.data(for: req)
+                guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else { return nil }
+                if let res = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let content = res["content"] as? [[String: Any]],
+                   let text = content.first?["text"] as? String {
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            } else {
+                let payload: [String: Any] = [
+                    "model": judgeModel,
+                    "messages": messages,
+                    "max_tokens": 64,
+                    "temperature": 0.0
+                ]
+                guard let baseURL = judgeProvider.url,
+                      let url = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions") else { return nil }
+                var req = URLRequest(url: url)
+                req.httpMethod = "POST"
+                req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                if let key = judgeProvider.apiKey, key != "none" {
+                    req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+                }
+                req.httpBody = try JSONSerialization.data(withJSONObject: payload)
+                
+                let (data, response) = try await URLSession.shared.data(for: req)
+                guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else { return nil }
+                if let res = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                   let choices = res["choices"] as? [[String: Any]],
+                   let msg = choices.first?["message"] as? [String: Any],
+                   let text = msg["content"] as? String {
+                    return text.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+        } catch {
+            serverLogger.error("Judge routing model failed: \(error.localizedDescription)")
+        }
+        return nil
+    }
+
+    private static func attemptRouteCompletion(
+        box: ChannelBox,
+        provider: ProviderConfig,
+        targetModel: String,
+        stream: Bool,
+        json: [String: Any],
+        requestModel: String,
+        clientFormat: String
+    ) async throws -> (promptTokens: Int, completionTokens: Int) {
+        
+        if provider.type.lowercased() == "mlx" {
+            let container = try await MLXServerManager.shared.getContainer(provider: provider)
+            
+            var messagesList: [[String: String]] = []
+            if let msgArray = json["messages"] as? [[String: Any]] {
+                for msg in msgArray {
+                    if let role = msg["role"] as? String,
+                       let content = msg["content"] as? String {
+                        messagesList.append(["role": role, "content": content])
+                    }
+                }
+            }
+            
+            var genParams = GenerateParameters()
+            if let maxT = json["max_tokens"] as? Int { genParams.maxTokens = maxT }
+            if let temp = json["temperature"] as? Double { genParams.temperature = Float(temp) }
+            if let topP = json["top_p"] as? Double { genParams.topP = Float(topP) }
+            
+            let modelName = targetModel
+            let reqId = "chatcmpl-" + UUID().uuidString.prefix(12)
+            let createdTime = Int(Date().timeIntervalSince1970)
+            
+            let responseText: String
+
+            if stream {
+                sendStreamHeaders(context: box.context)
+                
+                responseText = try await MLXServerManager.shared.generateInProcess(
+                    container: container,
+                    messages: messagesList,
+                    parameters: genParams,
+                    onChunk: { chunk in
+                        if clientFormat == "openai" {
+                            let chunkJSON: [String: Any] = [
+                                "id": reqId,
+                                "object": "chat.completion.chunk",
+                                "created": createdTime,
+                                "model": modelName,
+                                "choices": [[
+                                    "index": 0,
+                                    "delta": ["content": chunk],
+                                    "finish_reason": NSNull()
+                                ]]
+                            ]
+                            if let d = try? JSONSerialization.data(withJSONObject: chunkJSON),
+                               let s = String(data: d, encoding: .utf8) {
+                                writeStreamChunk(context: box.context, data: "data: \(s)\n\n".data(using: .utf8)!)
+                            }
+                        } else {
+                            let chunkJSON: [String: Any] = [
+                                "type": "content_block_delta",
+                                "index": 0,
+                                "delta": [
+                                    "type": "text_delta",
+                                    "text": chunk
+                                ]
+                            ]
+                            if let d = try? JSONSerialization.data(withJSONObject: chunkJSON),
+                               let s = String(data: d, encoding: .utf8) {
+                                writeStreamChunk(context: box.context, data: "data: \(s)\n\n".data(using: .utf8)!)
+                            }
+                        }
+                    }
+                )
+                
+                if clientFormat == "openai" {
+                    let stopJSON: [String: Any] = [
+                        "id": reqId,
+                        "object": "chat.completion.chunk",
+                        "created": createdTime,
+                        "model": modelName,
+                        "choices": [[
+                            "index": 0,
+                            "delta": [:],
+                            "finish_reason": "stop"
+                        ]]
+                    ]
+                    if let d = try? JSONSerialization.data(withJSONObject: stopJSON),
+                       let s = String(data: d, encoding: .utf8),
+                       let ed = "data: \(s)\n\ndata: [DONE]\n\n".data(using: .utf8) {
+                        writeStreamChunk(context: box.context, data: ed)
+                    }
+                } else {
+                    let stopJSON: [String: Any] = ["type": "message_stop"]
+                    if let d = try? JSONSerialization.data(withJSONObject: stopJSON),
+                       let s = String(data: d, encoding: .utf8),
+                       let ed = "data: \(s)\n\n".data(using: .utf8) {
+                        writeStreamChunk(context: box.context, data: ed)
+                    }
+                }
+                sendStreamEnd(context: box.context)
+            } else {
+                responseText = try await MLXServerManager.shared.generateInProcess(
+                    container: container,
+                    messages: messagesList,
+                    parameters: genParams,
+                    onChunk: { _ in }
+                )
+                
+                let totalCompletionChars = responseText.count
+                if clientFormat == "openai" {
+                    var responseJSON: [String: Any] = [:]
+                    responseJSON["id"] = reqId
+                    responseJSON["object"] = "chat.completion"
+                    responseJSON["created"] = createdTime
+                    responseJSON["model"] = modelName
+                    responseJSON["choices"] = [[
+                        "index": 0,
+                        "message": [
+                            "role": "assistant",
+                            "content": responseText
+                        ],
+                        "finish_reason": "stop"
+                    ]]
+                    let promptTokens = messagesList.reduce(0, { $0 + ($1["content"]?.count ?? 0) }) / 4
+                    let completionTokens = totalCompletionChars / 4
+                    responseJSON["usage"] = [
+                        "prompt_tokens": promptTokens,
+                        "completion_tokens": completionTokens,
+                        "total_tokens": promptTokens + completionTokens
+                    ]
+                    let responseData = try JSONSerialization.data(withJSONObject: responseJSON)
+                    sendJSONResponse(context: box.context, data: responseData)
+                } else {
+                    var responseJSON: [String: Any] = [:]
+                    responseJSON["id"] = reqId
+                    responseJSON["type"] = "message"
+                    responseJSON["role"] = "assistant"
+                    responseJSON["content"] = [[
+                        "type": "text",
+                        "text": responseText
+                    ]]
+                    responseJSON["model"] = modelName
+                    responseJSON["stop_reason"] = "end_turn"
+                    let promptTokens = messagesList.reduce(0, { $0 + ($1["content"]?.count ?? 0) }) / 4
+                    let completionTokens = totalCompletionChars / 4
+                    responseJSON["usage"] = [
+                        "input_tokens": promptTokens,
+                        "output_tokens": completionTokens
+                    ]
+                    let responseData = try JSONSerialization.data(withJSONObject: responseJSON)
+                    sendJSONResponse(context: box.context, data: responseData)
+                }
+            }
+            
+            let promptTextLength = messagesList.reduce(0, { $0 + ($1["content"]?.count ?? 0) })
+            let totalCompletionChars = responseText.count
+            return (promptTokens: promptTextLength / 4, completionTokens: totalCompletionChars / 4)
+        }
+        
+        if provider.type.lowercased() == "anthropic" {
+            let anthropicPayload = APIConverter.openAIToAnthropic(openAI: json, targetModel: targetModel)
+            let payloadData = try JSONSerialization.data(withJSONObject: anthropicPayload)
+            
+            guard let baseURL = provider.url,
+                  let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/messages" : baseURL + "/v1/messages") else {
+                throw RouteError(statusCode: 400, message: "Invalid provider URL")
+            }
+            
+            var req = URLRequest(url: targetURL)
+            req.httpMethod = "POST"
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+            if let key = provider.apiKey, key != "none" {
+                req.setValue(key, forHTTPHeaderField: "x-api-key")
+            }
+            req.httpBody = payloadData
+            
+            if stream {
+                let (bytes, response) = try await URLSession.shared.bytes(for: req)
+                guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+                    throw RouteError(statusCode: status, message: "Anthropic API status \(status)")
+                }
+                
+                sendStreamHeaders(context: box.context)
+                
+                if clientFormat == "openai" {
+                    try await handleAnthropicStreamToOpenAI(box: box, bytes: bytes, requestModel: requestModel)
+                } else {
+                    try await handleForwardStream(box: box, bytes: bytes)
+                }
+                
+                let promptTextLength = (json["messages"] as? [[String: Any]])?.reduce(0, { $0 + (($1["content"] as? String)?.count ?? 0) }) ?? 0
+                return (promptTokens: promptTextLength / 4, completionTokens: 100) // fallback estimation
+            } else {
+                let (data, response) = try await URLSession.shared.data(for: req)
+                guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
+                    let msg = String(data: data, encoding: .utf8) ?? "Anthropic API failure"
+                    let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+                    throw RouteError(statusCode: status, message: msg)
+                }
+                
+                let anthropicResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+                if clientFormat == "openai" {
+                    let openAIResponse = APIConverter.anthropicToOpenAIResponse(anthropic: anthropicResponse, requestModel: requestModel)
+                    let responseData = try JSONSerialization.data(withJSONObject: openAIResponse)
+                    sendJSONResponse(context: box.context, data: responseData)
+                } else {
+                    sendJSONResponse(context: box.context, data: data)
+                }
+                
+                var promptTok = 0
+                var compTok = 0
+                if let usage = anthropicResponse["usage"] as? [String: Any] {
+                    promptTok = usage["input_tokens"] as? Int ?? 0
+                    compTok = usage["output_tokens"] as? Int ?? 0
+                }
+                return (promptTokens: promptTok, completionTokens: compTok)
+            }
+        }
+        
+        // Backend is OpenAI format
+        var openAIPayload = json
+        openAIPayload["model"] = targetModel
+        let payloadData = try JSONSerialization.data(withJSONObject: openAIPayload)
+        
+        guard let baseURL = provider.url,
+              let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions") else {
+            throw RouteError(statusCode: 400, message: "Invalid provider URL")
+        }
+        
+        var req = URLRequest(url: targetURL)
+        req.httpMethod = "POST"
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if let key = provider.apiKey, key != "none" {
+            req.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = payloadData
+        
+        if stream {
+            let (bytes, response) = try await URLSession.shared.bytes(for: req)
+            guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+                throw RouteError(statusCode: status, message: "OpenAI API status \(status)")
+            }
+            
+            sendStreamHeaders(context: box.context)
+            
+            if clientFormat == "openai" {
+                try await handleForwardStream(box: box, bytes: bytes)
+            } else {
+                try await handleOpenAIStreamToAnthropic(box: box, bytes: bytes, requestModel: requestModel)
+            }
+            
+            let promptTextLength = (json["messages"] as? [[String: Any]])?.reduce(0, { $0 + (($1["content"] as? String)?.count ?? 0) }) ?? 0
+            return (promptTokens: promptTextLength / 4, completionTokens: 100)
+        } else {
+            let (data, response) = try await URLSession.shared.data(for: req)
+            guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
+                let msg = String(data: data, encoding: .utf8) ?? "OpenAI API failure"
+                let status = (response as? HTTPURLResponse)?.statusCode ?? 500
+                throw RouteError(statusCode: status, message: msg)
+            }
+            
+            let openAIResponse = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            if clientFormat == "openai" {
+                sendJSONResponse(context: box.context, data: data)
+            } else {
+                let anthropicResponse = APIConverter.openAIToAnthropicResponse(openAI: openAIResponse, requestModel: requestModel)
+                let responseData = try JSONSerialization.data(withJSONObject: anthropicResponse)
+                sendJSONResponse(context: box.context, data: responseData)
+            }
+            
+            var promptTok = 0
+            var compTok = 0
+            if let usage = openAIResponse["usage"] as? [String: Any] {
+                promptTok = usage["prompt_tokens"] as? Int ?? 0
+                compTok = usage["completion_tokens"] as? Int ?? 0
+            }
+            return (promptTokens: promptTok, completionTokens: compTok)
+        }
+    }
+}
+
+// MARK: - RouteError
+
+struct RouteError: Error, LocalizedError {
+    let statusCode: Int
+    let message: String
+    
+    var errorDescription: String? {
+        return "Route error (status code \(statusCode)): \(message)"
+    }
+
+    var isContextWindowExceeded: Bool {
+        let msg = message.lowercased()
+        return msg.contains("context_length") || msg.contains("context length") || msg.contains("context_window") || msg.contains("context window") || msg.contains("maximum context length") || msg.contains("token limit exceeded")
+    }
+
+    var isContentPolicyViolation: Bool {
+        let msg = message.lowercased()
+        return msg.contains("content_policy") || msg.contains("content policy") || msg.contains("moderation") || msg.contains("safety policy") || msg.contains("content filter") || msg.contains("harmful")
+    }
+}
+
+extension HTTPProxyHandler {
+    // MARK: - Streaming Relay
+
+    private static func handleForwardStream(box: ChannelBox, bytes: URLSession.AsyncBytes) async throws {
         for try await line in bytes.lines {
             guard !line.isEmpty else { continue }
             let sseLine = line + "\n"
@@ -567,21 +886,10 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                 writeStreamChunk(context: box.context, data: data)
             }
         }
-        
         sendStreamEnd(context: box.context)
     }
 
-    private static func handleAnthropicStreamToOpenAI(box: ChannelBox, request: URLRequest, requestModel: String) async throws {
-        sendStreamHeaders(context: box.context)
-        
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-            let errorMsg = "Anthropic stream failed"
-            writeStreamChunk(context: box.context, data: "data: {\"error\": \"\(errorMsg)\"}\n\n".data(using: .utf8)!)
-            sendStreamEnd(context: box.context)
-            return
-        }
-
+    private static func handleAnthropicStreamToOpenAI(box: ChannelBox, bytes: URLSession.AsyncBytes, requestModel: String) async throws {
         let chunkID = "chatcmpl-\(UUID().uuidString.prefix(8))"
         var currentToolCallID = ""
         var currentToolName = ""
@@ -675,17 +983,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
         sendStreamEnd(context: box.context)
     }
 
-    private static func handleOpenAIStreamToAnthropic(box: ChannelBox, request: URLRequest, requestModel: String) async throws {
-        sendStreamHeaders(context: box.context)
-        
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
-        guard let httpRes = response as? HTTPURLResponse, (200...299).contains(httpRes.statusCode) else {
-            let errorMsg = "OpenAI stream failed"
-            writeStreamChunk(context: box.context, data: "data: {\"error\": \"\(errorMsg)\"}\n\n".data(using: .utf8)!)
-            sendStreamEnd(context: box.context)
-            return
-        }
-
+    private static func handleOpenAIStreamToAnthropic(box: ChannelBox, bytes: URLSession.AsyncBytes, requestModel: String) async throws {
         let messageID = "msg_\(UUID().uuidString.prefix(8))"
         var hasStartedMessage = false
         var currentToolIndex = 0

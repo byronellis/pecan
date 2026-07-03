@@ -5,48 +5,16 @@ import Security
 // MARK: - Keychain Secrets Support
 public struct KeychainHelper {
     public static let service = "com.pecan.provider-keys"
+    public static let account = "all_keys"
 
-    /// In-process cache: once a key is read from Keychain (which may prompt), we
-    /// remember it for the rest of the process lifetime so subsequent reads are
-    /// free and silent. Cleared only when a key is explicitly updated or deleted.
-    private nonisolated(unsafe) static var cache: [String: String] = [:]
+    /// In-process cache: once loaded from Keychain (which may prompt), we
+    /// remember it for the rest of the process lifetime.
+    private nonisolated(unsafe) static var cache: [String: String]? = nil
     private static let lock = NSLock()
 
-    public static func set(key: String, value: String) -> Bool {
-        guard let data = value.data(using: .utf8) else { return false }
-
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key
-        ]
-
-        SecItemDelete(query as CFDictionary)
-
-        // kSecAttrAccessibleAfterFirstUnlock: no user-interaction prompt at runtime;
-        // only requires the device to have been unlocked once since boot.
-        let attributes: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
-            kSecValueData as String: data
-        ]
-
-        let status = SecItemAdd(attributes as CFDictionary, nil)
-        if status == errSecSuccess {
-            lock.lock()
-            cache[key] = value
-            lock.unlock()
-            return true
-        }
-        return false
-    }
-
-    public static func get(key: String) -> String? {
-        // Return cached value if available — avoids repeated Keychain prompts.
+    private static func loadDictionary() -> [String: String] {
         lock.lock()
-        if let cached = cache[key] {
+        if let cached = cache {
             lock.unlock()
             return cached
         }
@@ -55,7 +23,7 @@ public struct KeychainHelper {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key,
+            kSecAttrAccount as String: account,
             kSecReturnData as String: kCFBooleanTrue!,
             kSecMatchLimit as String: kSecMatchLimitOne
         ]
@@ -64,27 +32,60 @@ public struct KeychainHelper {
         let status = SecItemCopyMatching(query as CFDictionary, &dataTypeRef)
 
         guard status == errSecSuccess, let data = dataTypeRef as? Data,
-              let value = String(data: data, encoding: .utf8) else {
-            return nil
+              let dict = try? JSONDecoder().decode([String: String].self, from: data) else {
+            return [:]
         }
 
         lock.lock()
-        cache[key] = value
+        cache = dict
         lock.unlock()
-        return value
+        return dict
     }
 
-    public static func delete(key: String) {
-        lock.lock()
-        cache.removeValue(forKey: key)
-        lock.unlock()
+    private static func saveDictionary(_ dict: [String: String]) -> Bool {
+        guard let data = try? JSONEncoder().encode(dict) else { return false }
 
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
-            kSecAttrAccount as String: key
+            kSecAttrAccount as String: account
         ]
+
         SecItemDelete(query as CFDictionary)
+
+        let attributes: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlock,
+            kSecValueData as String: data
+        ]
+
+        let status = SecItemAdd(attributes as CFDictionary, nil)
+        if status == errSecSuccess {
+            lock.lock()
+            cache = dict
+            lock.unlock()
+            return true
+        }
+        return false
+    }
+
+    public static func set(key: String, value: String) -> Bool {
+        var dict = loadDictionary()
+        dict[key] = value
+        return saveDictionary(dict)
+    }
+
+    public static func get(key: String) -> String? {
+        let dict = loadDictionary()
+        return dict[key]
+    }
+
+    public static func delete(key: String) {
+        var dict = loadDictionary()
+        dict.removeValue(forKey: key)
+        _ = saveDictionary(dict)
     }
 }
 
@@ -101,6 +102,7 @@ public actor SettingsStore {
     // MARK: - Setup
 
     public func open() throws {
+        if self.db != nil { return }
         // Automatically clean up old persistent settings.db if present to avoid pollution
         let oldDbPath = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".pecan/settings.db").path
         if FileManager.default.fileExists(atPath: oldDbPath) {
@@ -150,6 +152,32 @@ public actor SettingsStore {
                     PRIMARY KEY (provider_id, model_id)
                 )
             """)
+            try db.execute(sql: """
+                CREATE TABLE IF NOT EXISTS agents (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT NOT NULL,
+                    system_prompt TEXT NOT NULL DEFAULT '',
+                    model TEXT,
+                    enabled INTEGER NOT NULL DEFAULT 1,
+                    allowed_tool_tags TEXT NOT NULL DEFAULT 'core,web,skills,meta'
+                )
+            """)
+            let count = try Int.fetchOne(db, sql: "SELECT COUNT(*) FROM agents") ?? 0
+            if count == 0 {
+                try db.execute(sql: """
+                    INSERT INTO agents (id, name, description, system_prompt, model, enabled, allowed_tool_tags)
+                    VALUES ('general', 'General Purpose', 'General-purpose coding agent with file, shell, and web tools.', '', NULL, 1, 'core,web,skills,meta')
+                """)
+                try db.execute(sql: """
+                    INSERT INTO agents (id, name, description, system_prompt, model, enabled, allowed_tool_tags)
+                    VALUES ('planning', 'Planning', 'Analyse scope and produce a structured plan before implementing.', '', NULL, 1, 'core,meta')
+                """)
+                try db.execute(sql: """
+                    INSERT INTO agents (id, name, description, system_prompt, model, enabled, allowed_tool_tags)
+                    VALUES ('coordinator', 'Coordinator', 'Coordinate tasks by delegating them to specialized subagents.', '', NULL, 1, 'core,meta')
+                """)
+            }
         }
         self.db = queue
         try migrateFromYAMLIfNeeded(queue: queue)
@@ -416,6 +444,14 @@ public actor SettingsStore {
                     arguments: [requireApproval ? "true" : "false"]
                 )
             }
+            
+            // Migrate routing config!
+            let data = try JSONEncoder().encode(parsed.routing)
+            let json = String(data: data, encoding: .utf8) ?? "{}"
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO global (key, value) VALUES ('routing_config', ?)",
+                arguments: [json]
+            )
         }
     }
 
@@ -434,6 +470,7 @@ public actor SettingsStore {
         var models: [String: YAMLModel] = [:]
         var defaultModel: String?
         var requireApproval: Bool?
+        var routing: RoutingConfig = RoutingConfig()
     }
 
     private func parseYAMLConfig(_ yaml: String) -> YAMLConfig? {
@@ -441,6 +478,11 @@ public actor SettingsStore {
         var currentModel: String?
         var inModels = false
         var inTools = false
+        var inRouting = false
+        
+        var currentRoutingSub = ""
+        var currentFallbackItem: ModelRef? = nil
+        var inProviderBudgets = false
 
         for rawLine in yaml.components(separatedBy: "\n") {
             let line = rawLine
@@ -452,6 +494,7 @@ public actor SettingsStore {
             if indent == 0 {
                 inModels = trimmed.hasPrefix("models:") || trimmed.hasPrefix("providers:")
                 inTools = trimmed.hasPrefix("tools:")
+                inRouting = trimmed.hasPrefix("routing:")
                 currentModel = nil
                 if trimmed.hasPrefix("default_model:") {
                     result.defaultModel = trimmed.components(separatedBy: ":").dropFirst()
@@ -489,9 +532,178 @@ public actor SettingsStore {
                 if kv[0] == "require_approval" {
                     result.requireApproval = kv.dropFirst().joined().trimmingCharacters(in: .whitespaces) == "true"
                 }
+            } else if inRouting {
+                if indent == 2 {
+                    inProviderBudgets = false
+                    if trimmed.hasPrefix("strategy:") {
+                        let val = trimmed.components(separatedBy: ":").dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
+                        result.routing.strategy = RoutingStrategy(rawValue: val) ?? .simple
+                    } else if trimmed.hasPrefix("default_route:") {
+                        currentRoutingSub = "default_route"
+                    } else if trimmed.hasPrefix("auto_judge_model:") {
+                        currentRoutingSub = "auto_judge_model"
+                    } else if trimmed.hasPrefix("fallback_chain:") {
+                        currentRoutingSub = "fallback_chain"
+                        if let item = currentFallbackItem {
+                            result.routing.fallbackChain.append(item)
+                            currentFallbackItem = nil
+                        }
+                    } else if trimmed.hasPrefix("context_window_fallback:") {
+                        currentRoutingSub = "context_window_fallback"
+                    } else if trimmed.hasPrefix("content_policy_fallback:") {
+                        currentRoutingSub = "content_policy_fallback"
+                    } else if trimmed.hasPrefix("circuit_breaker:") {
+                        currentRoutingSub = "circuit_breaker"
+                    } else if trimmed.hasPrefix("budgets:") {
+                        currentRoutingSub = "budgets"
+                    }
+                } else if indent >= 4 {
+                    let kv = trimmed.components(separatedBy: ":").map { $0.trimmingCharacters(in: .whitespaces) }
+                    let key = kv[0]
+                    let val = kv.dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
+
+                    if currentRoutingSub == "default_route" {
+                        if key == "provider" { result.routing.defaultRoute.providerID = val }
+                        else if key == "model" { result.routing.defaultRoute.modelID = val }
+                    } else if currentRoutingSub == "auto_judge_model" {
+                        if result.routing.autoJudgeModel == nil { result.routing.autoJudgeModel = ModelRef(providerID: "", modelID: "") }
+                        if key == "provider" { result.routing.autoJudgeModel?.providerID = val }
+                        else if key == "model" { result.routing.autoJudgeModel?.modelID = val }
+                    } else if currentRoutingSub == "context_window_fallback" {
+                        if result.routing.contextWindowFallback == nil { result.routing.contextWindowFallback = ModelRef(providerID: "", modelID: "") }
+                        if key == "provider" { result.routing.contextWindowFallback?.providerID = val }
+                        else if key == "model" { result.routing.contextWindowFallback?.modelID = val }
+                    } else if currentRoutingSub == "content_policy_fallback" {
+                        if result.routing.contentPolicyFallback == nil { result.routing.contentPolicyFallback = ModelRef(providerID: "", modelID: "") }
+                        if key == "provider" { result.routing.contentPolicyFallback?.providerID = val }
+                        else if key == "model" { result.routing.contentPolicyFallback?.modelID = val }
+                    } else if currentRoutingSub == "circuit_breaker" {
+                        if key == "enabled" { result.routing.circuitBreakerEnabled = (val == "true") }
+                        else if key == "fail_threshold" { result.routing.circuitBreakerFailThreshold = Int(val) ?? 3 }
+                        else if key == "cooldown_seconds" { result.routing.circuitBreakerCooldownSeconds = Int(val) ?? 60 }
+                    } else if currentRoutingSub == "budgets" {
+                        if key == "enabled" { result.routing.budgetEnabled = (val == "true") }
+                        else if key == "provider_budgets" { inProviderBudgets = true }
+                        else if inProviderBudgets {
+                            result.routing.providerBudgets.append(ProviderBudget(providerID: key, dailyLimitUSD: Double(val) ?? 0.0))
+                        }
+                    } else if currentRoutingSub == "fallback_chain" {
+                        if trimmed.hasPrefix("-") {
+                            if let item = currentFallbackItem {
+                                result.routing.fallbackChain.append(item)
+                            }
+                            let clean = trimmed.dropFirst().trimmingCharacters(in: .whitespaces)
+                            let parts = clean.components(separatedBy: ":").map { $0.trimmingCharacters(in: .whitespaces) }
+                            if parts.count >= 2 {
+                                let k = parts[0]
+                                let v = parts.dropFirst().joined(separator: ":").trimmingCharacters(in: .whitespaces)
+                                currentFallbackItem = ModelRef(providerID: k == "provider" ? v : "", modelID: k == "model" ? v : "")
+                            } else {
+                                currentFallbackItem = ModelRef(providerID: "", modelID: "")
+                            }
+                        } else if kv.count >= 2 {
+                            if key == "provider" { currentFallbackItem?.providerID = val }
+                            else if key == "model" { currentFallbackItem?.modelID = val }
+                        }
+                    }
+                }
             }
         }
-        return result.models.isEmpty ? nil : result
+        if let item = currentFallbackItem {
+            result.routing.fallbackChain.append(item)
+        }
+        return result
+    }
+
+    // MARK: - Routing Config
+
+    /// Load the current routing configuration from the in-memory DB.
+    /// Returns a default (simple / empty) config if none has been saved yet.
+    public func loadRoutingConfig() throws -> RoutingConfig {
+        guard let db else { throw SettingsError.notOpen }
+        let json: String? = try db.read { db in
+            try String.fetchOne(db, sql: "SELECT value FROM global WHERE key = 'routing_config'")
+        }
+        guard let json, let data = json.data(using: .utf8) else {
+            return RoutingConfig()
+        }
+        return (try? JSONDecoder().decode(RoutingConfig.self, from: data)) ?? RoutingConfig()
+    }
+
+    /// Persist the routing configuration to the in-memory DB.
+    public func saveRoutingConfig(_ config: RoutingConfig) throws {
+        guard let db else { throw SettingsError.notOpen }
+        let data = try JSONEncoder().encode(config)
+        let json = String(data: data, encoding: .utf8) ?? "{}"
+        try db.write { db in
+            try db.execute(
+                sql: "INSERT OR REPLACE INTO global (key, value) VALUES ('routing_config', ?)",
+                arguments: [json]
+            )
+        }
+    }
+
+    // MARK: - Agents
+
+    public func allAgents() throws -> [AgentConfig] {
+        guard let db else { throw SettingsError.notOpen }
+        return try db.read { db in
+            let rows = try Row.fetchAll(db, sql: "SELECT * FROM agents ORDER BY id")
+            return rows.map {
+                let tagsStr: String = $0["allowed_tool_tags"] ?? "core,web,skills,meta"
+                let tags = tagsStr.components(separatedBy: ",").filter { !$0.isEmpty }
+                return AgentConfig(
+                    id: $0["id"],
+                    name: $0["name"],
+                    description: $0["description"],
+                    systemPrompt: $0["system_prompt"] ?? "",
+                    model: $0["model"],
+                    enabled: ($0["enabled"] as Int) != 0,
+                    allowedToolTags: tags
+                )
+            }
+        }
+    }
+
+    public func agent(id: String) throws -> AgentConfig? {
+        guard let db else { throw SettingsError.notOpen }
+        return try db.read { db in
+            guard let row = try Row.fetchOne(db, sql: "SELECT * FROM agents WHERE id = ?", arguments: [id]) else {
+                return nil
+            }
+            let tagsStr: String = row["allowed_tool_tags"] ?? "core,web,skills,meta"
+            let tags = tagsStr.components(separatedBy: ",").filter { !$0.isEmpty }
+            return AgentConfig(
+                id: row["id"],
+                name: row["name"],
+                description: row["description"],
+                systemPrompt: row["system_prompt"] ?? "",
+                model: row["model"],
+                enabled: (row["enabled"] as Int) != 0,
+                allowedToolTags: tags
+            )
+        }
+    }
+
+    public func saveAgent(_ agent: AgentConfig) throws {
+        guard let db else { throw SettingsError.notOpen }
+        let tagsStr = agent.allowedToolTags.joined(separator: ",")
+        try db.write { db in
+            try db.execute(
+                sql: """
+                    INSERT OR REPLACE INTO agents (id, name, description, system_prompt, model, enabled, allowed_tool_tags)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                arguments: [agent.id, agent.name, agent.description, agent.systemPrompt, agent.model, agent.enabled ? 1 : 0, tagsStr]
+            )
+        }
+    }
+
+    public func deleteAgent(id: String) throws {
+        guard let db else { throw SettingsError.notOpen }
+        try db.write { db in
+            try db.execute(sql: "DELETE FROM agents WHERE id = ?", arguments: [id])
+        }
     }
 }
 
