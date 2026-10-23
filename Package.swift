@@ -1,12 +1,22 @@
-// swift-tools-version: 6.3
+// swift-tools-version: 6.4
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
 
+// TUISuite is developed alongside Pecan. Set TUISUITE_PATH (the Makefile does this
+// automatically when ../../Masters/tuisuite exists) to build against a local checkout;
+// otherwise it resolves from GitHub so CI never depends on a local path.
+let tuiSuite: Package.Dependency = {
+    if let path = Context.environment["TUISUITE_PATH"], !path.isEmpty {
+        return .package(path: path)
+    }
+    return .package(url: "https://github.com/byronellis/tuisuite.git", branch: "main")
+}()
+
 let package = Package(
     name: "pecan",
     platforms: [
-        .macOS(.v15)
+        .macOS(.v27)
     ],
     products: [
         .executable(name: "pecan", targets: ["PecanUI"]),
@@ -15,7 +25,9 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/pakLebah/ANSITerminal.git", from: "0.0.3"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
-        .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
+        // Pinned past 1.0.0 for the Swift 6.4 lua_CFunction ternary fix (985e19a); move back
+        // to a version requirement once a release includes it.
+        .package(url: "https://github.com/tomsci/LuaSwift.git", revision: "985e19af1ae62639e54e4ce2a9f7712a29b5432c"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.3")),
@@ -23,8 +35,7 @@ let package = Package(
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.0"),
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.2"),
-        .package(path:"../../Masters/tuisuite")
-
+        tuiSuite,
     ],
     targets: [
         // MARK: - Settings store (providers, models, server state)

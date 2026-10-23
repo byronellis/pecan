@@ -1,5 +1,5 @@
 {
-  "originHash" : "b5aaebfdd6bde6720d8c93c659ed7e022147fa86042170a47a96f2fb342463eb",
+  "originHash" : "d8ea9e7471be6363d387b7f963f7daf932e595049bf6ecd93da354b8572ea996",
   "pins" : [
     {
       "identity" : "ansiterminal",
@@ -24,8 +24,7 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/tomsci/LuaSwift.git",
       "state" : {
-        "revision" : "f5b1cf666d02a10b357c2a19c79e6e91247a88f4",
-        "version" : "1.0.0"
+        "revision" : "985e19af1ae62639e54e4ce2a9f7712a29b5432c"
       }
     },
     {
@@ -179,6 +178,15 @@
       "state" : {
         "revision" : "2fa33e1f5e7131a7fc64c28e6d161dcec0d24820",
         "version" : "1.3.3"
+      }
+    },
+    {
+      "identity" : "tuisuite",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/byronellis/tuisuite.git",
+      "state" : {
+        "branch" : "main",
+        "revision" : "ab9eaa141eb34f07ddb5d432684ffc81bddcb7cb"
       }
     },
     {
