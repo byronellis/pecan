@@ -3,9 +3,9 @@
 
 import PackageDescription
 
-// TUISuite is developed alongside Pecan. Set TUISUITE_PATH (the Makefile does this
-// automatically when ../../Masters/tuisuite exists) to build against a local checkout;
-// otherwise it resolves from GitHub so CI never depends on a local path.
+// TUISuite is developed alongside Pecan. Set TUISUITE_PATH (or `make LOCAL_TUISUITE=1`) to
+// build against a local checkout; otherwise it resolves from GitHub so CI never depends on a
+// local path.
 let tuiSuite: Package.Dependency = {
     if let path = Context.environment["TUISUITE_PATH"], !path.isEmpty {
         return .package(path: path)
@@ -47,6 +47,17 @@ let package = Package(
             path: "Sources/PecanSettings"
         ),
 
+        // MARK: - Client/server protocol, connect-or-start, upgrade handshake
+        .target(
+            name: "PecanProtocol",
+            dependencies: [
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
+                "PecanSettings",
+            ],
+            path: "Sources/PecanProtocol"
+        ),
+
         // MARK: - Core agent logic (tools, hooks, prompt composer, Lua runtime)
         .target(
             name: "PecanAgentCore",
@@ -59,7 +70,7 @@ let package = Package(
             path: "Sources/PecanAgentCore"
         ),
 
-        // MARK: - HTTP LLM Proxy Server
+        // MARK: - Resident server (protocol host) and HTTP LLM proxy
         .target(
             name: "PecanServer",
             dependencies: [
@@ -72,6 +83,7 @@ let package = Package(
                 .product(name: "HuggingFace", package: "swift-huggingface"),
                 .product(name: "Tokenizers", package: "swift-transformers"),
                 "PecanSettings",
+                "PecanProtocol",
             ],
             path: "Sources/PecanServer"
         ),
@@ -84,9 +96,11 @@ let package = Package(
                 .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "TUISuite", package: "tuisuite"),
+                .product(name: "Logging", package: "swift-log"),
                 "PecanSettings",
                 "PecanAgentCore",
                 "PecanServer",
+                "PecanProtocol",
             ],
             path: "Sources/PecanUI"
         ),

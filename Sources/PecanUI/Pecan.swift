@@ -8,6 +8,7 @@ import ANSITerminal
 import PecanSettings
 import PecanAgentCore
 import PecanServer
+import PecanProtocol
 import ArgumentParser
 import TUISuite
 
@@ -22,7 +23,7 @@ func defaultConfigLocation() -> String {
 }
 
 @main
-struct Pecan : ParsableCommand {
+struct Pecan : AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Pecan - a Swift-based Agent",
         subcommands: [Config.self,Agent.self,Server.self],
@@ -44,16 +45,19 @@ struct Pecan : ParsableCommand {
         }
 
     }
-    struct Agent : ParsableCommand {
-        mutating func run() {
-            
+    struct Agent : AsyncParsableCommand {
+        mutating func run() async throws {
+            // Connecting starts the server, or upgrades it, as needed. The TUI client builds on this.
+            let connection = try await ServerConnector.connect()
+            print("Connected to pecan server \(connection.server.build) (pid \(connection.server.pid))")
+            await connection.rpc.close()
         }
     }
-    struct Server : ParsableCommand {
-        mutating func run() {
-            
-        }
-
+    struct Server : AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "Manage the resident pecan server",
+            subcommands: [Run.self, Start.self, Stop.self, Status.self],
+            defaultSubcommand: Run.self)
     }
 
     
