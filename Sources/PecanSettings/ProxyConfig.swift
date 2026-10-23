@@ -32,6 +32,9 @@ public struct ProxyConfig: Codable, Sendable {
     public init() {}
 
     public static var configFilePath: String {
+        if let envVar =  ProcessInfo.processInfo.environment["PECAN_CONFIG_PATH"] {
+           return envVar
+        }
         let home = FileManager.default.homeDirectoryForCurrentUser
         return home.appendingPathComponent(".pecan/config.yaml").path
     }

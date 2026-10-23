@@ -143,16 +143,9 @@ final class ConfigureTUI {
     }
 
     func run() async {
-        // Open settings store (transient in-memory)
-        do {
-            try await SettingsStore.shared.open()
-        } catch {
-            print("Failed to open settings store: \(error)")
-            exit(1)
-        }
 
         // Initialize in-memory configuration state
-        let existing = (try? await SettingsStore.shared.allProviders()) ?? []
+        let existing = await SettingsStore.shared.allProviders()
         inMemoryProviders = []
         
         // 1. Add "Local MLX Models"
@@ -199,6 +192,7 @@ final class ConfigureTUI {
                 inMemoryAvailableModels["mlx"] = scanMLXModels(dirPath: repo)
             }
         }
+        
 
         enableRawMode()
         // Enter alternate screen buffer and hide cursor
@@ -378,6 +372,7 @@ final class ConfigureTUI {
     }
 
     private func saveAndFinish() async {
+        /*
         // Retrieve currently persistent providers to see what needs deletion
         let existing = (try? await SettingsStore.shared.allProviders()) ?? []
         let existingIDs = Set(existing.map { $0.id })
@@ -450,6 +445,7 @@ final class ConfigureTUI {
         } catch {
             // ignore
         }
+         */
 
         shouldExit = true
     }
@@ -750,7 +746,7 @@ final class ConfigureTUI {
                 : String(routingConfig.circuitBreakerCooldownSeconds)
             routingEditCursor = routingEditBuffer.count
         } else if label == "Save Routing" {
-            try? await SettingsStore.shared.saveRoutingConfig(routingConfig)
+//            try? await SettingsStore.shared.saveRoutingConfig(routingConfig)
             splitLayout.activePane = .sidebar
         }
     }
@@ -758,6 +754,7 @@ final class ConfigureTUI {
     // MARK: - Routing Renderer
 
     private func renderRoutingScreen(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        /*
         if routingPickerActive {
             renderRoutingPicker(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
             return
@@ -858,10 +855,11 @@ final class ConfigureTUI {
         }
 
         let hint = " [↑/↓] Navigate  [Enter] Select/Toggle  [Esc] Back "
-        buffer.writeStringCentered(x: contentX, y: maxY, w: contentW, string: hint, style: BIOSStyle.reverse)
+        buffer.write(x: contentX, y: maxY, w: contentW, string: hint, style: BIOSStyle.reverse,align: .CENTER)*/
     }
 
     private func renderRoutingPicker(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
+        /*
         buffer.writeString(x: contentX, y: contentY, string: "Select Provider / Model:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
         let listH = contentH - 3
         buffer.drawBox(x: contentX, y: contentY + 1, w: contentW, h: listH, title: "AVAILABLE MODELS", borderStyle: .single, boxStyle: BIOSStyle.fgGray, titleStyle: BIOSStyle.fgCyan)
@@ -876,7 +874,8 @@ final class ConfigureTUI {
                 buffer.writeString(x: contentX + 1, y: contentY + 2 + i, string: c + item.provider + " / " + item.model, style: style)
             }
         }
-        buffer.writeStringCentered(x: contentX, y: contentY + listH + 1, w: contentW, string: " [↑/↓] Navigate  [Enter] Select  [Esc] Cancel ", style: BIOSStyle.reverse)
+        buffer.write(x: contentX, y: contentY + listH + 1, w: contentW, string: " [↑/↓] Navigate  [Enter] Select  [Esc] Cancel ", style: BIOSStyle.reverse,align: .CENTER)
+         */
     }
 
     // MARK: - Main Panel Key Handlers
@@ -1756,6 +1755,7 @@ final class ConfigureTUI {
             }
 
             let prefix = isSelected ? "▶ " : "  "
+            /*
             buffer.writeString(x: 2, y: itemY, string: prefix, style: style)
             
             if !isSelected, let hk = item.hotkey {
@@ -1772,10 +1772,11 @@ final class ConfigureTUI {
                 }
             } else {
                 buffer.writeString(x: 4, y: itemY, string: item.label, style: style)
-            }
+            } */
         }
 
         // 2. Draw Main Panel Box
+        /*
         let mainBoxStyle = (activePane == .mainPanel) ? BIOSStyle.fgCyan + BIOSStyle.bold : BIOSStyle.fgGray
         
         let selectedID = sidebarMenu.selectedIndex.map { sidebarMenu.items[$0].id }
@@ -1875,11 +1876,11 @@ final class ConfigureTUI {
         buffer.writeString(x: 0, y: h - 1, string: credit.padding(toLength: w - 1, withPad: " ", startingAt: 0), style: BIOSStyle.fgGray)
 
         print(buffer.renderString(), terminator: "")
-        fflush(stdout)
+        fflush(stdout) */
     }
 
     private func renderProvidersScreen(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
-        switch subScreen {
+     /*   switch subScreen {
         case .list:
             buffer.writeString(x: contentX, y: contentY, string: "Configure LLM Providers:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
             
@@ -1936,11 +1937,11 @@ final class ConfigureTUI {
             
         case .edit, .addCustom:
             drawForm(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
-        }
+        }*/
     }
 
     private func drawForm(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
-        if isFetchingModels {
+       /* if isFetchingModels {
             let loadingText = [
                 "📡 Fetching available models list from endpoint...",
                 "Please wait a moment..."
@@ -2071,11 +2072,11 @@ final class ConfigureTUI {
         
         if !formError.isEmpty {
             buffer.writeString(x: contentX + 2, y: contentY + contentH - 1, string: "⚠ \(formError)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
-        }
+        }*/
     }
 
     private func renderDirExplorer(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
-        buffer.writeString(x: contentX, y: contentY, string: "Select Local Model Directory:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+       /* buffer.writeString(x: contentX, y: contentY, string: "Select Local Model Directory:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
         
         let pathStr = explorerPath.count > (contentW - 8) ? "..." + String(explorerPath.suffix(contentW - 11)) : explorerPath
         buffer.writeString(x: contentX, y: contentY + 1, string: "Path: \(pathStr)", style: BIOSStyle.fgYellow)
@@ -2110,11 +2111,11 @@ final class ConfigureTUI {
         
         // Instructions
         let instructions = " [↑/↓] Navigate  [Enter] Open  [S] Select Folder  [C] Cancel "
-        buffer.writeStringCentered(x: contentX, y: contentY + listH + 2, w: contentW, string: instructions, style: BIOSStyle.reverse + BIOSStyle.bold)
+        buffer.write(x: contentX, y: contentY + listH + 2, w: contentW, string: instructions, style: BIOSStyle.reverse + BIOSStyle.bold,align: .CENTER) */
     }
 
     private func renderModelModal() {
-        let modalW = 55
+/*        let modalW = 55
         let modalH = 12
         let modalX = (termCols - modalW) / 2
         let modalY = (termRows - modalH) / 2
@@ -2133,14 +2134,14 @@ final class ConfigureTUI {
         let truncCtx = modalModelCtx.count > (modalW - 16) ? String(modalModelCtx.prefix(modalW - 19)) + "..." : modalModelCtx
         buffer.writeString(x: modalX + 2, y: modalY + 8, string: "Context Size: \(truncCtx)", style: BIOSStyle.fgWhite)
         
-        buffer.writeStringCentered(x: modalX, y: modalY + modalH - 2, w: modalW, string: "Press [Any Key] to close", style: BIOSStyle.reverse + BIOSStyle.bold)
+        buffer.write(x: modalX, y: modalY + modalH - 2, w: modalW, string: "Press [Any Key] to close", style: BIOSStyle.reverse + BIOSStyle.bold,align: .CENTER) */
     }
 
     private func drawTextCentered(text: [String], x: Int, y: Int, w: Int, h: Int, style: String = "") {
-        let startY = y + max(0, (h - text.count) / 2)
+/*        let startY = y + max(0, (h - text.count) / 2)
         for (idx, line) in text.enumerated() {
-            buffer.writeStringCentered(x: x, y: startY + idx, w: w, string: line, style: style)
-        }
+            buffer.write(x: x, y: startY + idx, w: w, string: line, style: style,align: .CENTER)
+        } */
     }
 
     // MARK: - Agents Helper Methods
@@ -2291,7 +2292,7 @@ final class ConfigureTUI {
     }
 
     private func drawAgentForm(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
-        buffer.writeString(x: contentX, y: contentY, string: "Edit Agent Parameters:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+/*        buffer.writeString(x: contentX, y: contentY, string: "Edit Agent Parameters:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
         
         let maxDisplayLines = contentH - 4
         var startIdx = 0
@@ -2365,11 +2366,11 @@ final class ConfigureTUI {
         
         if !agentsError.isEmpty {
             buffer.writeString(x: contentX + 2, y: contentY + contentH - 1, string: "⚠ \(agentsError)", style: BIOSStyle.fgYellow + BIOSStyle.bold)
-        }
+        } */
     }
 
     private func renderAgentsScreen(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
-        if agentsPickerActive {
+/*        if agentsPickerActive {
             renderAgentsPicker(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
             return
         }
@@ -2414,11 +2415,11 @@ final class ConfigureTUI {
             
         case .edit, .addCustom:
             drawAgentForm(contentX: contentX, contentY: contentY, contentW: contentW, contentH: contentH)
-        }
+        } */
     }
 
     private func renderAgentsPicker(contentX: Int, contentY: Int, contentW: Int, contentH: Int) {
-        buffer.writeString(x: contentX, y: contentY, string: "Select Model for Agent:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
+/*        buffer.writeString(x: contentX, y: contentY, string: "Select Model for Agent:", style: BIOSStyle.fgCyan + BIOSStyle.bold)
         
         let listH = contentH - 4
         let startIdx = max(0, agentsPickerIndex - listH + 1)
@@ -2439,7 +2440,8 @@ final class ConfigureTUI {
             buffer.writeString(x: contentX + 2, y: y, string: cursor + item, style: style)
         }
         
-        buffer.writeStringCentered(x: contentX, y: contentY + listH + 1, w: contentW, string: " [↑/↓] Navigate  [Enter] Select  [Esc] Cancel ", style: BIOSStyle.reverse)
+        buffer.write(x: contentX, y: contentY + listH + 1, w: contentW, string: " [↑/↓] Navigate  [Enter] Select  [Esc] Cancel ", style: BIOSStyle.reverse,align: .CENTER)
+ */
     }
 
     private func handleAgentsKey(_ key: InputKey) async -> Bool {

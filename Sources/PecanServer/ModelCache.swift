@@ -45,12 +45,22 @@ public func fetchModels(from provider: ProviderConfig) async -> [RemoteModelInfo
     }
 }
 
+internal func buildTargetURL(baseURL: String, endpoint: String) -> URL? {
+    let base = baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    if endpoint.hasPrefix("v1/") {
+        if base.hasSuffix("v1") {
+            let endpointWithoutV1 = String(endpoint.dropFirst(3))
+            return URL(string: base + "/" + endpointWithoutV1)
+        }
+    }
+    return URL(string: base + "/" + endpoint)
+}
+
 private func fetchOpenAIModels(provider: ProviderConfig) async -> [RemoteModelInfo] {
     guard let baseURL = provider.url, !baseURL.isEmpty else {
         return [RemoteModelInfo(providerID: provider.id, modelID: provider.id)]
     }
-    let urlStr = baseURL.hasSuffix("/") ? baseURL + "v1/models" : baseURL + "/v1/models"
-    guard let url = URL(string: urlStr) else { return [] }
+    guard let url = buildTargetURL(baseURL: baseURL, endpoint: "v1/models") else { return [] }
     var request = URLRequest(url: url, timeoutInterval: 10)
     request.httpMethod = "GET"
     let key = KeychainHelper.resolveKey(providerID: provider.id, providerType: provider.type, dbKey: provider.apiKey)

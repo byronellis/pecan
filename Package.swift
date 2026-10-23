@@ -1,4 +1,4 @@
-// swift-tools-version: 6.0
+// swift-tools-version: 6.3
 // The swift-tools-version declares the minimum version of Swift required to build this package.
 
 import PackageDescription
@@ -16,19 +16,22 @@ let package = Package(
         .package(url: "https://github.com/pakLebah/ANSITerminal.git", from: "0.0.3"),
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
         .package(url: "https://github.com/tomsci/LuaSwift.git", from: "1.0.0"),
-        .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.3")),
         .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
         .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.0"),
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.2"),
+        .package(path:"../../Masters/tuisuite")
+
     ],
     targets: [
         // MARK: - Settings store (providers, models, server state)
         .target(
             name: "PecanSettings",
             dependencies: [
-                .product(name: "GRDB", package: "GRDB.swift"),
+                .product(name: "Yams", package: "Yams"),
             ],
             path: "Sources/PecanSettings"
         ),
@@ -68,6 +71,8 @@ let package = Package(
             dependencies: [
                 .product(name: "ANSITerminal", package: "ANSITerminal"),
                 .product(name: "Markdown", package: "swift-markdown"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "TUISuite", package: "tuisuite"),
                 "PecanSettings",
                 "PecanAgentCore",
                 "PecanServer",

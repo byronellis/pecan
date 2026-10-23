@@ -42,6 +42,14 @@ enum BIOSStyle {
     static let reset       = "\u{1B}[0m"
 }
 
+enum Alignment {
+    case LEFT,CENTER,RIGHT
+}
+enum Position {
+    case TOP,MIDDLE,BOTTOM
+}
+
+
 // MARK: - Double-Buffered Screen Cell
 struct TUICell {
     var char: Character = " "
@@ -59,6 +67,8 @@ class TUIBuffer {
     private(set) var width: Int
     private(set) var height: Int
     private var cells: [TUICell]
+    
+    private var dirty : Bool = true
 
     init(width: Int, height: Int) {
         self.width = max(1, width)
@@ -76,25 +86,24 @@ class TUIBuffer {
         for i in 0..<cells.count {
             cells[i] = TUICell(char: " ", style: style)
         }
+        dirty = true
     }
 
     func set(x: Int, y: Int, char: Character, style: String = "") {
         guard x >= 0, x < width, y >= 0, y < height else { return }
-        cells[y * width + x] = TUICell(char: char, style: style)
-    }
-
-    func writeString(x: Int, y: Int, string: String, style: String = "") {
-        var currentX = x
-        for char in string {
-            set(x: currentX, y: y, char: char, style: style)
-            currentX += 1
+        let current = cells[y*width + x]
+        if(current.char != char || current.style != style) {
+            cells[y * width + x] = TUICell(char: char, style: style)
+            dirty = true
         }
     }
-
-    func writeStringCentered(x: Int, y: Int, w: Int, string: String, style: String = "") {
-        let textLen = string.count
-        let startX = x + max(0, (w - textLen) / 2)
-        writeString(x: startX, y: y, string: string, style: style)
+    
+    func fillRect(rect: TUIRect, char: Character,style: String = " ") {
+        for j in rect.y..<(rect.y+rect.height) {
+            for i in rect.x..<(rect.x+rect.width) {
+                set(x:i,y:j,char: char,style: style)
+            }
+        }
     }
 
     func drawBox(x: Int, y: Int, w: Int, h: Int, title: String? = nil, borderStyle: BorderStyle = .single, boxStyle: String = "", titleStyle: String = "") {
@@ -118,12 +127,14 @@ class TUIBuffer {
             set(x: x + w - 1, y: y + j, char: Character(borderStyle.vertical), style: boxStyle)
         }
 
+        /*
         // Draw title
         if let title = title {
             let maxTitleW = w - 4
             let truncatedTitle = title.count > maxTitleW ? String(title.prefix(maxTitleW)) : title
             writeString(x: x + 2, y: y, string: " \(truncatedTitle) ", style: titleStyle)
         }
+         */
     }
 
     /// Renders the buffer contents to a single string with cursor reset to top-left.
@@ -161,6 +172,45 @@ class TUIBuffer {
         return output
     }
 }
+
+typealias TUIRect = (x: Int, y: Int, width: Int, height: Int)
+
+@MainActor
+protocol TUIElement {
+    func render(in buffer: TUIBuffer, rect: TUIRect)
+}
+
+/*
+public struct Text : TUIElement {
+    let string: String
+    let style: String = ""
+
+    let alignment: Alignment = .LEFT
+    let position: Position = .TOP
+    let clear: Bool = false
+    
+    func render(in buffer: TUIBuffer, rect: TUIRect) {
+        
+        
+        let str = (string.count > rect.width) ? String(string.prefix(rect.width)) : string
+        
+        
+        var x = switch alignment {
+        case .LEFT:
+            rect.x
+        case .CENTER:
+            rect.x + max(0,(rect.width-str.count) / 2)
+        case .RIGHT:
+            (rect.x+rect.width) - string.count
+        }
+        for char in str {
+            buffer.set(x: x, y: rect.y, char: char, style: style)
+            x += 1
+        }
+    }
+}
+*/
+
 
 // MARK: - Reusable Menu Item
 struct TUIMenuItem {

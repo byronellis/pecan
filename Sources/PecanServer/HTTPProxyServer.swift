@@ -519,7 +519,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                     "temperature": 0.0
                 ]
                 guard let baseURL = judgeProvider.url,
-                      let url = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/messages" : baseURL + "/v1/messages") else { return nil }
+                      let url = buildTargetURL(baseURL: baseURL, endpoint: "v1/messages") else { return nil }
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -545,7 +545,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
                     "temperature": 0.0
                 ]
                 guard let baseURL = judgeProvider.url,
-                      let url = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions") else { return nil }
+                      let url = buildTargetURL(baseURL: baseURL, endpoint: "v1/chat/completions") else { return nil }
                 var req = URLRequest(url: url)
                 req.httpMethod = "POST"
                 req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -735,7 +735,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
             let payloadData = try JSONSerialization.data(withJSONObject: anthropicPayload)
             
             guard let baseURL = provider.url,
-                  let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/messages" : baseURL + "/v1/messages") else {
+                  let targetURL = buildTargetURL(baseURL: baseURL, endpoint: "v1/messages") else {
                 throw RouteError(statusCode: 400, message: "Invalid provider URL")
             }
             
@@ -799,7 +799,7 @@ private final class HTTPProxyHandler: ChannelInboundHandler, @unchecked Sendable
         let payloadData = try JSONSerialization.data(withJSONObject: openAIPayload)
         
         guard let baseURL = provider.url,
-              let targetURL = URL(string: baseURL.hasSuffix("/") ? baseURL + "v1/chat/completions" : baseURL + "/v1/chat/completions") else {
+              let targetURL = buildTargetURL(baseURL: baseURL, endpoint: "v1/chat/completions") else {
             throw RouteError(statusCode: 400, message: "Invalid provider URL")
         }
         

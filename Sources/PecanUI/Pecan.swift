@@ -8,6 +8,9 @@ import ANSITerminal
 import PecanSettings
 import PecanAgentCore
 import PecanServer
+import ArgumentParser
+import TUISuite
+
 
 // MARK: - Server lifecycle helpers
 
@@ -29,18 +32,71 @@ func ensureServer(forceRestart: Bool) async throws -> Int {
     return boundPort
 }
 
+func defaultConfigLocation() -> String {
+    if let env = ProcessInfo.processInfo.environment["PECAN_CONFIG"], !env.isEmpty {
+        return env
+    } else {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        return home.appendingPathComponent(".pecan/config.yaml").path
+    }
+}
+
+@main
+struct Pecan : ParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Pecan - a Swift-based Agent",
+        subcommands: [Config.self,Agent.self,Server.self],
+        defaultSubcommand: Agent.self)
+
+    
+    @Option(help:"Path to configuration file")
+    var configPath: String = defaultConfigLocation()
+    
+    private func configExists() -> Bool {
+        FileManager.default.fileExists(atPath: configPath)
+    }
+    
+    
+
+    struct Config : ParsableCommand {
+        mutating func run() {
+            Configurator.run()
+        }
+
+    }
+    struct Agent : ParsableCommand {
+        mutating func run() {
+            
+        }
+    }
+    struct Server : ParsableCommand {
+        mutating func run() {
+            
+        }
+
+    }
+
+    
+    
+}
+
+
+
 // MARK: - Main TUI execution
+/*
 
 func main() async throws {
+
     // Handle Ctrl+C (SIGINT)
     signal(SIGINT) { _ in
         print("\r\nExiting Pecan TUI...\r")
         ServerStatus.remove()
         exit(0)
     }
-
-    let args = CommandLine.arguments.dropFirst()
     
+    clearScreen()
+
+    /*
     // Ensure config.yaml is present on startup
     let configPath = ProxyConfig.configFilePath
     if !FileManager.default.fileExists(atPath: configPath) && args.first != "configure" && args.first != "config" && args.first != "server" {
@@ -291,10 +347,11 @@ func main() async throws {
     
     await TerminalManager.shared.setInputActive(false)
     ServerStatus.remove()
-    print("\r\nExiting Pecan TUI...\r", terminator: "\n")
+    print("\r\nExiting Pecan TUI...\r", terminator: "\n") */
 }
 
 // Start TUI
+
 Task {
     do {
         try await main()
@@ -305,3 +362,4 @@ Task {
 }
 
 RunLoop.main.run()
+*/
