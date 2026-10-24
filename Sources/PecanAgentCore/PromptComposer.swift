@@ -1,42 +1,23 @@
 import Foundation
 import Lua
 
-/// Composes the system prompt from a role and optional extension fragments.
+/// Composes the system prompt from a persona and optional extension fragments.
 /// Manages active tool tags, focused task, and context for the current session.
 public actor PromptComposer {
     public static let shared = PromptComposer()
 
-    private var basePersona: (any AgentPersona)?
-    private var activePersona: (any AgentPersona)?
+    private var persona: (any AgentPersona)?
     private var fragments: [String: any PromptFragment] = [:]
     private var activeToolTags: Set<String> = ["core", "web", "skills", "meta"]
     private var focusedTask: PromptContext.TaskInfo? = nil
     private var projectInfo: PromptContext.ProjectInfo? = nil
-    private var teamInfo: PromptContext.TeamInfo? = nil
     private let pool = LuaStatePool()
 
-    // MARK: - Persona management
+    // MARK: - Persona
 
-    /// Set the long-term base persona for this session.
-    public func setBasePersona(_ persona: any AgentPersona) {
-        basePersona = persona
+    public func setPersona(_ persona: any AgentPersona) {
+        self.persona = persona
     }
-
-    /// Activate a temporary persona, overriding the base for the next `compose` call.
-    public func enterPersona(_ persona: any AgentPersona) {
-        activePersona = persona
-    }
-
-    /// Clear the temporary persona, reverting to the base.
-    public func leavePersona() {
-        activePersona = nil
-    }
-
-    /// The resolved persona: temporary override if set, otherwise the base.
-    private var resolvedPersona: (any AgentPersona)? { activePersona ?? basePersona }
-
-    /// Name of the currently active persona (for server-side model resolution).
-    public var activePersonaName: String? { resolvedPersona?.personaName }
 
     // MARK: - Fragment extensions (e.g. Lua user fragments)
 
@@ -66,28 +47,17 @@ public actor PromptComposer {
         projectInfo = PromptContext.ProjectInfo(name: name, directory: directory, mount: mount)
     }
 
-    public func setTeamContext(name: String, mount: String) {
-        teamInfo = PromptContext.TeamInfo(name: name, mount: mount)
-    }
-
     public func getProjectInfo() -> PromptContext.ProjectInfo? {
         projectInfo
-    }
-
-    public func getTeamInfo() -> PromptContext.TeamInfo? {
-        teamInfo
     }
 
     // MARK: - Composition
 
     /// Compose the full system prompt: role first, then extension fragments in priority order.
-    /// All async data (skills, personas, project tools) is pre-fetched into `PromptContext`.
+    /// All async data (skills, project tools) is pre-fetched into `PromptContext`.
     public func compose(agentID: String, sessionID: String) async -> String {
         let rawProjectTools = await ToolManager.shared.allToolDescriptions(tags: ["project"])
         let projectToolEntries = rawProjectTools.map { PromptContext.ToolEntry(name: $0.name, description: $0.description) }
-
-        let rawPersonas = await PersonaManager.shared.catalog()
-        let personaEntries = rawPersonas.map { PromptContext.PersonaEntry(name: $0.name, description: $0.description) }
 
         let context = PromptContext(
             activeToolTags: activeToolTags,
@@ -95,16 +65,13 @@ public actor PromptComposer {
             agentID: agentID,
             sessionID: sessionID,
             project: projectInfo,
-            team: teamInfo,
             skillsCatalog: [],
-            projectTools: projectToolEntries,
-            personasCatalog: personaEntries
+            projectTools: projectToolEntries
         )
 
         var sections: [String] = []
 
-        // Render the resolved persona
-        if let persona = resolvedPersona {
+        if let persona {
             let personaPrompt = persona.render(context: context)
             if !personaPrompt.isEmpty { sections.append(personaPrompt) }
         }
@@ -130,12 +97,7 @@ public actor PromptComposer {
 
     /// Configure this composer with the default coding persona.
     public func useDefaultPersona() {
-        setBasePersona(CodingPersona())
-    }
-
-    /// Legacy alias for `useDefaultPersona()`.
-    public func registerBuiltinFragments() {
-        setBasePersona(CodingPersona())
+        setPersona(CodingPersona())
     }
 
     /// Scan ~/.pecan/prompts/*.lua for user-defined extension fragments.

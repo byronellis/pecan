@@ -7,7 +7,6 @@ public actor SettingsStore {
     struct Settings : Codable {
         public var providers: [String:ProviderConfig] = [:]
         public var routing: RoutingConfig = RoutingConfig()
-        public var agents: [String:AgentConfig] = [:]
     }
     var settings = Settings()
 
@@ -50,14 +49,6 @@ public actor SettingsStore {
     
     public func resolveProviderAndModel(requestModel: String) -> (ProviderConfig,String)? {
         return nil
-    }
-    
-    public func agent(id: String) -> AgentConfig? {
-        settings.agents[id]
-    }
-    
-    public func allAgents() -> [AgentConfig] {
-        .init(settings.agents.values)
     }
     
     public func loadRoutingConfig() throws -> RoutingConfig {

@@ -70,9 +70,6 @@ public actor ToolManager {
         register(tool: WebSearchTool())
         register(tool: HttpRequestTool())
         // Meta tools (persona + subagent)
-        register(tool: EnterPersonaTool())
-        register(tool: LeavePersonaTool())
-        register(tool: RunAgentTool())
     }
 
     public func formatToolResult(name: String, result: String) -> String? {

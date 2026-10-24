@@ -1,7 +1,6 @@
 import Foundation
 
-/// The default agent persona. Applied to all teams unless overridden.
-/// Produces a system prompt for a general-purpose coding agent.
+/// The default persona: a system prompt for a general-purpose coding agent.
 public struct CodingPersona: AgentPersona {
     public let personaName = "coding"
     public let description = "General-purpose coding agent with file, shell, and web tools."
@@ -27,13 +26,6 @@ public struct CodingPersona: AgentPersona {
             }
         }
 
-        if let team = context.team, team.name != "default" {
-            Section("Team: \(team.name)") {
-                Paragraph("Shared team workspace is at `\(team.mount)`.")
-                Paragraph("Team memories are at `/memory/team/`.")
-            }
-        }
-
         Section("Memory") {
             Raw("""
                 You have a persistent memory filesystem at `/memory/`. \
@@ -46,11 +38,7 @@ public struct CodingPersona: AgentPersona {
                 """)
 
             if context.project != nil {
-                Raw("**Project memories** (shared across agents on this project): `/memory/project/TAG.md`")
-            }
-
-            if context.team != nil {
-                Raw("**Team memories** (shared within team): `/memory/team/TAG.md`")
+                Raw("**Project memories** (shared across sessions on this project): `/memory/project/TAG.md`")
             }
         }
 
@@ -83,13 +71,6 @@ public struct CodingPersona: AgentPersona {
             Section("Available Skills") {
                 BulletList(context.skillsCatalog.map { "**\($0.name)**: \($0.description)" })
                 Paragraph("When a request matches a skill's description, use `activate_skill` to load its full instructions before proceeding.")
-            }
-        }
-
-        if !context.personasCatalog.isEmpty {
-            Section("Available Personas") {
-                BulletList(context.personasCatalog.map { "**\($0.name)**: \($0.description)" })
-                Paragraph("For tasks that benefit from a focused mindset, use `enter_persona` to adopt that persona. Use `leave_persona` to return to coding mode.")
             }
         }
     }

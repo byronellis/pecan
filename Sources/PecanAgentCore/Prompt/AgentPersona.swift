@@ -25,16 +25,3 @@ extension AgentPersona {
         buildPrompt(context: context).render()
     }
 }
-
-// MARK: - SubagentPersona
-
-/// A persona for a focused subagent that performs a bounded task and returns a summary.
-/// Subagents run with a subset of tools and their own isolated context window.
-public protocol SubagentPersona: AgentPersona {
-    /// Tool tags this subagent is allowed to use.
-    var allowedToolTags: Set<String> { get }
-
-    /// Builds a task-scoped prompt injected at the start of the subagent's context.
-    @PromptBuilder
-    func buildTaskPrompt(task: String, context: PromptContext) -> any PromptNode
-}
