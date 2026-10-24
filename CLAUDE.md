@@ -16,6 +16,7 @@ replace the running server, so use `make` for anything you intend to run.
 | `make` / `make debug` | Debug build, dev channel |
 | `make release` | Optimized build, dev channel |
 | `make dist BUILD_NUMBER=n` | Optimized build, release channel (CI; `n` = CI run number) |
+| `make run [ARGS="..."]` | Debug build, then run it (replacing the running dev server) |
 | `make clean` | `swift package clean` |
 
 - Dev build numbers come from `~/.pecan-dev/build-counter`, incremented by every dev build.

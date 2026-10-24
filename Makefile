@@ -7,6 +7,7 @@
 #   make / make debug          debug build, dev channel
 #   make release               optimized build, dev channel
 #   make dist BUILD_NUMBER=n   optimized build, release channel (CI: n = CI run number)
+#   make run [ARGS="..."]      debug build, then run it (e.g. ARGS="server status")
 #   make clean                 swift package clean
 #
 # Dev builds are numbered by a per-user counter in ~/.pecan-dev/build-counter that every dev
@@ -23,7 +24,7 @@ DEV_COUNTER := $(HOME)/.pecan-dev/build-counter
 INFO_PLIST := .build/pecan-info/Info.plist
 PRODUCT := pecan
 
-.PHONY: all debug release dist clean
+.PHONY: all debug release dist run clean
 
 all: debug
 
@@ -64,6 +65,10 @@ debug release dist:
 	swift build -c $(CONFIG) --product $(PRODUCT) \
 		-Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker "$(abspath $(INFO_PLIST))"; \
 	echo "Built $(PRODUCT) $(VERSION) ($(CHANNEL) build $$build, $(GIT_HASH)) -> $$(swift build -c $(CONFIG) --show-bin-path)/$(PRODUCT)"
+
+# Every run is a new build, so it also replaces the running dev server with this one.
+run: debug
+	@exec "$$(swift build -c debug --show-bin-path)/$(PRODUCT)" $(ARGS)
 
 clean:
 	swift package clean
