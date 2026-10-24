@@ -1,5 +1,4 @@
 import Foundation
-import Lua
 
 /// Composes the system prompt from a persona and optional extension fragments.
 /// Manages active tool tags, focused task, and context for the current session.
@@ -11,7 +10,6 @@ public actor PromptComposer {
     private var activeToolTags: Set<String> = ["core", "web", "skills", "meta"]
     private var focusedTask: PromptContext.TaskInfo? = nil
     private var projectInfo: PromptContext.ProjectInfo? = nil
-    private let pool = LuaStatePool()
 
     // MARK: - Persona
 
@@ -19,7 +17,7 @@ public actor PromptComposer {
         self.persona = persona
     }
 
-    // MARK: - Fragment extensions (e.g. Lua user fragments)
+    // MARK: - Fragment extensions
 
     public func register(fragment: any PromptFragment) {
         fragments[fragment.id] = fragment
@@ -76,16 +74,10 @@ public actor PromptComposer {
             if !personaPrompt.isEmpty { sections.append(personaPrompt) }
         }
 
-        // Render extension fragments (user Lua fragments, etc.) in priority order
+        // Render extension fragments in priority order
         let sorted = fragments.values.sorted { $0.priority < $1.priority }
         for fragment in sorted {
-            let rendered: String?
-            if let luaFrag = fragment as? LuaPromptFragment {
-                rendered = pool.execute { L in luaFrag.renderSync(context: context, lua: L) }
-            } else {
-                rendered = await fragment.render(context: context)
-            }
-            if let text = rendered {
+            if let text = await fragment.render(context: context) {
                 sections.append(text)
             }
         }
@@ -98,106 +90,5 @@ public actor PromptComposer {
     /// Configure this composer with the default coding persona.
     public func useDefaultPersona() {
         setPersona(CodingPersona())
-    }
-
-    /// Scan ~/.pecan/prompts/*.lua for user-defined extension fragments.
-    public func loadUserFragments() {
-        let fm = FileManager.default
-        let homeDir = fm.homeDirectoryForCurrentUser
-        let promptsPath = homeDir.appendingPathComponent(".pecan/prompts")
-
-        if !fm.fileExists(atPath: promptsPath.path) {
-            return
-        }
-
-        guard let files = try? fm.contentsOfDirectory(atPath: promptsPath.path) else { return }
-
-        for file in files where file.hasSuffix(".lua") {
-            let baseName = (file as NSString).deletingPathExtension
-            let luaURL = promptsPath.appendingPathComponent(file)
-
-            guard let script = try? String(contentsOf: luaURL, encoding: .utf8) else { continue }
-            guard let info = detectLuaPromptModule(script: script, name: baseName) else { continue }
-
-            let fragment = LuaPromptFragment(
-                id: "user.\(baseName)",
-                name: info.name ?? baseName,
-                priority: info.priority ?? 450,
-                script: script
-            )
-            register(fragment: fragment)
-        }
-
-        let userCount = fragments.values.filter { $0.id.hasPrefix("user.") }.count
-        if userCount > 0 {
-            print("[PromptComposer] Loaded \(userCount) user prompt fragment(s)")
-        }
-    }
-
-}
-
-// MARK: - LuaPromptFragment
-
-/// A user-defined prompt fragment backed by a Lua script.
-public struct LuaPromptFragment: PromptFragment, Sendable {
-    public let id: String
-    public let name: String
-    public let priority: Int
-    private let script: String
-
-    init(id: String, name: String, priority: Int, script: String) {
-        self.id = id
-        self.name = name
-        self.priority = priority
-        self.script = script
-    }
-
-    /// Render using a provided (pooled) LuaState. Stack must be clean on entry;
-    /// caller resets the stack after this returns.
-    func renderSync(context: PromptContext, lua L: LuaState) -> String? {
-        do {
-            try L.load(string: script, name: name)
-            try L.pcall(nargs: 0, nret: 1)
-
-            guard L.type(-1) == .table else { return nil }
-
-            L.push("render")
-            L.rawget(-2)
-            guard L.type(-1) == .function else { return nil }
-
-            L.newtable()
-
-            L.push("agent_id")
-            L.push(context.agentID)
-            L.rawset(-3)
-
-            L.push("session_id")
-            L.push(context.sessionID)
-            L.rawset(-3)
-
-            if let task = context.focusedTask {
-                L.push("focused_task_id")
-                L.push(task.id)
-                L.rawset(-3)
-
-                L.push("focused_task_title")
-                L.push(task.title)
-                L.rawset(-3)
-            }
-
-            try L.pcall(nargs: 1, nret: 1)
-
-            return L.tostring(-1)
-        } catch {
-            print("[LuaPromptFragment] Error rendering '\(name)': \(error)")
-            return nil
-        }
-    }
-
-    /// PromptFragment protocol conformance — creates its own LuaState (used when no pool available).
-    public func render(context: PromptContext) async -> String? {
-        let L = LuaState(libraries: .all)
-        defer { L.close() }
-        return renderSync(context: context, lua: L)
     }
 }

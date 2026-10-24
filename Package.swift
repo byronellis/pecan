@@ -14,9 +14,6 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-log.git", from: "1.5.4"),
-        // Pinned past 1.0.0 for the Swift 6.4 lua_CFunction ternary fix (985e19a); move back
-        // to a version requirement once a release includes it.
-        .package(url: "https://github.com/tomsci/LuaSwift.git", revision: "985e19af1ae62639e54e4ce2a9f7712a29b5432c"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.0"),
@@ -39,11 +36,10 @@ let package = Package(
             path: "Sources/PecanProtocol"
         ),
 
-        // MARK: - Core agent logic (tools, hooks, prompt composer, Lua runtime)
+        // MARK: - Core agent logic (tools, prompt composer)
         .target(
             name: "PecanAgentCore",
             dependencies: [
-                .product(name: "Lua", package: "LuaSwift"),
                 .product(name: "Logging", package: "swift-log"),
                 .product(name: "Markdown", package: "swift-markdown"),
                 "PecanSettings",

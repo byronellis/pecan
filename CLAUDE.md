@@ -55,7 +55,7 @@ emulator such as `pyte`; it can't be exercised from a plain pipe.
 | `PecanSettings` | `BuildInfo`, `PecanPaths` |
 | `PecanProtocol` | JSON-RPC wire types, socket client, connect-or-start/upgrade logic (no MLX) |
 | `PecanServer` | `PecanServerHost` (resident server), FoundationModels sessions |
-| `PecanAgentCore` | Tools, hooks, Lua runtime, prompt composer |
+| `PecanAgentCore` | Tools, prompt composer |
 | `PecanUI` | `pecan` executable: ArgumentParser commands, inline terminal UI |
 
 ## Related repositories

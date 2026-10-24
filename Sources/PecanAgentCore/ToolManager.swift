@@ -1,5 +1,4 @@
 import Foundation
-import Lua
 
 public protocol PecanTool: Sendable {
     var name: String { get }
@@ -69,7 +68,6 @@ public actor ToolManager {
         register(tool: WebFetchTool())
         register(tool: WebSearchTool())
         register(tool: HttpRequestTool())
-        // Meta tools (persona + subagent)
     }
 
     public func formatToolResult(name: String, result: String) -> String? {
@@ -85,48 +83,4 @@ public actor ToolManager {
             .map { (name: $0.name, description: $0.description) }
             .sorted { $0.name < $1.name }
     }
-
-    public func loadTools() {
-        let fm = FileManager.default
-        let homeDir = fm.homeDirectoryForCurrentUser
-        let toolsPath = homeDir.appendingPathComponent(".pecan/tools")
-
-        if !fm.fileExists(atPath: toolsPath.path) {
-            return
-        }
-
-        guard let files = try? fm.contentsOfDirectory(atPath: toolsPath.path) else { return }
-
-        for file in files where file.hasSuffix(".lua") {
-            let fileBaseName = (file as NSString).deletingPathExtension
-            let luaURL = toolsPath.appendingPathComponent(file)
-            let jsonURL = toolsPath.appendingPathComponent("\(fileBaseName).json")
-
-            guard let script = try? String(contentsOf: luaURL, encoding: .utf8) else { continue }
-
-            // Try to detect module pattern by running the script and checking the return type
-            if let moduleInfo = detectLuaModule(script: script, fallbackName: fileBaseName) {
-                // Module-style tool: metadata from the module table itself
-                let toolName = moduleInfo.name ?? fileBaseName
-                let toolDesc = moduleInfo.description ?? "A Lua tool."
-                let toolSchema = moduleInfo.schema ?? "{\"type\":\"object\",\"properties\":{}}"
-
-                let tool = LuaTool(name: toolName, description: toolDesc, parametersJSONSchema: toolSchema, mode: .module(script: script))
-                register(tool: tool)
-            } else if let schemaJSON = try? String(contentsOf: jsonURL, encoding: .utf8) {
-                // Legacy function-style with JSON sidecar
-                var description = "A Lua tool."
-                if let data = schemaJSON.data(using: .utf8),
-                   let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                   let desc = obj["description"] as? String {
-                    description = desc
-                }
-
-                let tool = LuaTool(name: fileBaseName, description: description, parametersJSONSchema: schemaJSON, script: script)
-                register(tool: tool)
-            }
-            // If neither module nor sidecar JSON, skip the file
-        }
-    }
-
 }
