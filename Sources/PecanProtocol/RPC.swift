@@ -2,7 +2,7 @@ import Foundation
 import PecanSettings
 
 /// Version of the client/server wire protocol. Bump on changes older peers can't handle.
-public let pecanProtocolVersion = 1
+public let pecanProtocolVersion = 2
 
 /// A JSON-RPC 2.0 method with typed parameters and result.
 public protocol RPCMethod {
@@ -29,6 +29,14 @@ public struct RPCError: Error, Codable, Sendable, CustomStringConvertible {
     public static let methodNotFound = -32601
     public static let invalidParams = -32602
     public static let internalError = -32603
+
+    // Pecan application errors (the JSON-RPC server-error range).
+    public static let modelUnavailable = -32000
+    public static let unknownSession = -32001
+    public static let sessionBusy = -32002
+    public static let contextExceeded = -32003
+    public static let cancelled = -32004
+    public static let generationFailed = -32005
 
     public var description: String { "\(message) (\(code))" }
 }
@@ -68,6 +76,24 @@ public struct RPCResponse<Result: Codable & Sendable>: Codable, Sendable {
         self.id = id
         self.error = error
     }
+}
+
+/// A message with no `id` that expects no reply; the server streams session events this way.
+public struct RPCNotification<Params: Codable & Sendable>: Codable, Sendable {
+    public var jsonrpc = "2.0"
+    public var method: String
+    public var params: Params
+
+    public init(method: String, params: Params) {
+        self.method = method
+        self.params = params
+    }
+}
+
+/// A notification type with typed parameters.
+public protocol RPCNotificationMethod {
+    associatedtype Params: Codable & Sendable
+    static var name: String { get }
 }
 
 public enum RPCCoding {

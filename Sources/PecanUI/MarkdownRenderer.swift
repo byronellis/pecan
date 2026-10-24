@@ -137,16 +137,17 @@ func applyInlineFormatting(_ line: String) -> String {
     return processed
 }
 
-// Helper to format basic Markdown to ANSI
-func formatMarkdown(_ text: String) -> String {
-    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    var result: [String] = []
-    var inCodeBlock = false
-    var tableBuffer: [String] = []
+/// Formats Markdown to ANSI a line at a time, so a response can be shown as it streams in.
+/// Tables are held back until their last row arrives, since column widths depend on all rows.
+struct MarkdownFormatter {
+    private var inCodeBlock = false
+    private var tableBuffer: [String] = []
 
-    for line in lines {
+    /// Formats one complete line, returning the output lines it releases.
+    mutating func line(_ line: String) -> [String] {
+        var result: [String] = []
         // Flush table buffer if current line is not a table row
-        if !tableBuffer.isEmpty && !isTableRow(line) {
+        if !tableBuffer.isEmpty && (inCodeBlock || !isTableRow(line)) {
             result.append(contentsOf: renderTable(tableBuffer))
             tableBuffer.removeAll()
         }
@@ -161,141 +162,65 @@ func formatMarkdown(_ text: String) -> String {
                 result.append("\(ansiDim)┌──\(header)──────────────────────────\(ansiReset)")
                 inCodeBlock = true
             }
-            continue
+            return result
         }
 
         if inCodeBlock {
             result.append("\(ansiDim)│\(ansiReset) \(line)")
-            continue
+            return result
         }
 
         // Collect table rows
         if isTableRow(line) {
             tableBuffer.append(line)
-            continue
+            return result
         }
 
         // Headers
         if line.hasPrefix("### ") {
             result.append("\(ansiBold)\(ansiDim)\(String(line.dropFirst(4)))\(ansiReset)")
-            continue
-        }
-        if line.hasPrefix("## ") {
+        } else if line.hasPrefix("## ") {
             result.append("\(ansiBold)\(String(line.dropFirst(3)))\(ansiReset)")
-            continue
-        }
-        if line.hasPrefix("# ") {
+        } else if line.hasPrefix("# ") {
             result.append("\(ansiBold)\(ansiCyan)\(String(line.dropFirst(2)))\(ansiReset)")
-            continue
-        }
-
-        // Horizontal rule
-        if line == "---" || line == "***" || line == "___" {
+        } else if line == "---" || line == "***" || line == "___" {
             result.append("\(ansiDim)────────────────────────────────\(ansiReset)")
-            continue
-        }
-
-        // Bullet lists
-        var processed = line
-        if let range = processed.range(of: #"^(\s*)[*\-] "#, options: .regularExpression) {
-            let indent = String(processed[processed.startIndex..<range.lowerBound])
-            let rest = String(processed[range.upperBound...])
-            processed = "\(indent)  • \(rest)"
-        }
-
-        result.append(applyInlineFormatting(processed))
-    }
-
-    // Flush any remaining table at end of input
-    if !tableBuffer.isEmpty {
-        result.append(contentsOf: renderTable(tableBuffer))
-    }
-
-    // Close unclosed code block
-    if inCodeBlock {
-        result.append("\(ansiDim)└──────────────────────────────\(ansiReset)")
-    }
-
-    return result.joined(separator: "\r\n")
-}
-
-/// Format a tool call arguments JSON string into readable key: value lines
-func formatToolArguments(_ argsJSON: String) -> String {
-    guard let data = argsJSON.data(using: .utf8),
-          let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-        return argsJSON
-    }
-    return dict.map { key, value in
-        let valStr: String
-        if let s = value as? String {
-            valStr = s
-        } else if (value is [Any] || value is [String: Any]),
-                  let data = try? JSONSerialization.data(withJSONObject: value),
-                  let s = String(data: data, encoding: .utf8) {
-            valStr = s
         } else {
-            valStr = "\(value)"
+            // Bullet lists
+            var processed = line
+            if let range = processed.range(of: #"^(\s*)[*\-] "#, options: .regularExpression) {
+                let indent = String(processed[processed.startIndex..<range.lowerBound])
+                let rest = String(processed[range.upperBound...])
+                processed = "\(indent)  • \(rest)"
+            }
+            result.append(applyInlineFormatting(processed))
         }
-        return "\(ansiDim)│\(ansiReset) \(key): \(ansiDim)\(valStr)\(ansiReset)"
-    }.joined(separator: "\r\n")
-}
-
-/// Truncate multi-line text to a max number of lines
-func truncateResult(_ text: String, maxLines: Int = 10) -> String {
-    let lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-    if lines.count <= maxLines {
-        return lines.map { "\(ansiDim)│\(ansiReset) \(ansiDim)\($0)\(ansiReset)" }.joined(separator: "\r\n")
-    }
-    let shown = lines.prefix(maxLines).map { "\(ansiDim)│\(ansiReset) \(ansiDim)\($0)\(ansiReset)" }
-    return (shown + ["\(ansiDim)│ ... (\(lines.count - maxLines) more lines)\(ansiReset)"]).joined(separator: "\r\n")
-}
-
-/// Render a raw agent output text into formatted display string.
-/// Returns nil for output types that only produce side effects (e.g. thinking throbber).
-func renderAgentOutput(_ rawText: String) -> String? {
-    guard let data = rawText.data(using: .utf8),
-          let json = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-          let msgType = json["type"] else {
-        // Plain text / unparseable
-        return formatMarkdown(rawText)
+        return result
     }
 
-    switch msgType {
-    case "thinking":
-        return nil // throbber — no visual output to render
-
-    case "tool_call":
-        let toolName = json["name"] ?? "unknown"
-        let args = json["arguments"] ?? "{}"
-        let header = "\(ansiDim)┌─\(ansiReset) \(ansiBold)\(ansiCyan)🔧 \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
-        let body = formatToolArguments(args)
-        let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
-        return "\(header)\r\n\(body)\r\n\(footer)"
-
-    case "tool_result":
-        let toolName = json["name"] ?? "unknown"
-        let result = json["result"] ?? ""
-        let formatted = json["formatted"] ?? ""
-        let displayResult = formatted.isEmpty ? result : formatted
-        let header = "\(ansiDim)├─\(ansiReset) \(ansiGreen)✓ \(toolName)\(ansiReset) \(ansiDim)──────────────────────────\(ansiReset)"
-        let body = truncateResult(displayResult)
-        let footer = "\(ansiDim)└──────────────────────────────\(ansiReset)"
-        return "\(header)\r\n\(body)\r\n\(footer)"
-
-    case "response":
-        let text = json["text"] ?? ""
-        return formatMarkdown(text)
-
-    default:
-        return formatMarkdown(rawText)
+    /// Releases anything held back at the end of the text.
+    mutating func finish() -> [String] {
+        var result: [String] = []
+        if !tableBuffer.isEmpty {
+            result.append(contentsOf: renderTable(tableBuffer))
+            tableBuffer.removeAll()
+        }
+        // Close unclosed code block
+        if inCodeBlock {
+            result.append("\(ansiDim)└──────────────────────────────\(ansiReset)")
+            inCodeBlock = false
+        }
+        return result
     }
 }
 
-/// Get the current terminal width via ioctl
-func terminalWidth() -> Int {
-    var ws = winsize()
-    if ioctl(STDOUT_FILENO, UInt(TIOCGWINSZ), &ws) == 0, ws.ws_col > 0 {
-        return Int(ws.ws_col)
+// Helper to format basic Markdown to ANSI
+func formatMarkdown(_ text: String) -> String {
+    var formatter = MarkdownFormatter()
+    var result: [String] = []
+    for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+        result += formatter.line(String(line))
     }
-    return 80
+    result += formatter.finish()
+    return result.joined(separator: "\r\n")
 }

@@ -11,9 +11,11 @@ extension Pecan.Server {
             abstract: "Run the server in the foreground (clients start it this way automatically)")
 
         func run() async throws {
+            // PECAN_LOG_LEVEL (e.g. debug) reaches a server a client starts, via its environment.
+            let level = ProcessInfo.processInfo.environment["PECAN_LOG_LEVEL"].flatMap { Logger.Level(rawValue: $0) } ?? .info
             LoggingSystem.bootstrap { label in
                 var handler = StreamLogHandler.standardError(label: label)
-                handler.logLevel = .info
+                handler.logLevel = level
                 return handler
             }
             try await PecanServerHost.run()

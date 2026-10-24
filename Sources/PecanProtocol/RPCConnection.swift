@@ -16,12 +16,31 @@ public enum RPCConnectionError: Error, CustomStringConvertible {
     }
 }
 
+/// A notification from the server: its method name and the full message, for decoding with
+/// `decode(_:)` once the method is known.
+public struct InboundNotification: Sendable {
+    public var method: String
+    public var message: Data
+
+    public func decode<N: RPCNotificationMethod>(_ type: N.Type) throws -> N.Params {
+        try RPCCoding.decoder.decode(RPCNotification<N.Params>.self, from: message).params
+    }
+}
+
 /// Client side of a connection to the pecan server.
 public actor RPCConnection {
     private var writer: NIOAsyncChannelOutboundWriter<ByteBuffer>?
     private var pending: [Int: CheckedContinuation<Data, any Error>] = [:]
     private var nextID = 1
     private var channelTask: Task<Void, Never>?
+    private let notificationSink: AsyncStream<InboundNotification>.Continuation
+
+    /// Server notifications, in arrival order. Finishes when the connection closes.
+    public nonisolated let notifications: AsyncStream<InboundNotification>
+
+    private init() {
+        (notifications, notificationSink) = AsyncStream.makeStream(bufferingPolicy: .unbounded)
+    }
 
     public static func open(socketPath: String) async throws -> RPCConnection {
         let channel = try await ClientBootstrap(group: MultiThreadedEventLoopGroup.singleton)
@@ -56,10 +75,12 @@ public actor RPCConnection {
         writer = outbound
     }
 
+    /// Sends a request and waits for its reply. A nil `timeout` waits as long as the call takes,
+    /// for requests such as `SendMessage` that last a whole model turn.
     public func call<M: RPCMethod>(
         _ method: M.Type,
         _ params: M.Params,
-        timeout: Duration = .seconds(30)
+        timeout: Duration? = .seconds(30)
     ) async throws -> M.Result {
         guard let writer else { throw RPCConnectionError.closed }
         let id = nextID
@@ -75,9 +96,11 @@ public actor RPCConnection {
                     self.fail(id, with: error)
                 }
             }
-            Task {
-                try? await Task.sleep(for: timeout)
-                self.fail(id, with: RPCConnectionError.timedOut(method: M.name))
+            if let timeout {
+                Task {
+                    try? await Task.sleep(for: timeout)
+                    self.fail(id, with: RPCConnectionError.timedOut(method: M.name))
+                }
             }
         }
 
@@ -88,11 +111,12 @@ public actor RPCConnection {
     }
 
     private func receive(_ message: Data) {
-        guard let header = try? RPCCoding.decoder.decode(RPCHeader.self, from: message),
-              let id = header.id,
-              let continuation = pending.removeValue(forKey: id)
-        else { return }
-        continuation.resume(returning: message)
+        guard let header = try? RPCCoding.decoder.decode(RPCHeader.self, from: message) else { return }
+        if let id = header.id {
+            pending.removeValue(forKey: id)?.resume(returning: message)
+        } else if let method = header.method {
+            notificationSink.yield(InboundNotification(method: method, message: message))
+        }
     }
 
     private func fail(_ id: Int, with error: any Error) {
@@ -101,6 +125,7 @@ public actor RPCConnection {
 
     private func didClose() {
         writer = nil
+        notificationSink.finish()
         let waiting = pending
         pending.removeAll()
         for continuation in waiting.values {

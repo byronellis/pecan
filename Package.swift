@@ -90,5 +90,11 @@ let package = Package(
             ],
             path: "Sources/PecanUI"
         ),
+
+        .testTarget(
+            name: "PecanUITests",
+            dependencies: ["PecanUI"],
+            path: "Tests/PecanUITests"
+        ),
     ]
 )
