@@ -17,13 +17,11 @@ replace the running server, so use `make` for anything you intend to run.
 | `make` / `make debug` | Debug build, dev channel |
 | `make release` | Optimized build, dev channel |
 | `make dist BUILD_NUMBER=n` | Optimized build, release channel (CI; `n` = CI run number) |
-| `make LOCAL_TUISUITE=1` | Build against `../../Masters/tuisuite` instead of GitHub |
 | `make clean` | `swift package clean` |
 
 - Dev build numbers come from `~/.pecan-dev/build-counter`, incremented by every dev build.
 - A plain `swift build` works but produces an unversioned build that never upgrades a server.
-- Never commit `Package.swift` with a local `.package(path:)`; TUISuite is switched by the
-  `TUISUITE_PATH` environment variable instead.
+- Never commit `Package.swift` with a local `.package(path:)` dependency.
 
 ## Architecture
 
@@ -44,11 +42,9 @@ replace the running server, so use `make` for anything you intend to run.
 | `PecanProtocol` | JSON-RPC wire types, socket client, connect-or-start/upgrade logic (no MLX) |
 | `PecanServer` | `PecanServerHost` (resident server), HTTP LLM proxy, MLX |
 | `PecanAgentCore` | Tools, hooks, Lua runtime, prompt composer |
-| `PecanUI` | `pecan` executable: ArgumentParser commands, TUISuite UI |
+| `PecanUI` | `pecan` executable: ArgumentParser commands, inline terminal UI |
 
 ## Related repositories
 
-- **tuisuite** (`~/Masters/tuisuite`) — the TUI library Pecan's CLI is built on, developed by
-  hand alongside Pecan; discuss changes before editing it
 - **pecan-mlx** (`~/Sources/pecan-mlx`) — MLX inference server for Apple Silicon
 - **pecan-gb10** (`~/Sources/pecan-gb10`) — LLM inference server for NVIDIA DGX Spark

@@ -13,7 +13,6 @@
 # build increments; it lives outside the repo and .build so cleans and branch switches never
 # reset it. Release builds take the CI run number, which is already monotonic.
 #
-# Pass LOCAL_TUISUITE=1 to build against ../../Masters/tuisuite instead of GitHub.
 # A plain `swift build` still works; it produces an unversioned dev build.
 
 SHELL := /bin/bash
@@ -24,10 +23,6 @@ GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(she
 DEV_COUNTER := $(HOME)/.pecan-dev/build-counter
 INFO_PLIST := .build/pecan-info/Info.plist
 PRODUCT := pecan
-
-ifdef LOCAL_TUISUITE
-export TUISUITE_PATH := $(abspath ../../Masters/tuisuite)
-endif
 
 .PHONY: all debug release dist clean
 

@@ -4,7 +4,6 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
-import ANSITerminal
 
 
 func isTableRow(_ line: String) -> Bool {
@@ -292,10 +291,6 @@ func renderAgentOutput(_ rawText: String) -> String? {
     }
 }
 
-/// ANSI 256-color background for user input lines (dark gray)
-/// Prompt character
-let promptChar = "❯"
-
 /// Get the current terminal width via ioctl
 func terminalWidth() -> Int {
     var ws = winsize()
@@ -304,9 +299,3 @@ func terminalWidth() -> Int {
     }
     return 80
 }
-
-/// Team icon (unicode house, not emoji)
-let teamIcon = "\u{2302}"
-/// Powerline separator
-let plSep = "\u{E0B0}"
-

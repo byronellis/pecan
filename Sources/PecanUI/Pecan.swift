@@ -4,13 +4,11 @@ import Darwin
 #elseif canImport(Glibc)
 import Glibc
 #endif
-import ANSITerminal
 import PecanSettings
 import PecanAgentCore
 import PecanServer
 import PecanProtocol
 import ArgumentParser
-import TUISuite
 
 
 func defaultConfigLocation() -> String {
@@ -26,7 +24,7 @@ func defaultConfigLocation() -> String {
 struct Pecan : AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Pecan - a Swift-based Agent",
-        subcommands: [Config.self,Agent.self,Server.self],
+        subcommands: [Agent.self, Server.self],
         defaultSubcommand: Agent.self)
 
     
@@ -39,12 +37,6 @@ struct Pecan : AsyncParsableCommand {
     
     
 
-    struct Config : ParsableCommand {
-        mutating func run() {
-            Configurator.run()
-        }
-
-    }
     struct Agent : AsyncParsableCommand {
         mutating func run() async throws {
             // Connecting starts the server, or upgrades it, as needed. The TUI client builds on this.
