@@ -7,6 +7,26 @@ It was time for a bit of an update with Pecan. I still think the original intent
 
 While I think a container muxer is a cool idea, it doesn't really go with the proxy or the agent other than the fact that to use containers I needed to do that. So, I'm getting rid of the containerization idea. I still think a container muxer is a cool idea, but I think it's something separate and standalone that doesn't necessarily have anything to do with Agents at all. It'd probably also be better suited to integrating with the rest of Apple's container ecosystem which is getting better with macOS 27 so perhaps another project that does that will arise. 
 
+## A FoundationModels Harness
+
+So Pecan is no longer a containerized harness. It's a harness built on the model frameworks that arrived in macOS 27: FoundationModels and CoreAI. Apple ships a CLI for these (`fm`), but it's pretty primitive and only has a couple of very basic tools. Pecan aims to be the full harness on top of them. Where something does need isolation, like running a risky tool, that's a job for Apple's `container` rather than something Pecan manages itself.
+
+The models come in roughly this order:
+1. The on-device system model (`SystemLanguageModel`). This works today.
+1. Private Cloud Compute, which is essentially also a system model.
+1. Local `.aimodel` models through CoreAI, with MLX alongside for local models and small decision models that handle routing and handoffs.
+1. Remote models, starting with OpenAI-compatible APIs.
+
+The question I want Pecan to answer is how cheaply we can run and still get results that are good enough and fast enough. That means deliberately small contexts, even when bigger windows are available, and long chains of work handed off between sessions. Sessions form trees: a main session, sub-sessions that start clean, do a bounded piece of work and report a summary back, forks that branch a conversation, and side conversations for asides. There are no named agents or teams.
+
+There's one `pecan` binary. Running it connects to a resident server (starting it, or upgrading it if this build is newer) that owns the sessions, so the terminal UI and a future SwiftUI app share one backend. The terminal UI is deliberately minimal, along the lines of `fm chat`: output goes into the terminal's own scrollback, and there's a rounded input box at the bottom.
+
+```
+make            # versioned dev build (see CLAUDE.md)
+pecan           # interactive chat
+pecan "hello"   # one-shot answer; also reads piped input
+```
+
 ## The Proxy
 
 These days I've got a bunch of different accounts at a bunch of different services including The Big 3, though those are mostly subscription accounts (until that goes away, but this is relevant). I've also got truly local models and a server at home that also runs one of several different models at any given time. As predicted people decided they wanted yachts so prices are going up and everyone is trying to optimize for, basically, ROI one way or another. So it makes sense to build out the proxy and while there are a bunch out there I wanted to keep doing my own. So I'm keeping that bit.
