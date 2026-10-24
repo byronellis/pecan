@@ -6,6 +6,3 @@ xcuserdata/
 DerivedData/
 .swiftpm/
 .idea/
-/.run/
-swiftly.pkg
-test_lua.swift
