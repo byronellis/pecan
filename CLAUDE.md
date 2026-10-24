@@ -41,6 +41,17 @@ replace the running server, so use `make` for anything you intend to run.
   teams. A turn's reply streams to the client as `session.event` notifications, then the
   `session.send` request answers. Sessions are in memory only and end with their connection.
 
+## Models
+
+`Sources/PecanServer/Sessions/ModelCatalog.swift` lists the models sessions can use: `pcc`
+(Private Cloud Compute) and `system` (on-device). Sessions without a model get the first
+available in `ModelChoice.preferred` (PCC first). PCC needs the managed
+`com.apple.developer.private-cloud-compute` entitlement, which Apple grants on request; without it
+the framework still claims PCC is available but requests fail with `ModelManagerError 1046`, so
+the catalog checks the process's own entitlements and reports PCC unavailable instead. PCC quota
+is a state (ok / approaching / reached, with a reset date), not a remaining amount.
+`pecan models` lists them; `/model` switches a session's model, keeping its history.
+
 ## Terminal UI
 
 `pecan` (no arguments) is an inline chat, not a full-screen app: finished output is printed

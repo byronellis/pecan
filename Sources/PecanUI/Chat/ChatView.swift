@@ -26,9 +26,11 @@ struct ChatView {
         var queued: [String]
         var status: String
         var hint: String?
+        /// Rows of a picker to show in place of the input box.
+        var picker: [String]?
     }
 
-    func render(_ content: Content) -> (rows: [String], cursor: InlineScreen.Cursor) {
+    func render(_ content: Content) -> (rows: [String], cursor: InlineScreen.Cursor?) {
         var rows: [String] = []
 
         if let streaming = content.streaming, !streaming.isEmpty {
@@ -42,9 +44,14 @@ struct ChatView {
             rows.append(Style.muted + line + "  (queued)" + Style.reset)
         }
 
-        let (box, cursorInBox) = inputBox(content)
-        let cursor = InlineScreen.Cursor(row: rows.count + cursorInBox.row, column: cursorInBox.column)
-        rows += box
+        var cursor: InlineScreen.Cursor?
+        if let picker = content.picker {
+            rows += picker
+        } else {
+            let (box, cursorInBox) = inputBox(content)
+            cursor = InlineScreen.Cursor(row: rows.count + cursorInBox.row, column: cursorInBox.column)
+            rows += box
+        }
 
         let status = content.hint.map { "\(content.status) · \($0)" } ?? content.status
         rows.append(Style.muted + " " + TextWidth.truncate(status, width: width - 1) + Style.reset)

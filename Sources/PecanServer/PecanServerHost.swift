@@ -118,6 +118,9 @@ public actor PecanServerHost {
                 shutdownReason = try decodeParams(Shutdown.self, from: message).reason
                 reply = try self.reply(id: id, Empty())
 
+            case ListModels.name:
+                reply = try self.reply(id: id, await ModelCatalog.list())
+
             case OpenSession.name:
                 let params = try decodeParams(OpenSession.self, from: message)
                 reply = try self.reply(id: id, try await sessions.open(params, owner: client.id))
@@ -133,6 +136,10 @@ public actor PecanServerHost {
                     await client.notify(SessionEvent.self, .init(sessionID: params.sessionID, event: event))
                 }
                 reply = try self.reply(id: id, result)
+
+            case SetSessionModel.name:
+                let params = try decodeParams(SetSessionModel.self, from: message)
+                reply = try self.reply(id: id, try await sessions.setModel(params))
 
             case CancelTurn.name:
                 let params = try decodeParams(CancelTurn.self, from: message)

@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 @testable import PecanUI
+import PecanProtocol
 
 @Suite struct KeyDecoderTests {
     @Test func decodesArrowsSplitAcrossReads() {
@@ -104,5 +105,32 @@ import Testing
         #expect(TextWidth.hangingIndent(for: "  • item") == "    ")
         #expect(TextWidth.hangingIndent(for: "12. item") == "    ")
         #expect(TextWidth.hangingIndent(for: "plain") == "")
+    }
+}
+
+@Suite struct ModelPickerTests {
+    private func list(_ available: [Bool]) -> ListModels.Result {
+        let models = available.enumerated().map { index, isAvailable in
+            ListModels.Result.Entry(
+                id: "m\(index)", name: "Model \(index)",
+                info: isAvailable ? ModelInfo(id: "m\(index)", name: "Model \(index)", contextSize: 1000) : nil,
+                unavailableReason: isAvailable ? nil : "not here")
+        }
+        return ListModels.Result(models: models, defaultModel: "m0")
+    }
+
+    @Test func startsOnCurrentModel() {
+        let picker = ModelPicker(list([true, true, true]), current: "m1")
+        #expect(picker.selection?.id == "m1")
+    }
+
+    @Test func skipsUnavailableModels() {
+        var picker = ModelPicker(list([true, false, true]), current: "m0")
+        picker.move(by: 1)
+        #expect(picker.selection?.id == "m2")
+        picker.move(by: 1)
+        #expect(picker.selection?.id == "m2")
+        picker.move(by: -1)
+        #expect(picker.selection?.id == "m0")
     }
 }

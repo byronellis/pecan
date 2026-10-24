@@ -16,7 +16,7 @@ import Synchronization
 struct Pecan : AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         abstract: "Pecan - a Swift-based Agent",
-        subcommands: [Agent.self, Server.self],
+        subcommands: [Agent.self, Models.self, Server.self],
         defaultSubcommand: Agent.self)
 
 
@@ -27,6 +27,9 @@ struct Pecan : AsyncParsableCommand {
         @Option(name: .shortAndLong, help: "Instructions for the model")
         var instructions: String?
 
+        @Option(name: .shortAndLong, help: "Model to use (see `pecan models`); defaults to the server's default")
+        var model: String?
+
         @Argument(help: "A message to answer non-interactively. Read from standard input when it isn't a terminal.")
         var message: [String] = []
 
@@ -35,7 +38,7 @@ struct Pecan : AsyncParsableCommand {
             let connection = try await ServerConnector.connect()
             defer { Task { await connection.rpc.close() } }
             let session = try await connection.rpc.call(
-                OpenSession.self, .init(instructions: instructions))
+                OpenSession.self, .init(instructions: instructions, model: model))
 
             if !message.isEmpty || !Terminal.isInteractive {
                 let text = message.isEmpty
@@ -70,6 +73,24 @@ struct Pecan : AsyncParsableCommand {
                 count = nil
             }
             print()
+        }
+    }
+
+    struct Models : AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            abstract: "List the models sessions can use")
+
+        mutating func run() async throws {
+            let connection = try await ServerConnector.connect()
+            let list = try await connection.rpc.call(ListModels.self, Empty())
+            await connection.rpc.close()
+            let idWidth = list.models.map(\.id.count).max() ?? 0
+            for entry in list.models {
+                let id = entry.id.padding(toLength: idWidth, withPad: " ", startingAt: 0)
+                let marker = entry.id == list.defaultModel ? " (default)" : ""
+                let detail = entry.info?.details ?? "unavailable: \(entry.unavailableReason ?? "unknown reason")"
+                print("\(id)  \(entry.name)\(marker) · \(detail)")
+            }
         }
     }
 

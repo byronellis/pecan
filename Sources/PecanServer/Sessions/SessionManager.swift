@@ -6,32 +6,40 @@ import PecanProtocol
 actor SessionManager {
     private var sessions: [SessionID: ChatSession] = [:]
 
-    func open(_ params: OpenSession.Params, owner: UUID) throws -> SessionInfo {
-        let model = try Self.systemModel()
-        let session = LanguageModelSession(model: model, instructions: params.instructions)
-        return add(ChatSession(
-            info: SessionInfo(id: Self.newID(), parentID: nil, kind: .main, createdAt: Date(),
-                              model: Self.info(for: model)),
+    func open(_ params: OpenSession.Params, owner: UUID) async throws -> SessionInfo {
+        let resolved = try await ModelCatalog.resolve(params.model)
+        let session = LanguageModelSession(model: resolved.model, instructions: params.instructions)
+        return await add(ChatSession(
+            info: SessionInfo(id: Self.newID(), parentID: nil, kind: .main, createdAt: Date(), model: resolved.info),
+            model: resolved.choice,
             owner: owner,
             session: session))
     }
 
     /// A fork or side conversation starts from a copy of the parent's history; a sub-session
-    /// starts empty and reports back to its parent.
+    /// starts empty and reports back to its parent. Children use the parent's model unless the
+    /// request names another.
     func fork(_ params: ForkSession.Params, owner: UUID) async throws -> SessionInfo {
         let parent = try session(params.sessionID)
+        let parentInfo = await parent.info
         guard params.kind != .main else {
             throw RPCError(code: RPCError.invalidParams, message: "a main session has no parent; use \(OpenSession.name)")
         }
-        let model = try Self.systemModel()
+        let resolved = try await ModelCatalog.resolve(params.model ?? parentInfo.model.id)
         let session = params.kind == .sub
-            ? LanguageModelSession(model: model)
-            : LanguageModelSession(model: model, transcript: await parent.transcript)
-        return add(ChatSession(
+            ? LanguageModelSession(model: resolved.model)
+            : LanguageModelSession(model: resolved.model, transcript: await parent.transcript)
+        return await add(ChatSession(
             info: SessionInfo(id: Self.newID(), parentID: params.sessionID, kind: params.kind,
-                              createdAt: Date(), model: Self.info(for: model)),
+                              createdAt: Date(), model: resolved.info),
+            model: resolved.choice,
             owner: owner,
             session: session))
+    }
+
+    func setModel(_ params: SetSessionModel.Params) async throws -> SessionInfo {
+        let resolved = try await ModelCatalog.resolve(params.model)
+        return try await session(params.sessionID).switchModel(to: resolved)
     }
 
     func session(_ id: SessionID) throws -> ChatSession {
@@ -45,41 +53,18 @@ actor SessionManager {
     func closeAll(ownedBy owner: UUID) async {
         let owned = sessions.values.filter { $0.owner == owner }
         for session in owned {
-            sessions[session.info.id] = nil
+            sessions[session.id] = nil
             await session.cancel()
         }
     }
 
-    private func add(_ session: ChatSession) -> SessionInfo {
-        sessions[session.info.id] = session
+    private func add(_ session: ChatSession) async -> SessionInfo {
+        sessions[session.id] = session
         Task { await session.prewarm() }
-        return session.info
+        return await session.info
     }
 
     private static func newID() -> SessionID {
         UUID().uuidString.lowercased()
-    }
-
-    private static func info(for model: SystemLanguageModel) -> ModelInfo {
-        ModelInfo(name: "system", contextSize: model.contextSize)
-    }
-
-    private static func systemModel() throws -> SystemLanguageModel {
-        let model = SystemLanguageModel.default
-        switch model.availability {
-        case .available:
-            return model
-        case .unavailable(let reason):
-            throw RPCError(code: RPCError.modelUnavailable, message: "the system model is unavailable: \(Self.describe(reason))")
-        }
-    }
-
-    private static func describe(_ reason: SystemLanguageModel.Availability.UnavailableReason) -> String {
-        switch reason {
-        case .deviceNotEligible: "this device doesn't support Apple Intelligence"
-        case .appleIntelligenceNotEnabled: "Apple Intelligence is turned off in System Settings"
-        case .modelNotReady: "the model is still downloading or preparing"
-        @unknown default: "\(reason)"
-        }
     }
 }

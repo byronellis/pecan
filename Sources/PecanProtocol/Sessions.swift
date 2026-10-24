@@ -32,15 +32,86 @@ public struct SessionInfo: Codable, Sendable, Equatable {
     }
 }
 
+/// Model ids: `pcc` (Private Cloud Compute) and `system` (the on-device model).
+public typealias ModelID = String
+
 public struct ModelInfo: Codable, Sendable, Equatable {
-    /// Short name shown to the user, e.g. "system".
+    /// Identifier used to request the model, e.g. "pcc".
+    public var id: ModelID
+    /// Human-readable name, e.g. "Private Cloud Compute".
     public var name: String
     /// Context window in tokens.
     public var contextSize: Int
+    /// Usage limits, for models that have them.
+    public var quota: QuotaStatus?
+    public var capabilities: Set<Capability>
 
-    public init(name: String, contextSize: Int) {
+    public enum Capability: String, Codable, Sendable, CaseIterable {
+        case toolCalling
+        case guidedGeneration
+        case vision
+        /// Accepts a thinking level.
+        case reasoning
+    }
+
+    public init(id: ModelID, name: String, contextSize: Int, quota: QuotaStatus? = nil, capabilities: Set<Capability> = []) {
+        self.id = id
         self.name = name
         self.contextSize = contextSize
+        self.quota = quota
+        self.capabilities = capabilities
+    }
+}
+
+/// Where a metered model's usage stands. The system reports a state, not an amount remaining.
+public struct QuotaStatus: Codable, Sendable, Equatable {
+    public enum State: String, Codable, Sendable {
+        case available
+        case approachingLimit
+        case limitReached
+    }
+
+    public var state: State
+    /// When usage resets, if known.
+    public var resetsAt: Date?
+
+    public init(state: State, resetsAt: Date? = nil) {
+        self.state = state
+        self.resetsAt = resetsAt
+    }
+}
+
+/// Every model the server knows, whether it can be used right now, and which one sessions get
+/// by default.
+public enum ListModels: RPCMethod {
+    public static let name = "models.list"
+
+    public typealias Params = Empty
+
+    public struct Result: Codable, Sendable {
+        public struct Entry: Codable, Sendable {
+            public var id: ModelID
+            public var name: String
+            /// Set when available, along with quota for metered models.
+            public var info: ModelInfo?
+            /// Why the model can't be used, when it can't.
+            public var unavailableReason: String?
+
+            public init(id: ModelID, name: String, info: ModelInfo?, unavailableReason: String?) {
+                self.id = id
+                self.name = name
+                self.info = info
+                self.unavailableReason = unavailableReason
+            }
+        }
+
+        public var models: [Entry]
+        public var defaultModel: ModelID
+
+        public init(models: [Entry], defaultModel: ModelID) {
+            self.models = models
+            self.defaultModel = defaultModel
+        }
     }
 }
 
@@ -64,9 +135,12 @@ public enum OpenSession: RPCMethod {
 
     public struct Params: Codable, Sendable {
         public var instructions: String?
+        /// Nil for the server's default model.
+        public var model: ModelID?
 
-        public init(instructions: String? = nil) {
+        public init(instructions: String? = nil, model: ModelID? = nil) {
             self.instructions = instructions
+            self.model = model
         }
     }
 
@@ -80,10 +154,13 @@ public enum ForkSession: RPCMethod {
     public struct Params: Codable, Sendable {
         public var sessionID: SessionID
         public var kind: SessionInfo.Kind
+        /// Nil to use the parent's model.
+        public var model: ModelID?
 
-        public init(sessionID: SessionID, kind: SessionInfo.Kind = .fork) {
+        public init(sessionID: SessionID, kind: SessionInfo.Kind = .fork, model: ModelID? = nil) {
             self.sessionID = sessionID
             self.kind = kind
+            self.model = model
         }
     }
 
@@ -108,12 +185,32 @@ public enum SendMessage: RPCMethod {
     public struct Result: Codable, Sendable {
         public var text: String
         public var usage: TokenUsage
+        /// The model's quota after the turn, for metered models.
+        public var quota: QuotaStatus?
 
-        public init(text: String, usage: TokenUsage) {
+        public init(text: String, usage: TokenUsage, quota: QuotaStatus? = nil) {
             self.text = text
             self.usage = usage
+            self.quota = quota
         }
     }
+}
+
+/// Moves a session to another model. Its history carries over, so the conversation continues.
+public enum SetSessionModel: RPCMethod {
+    public static let name = "session.setModel"
+
+    public struct Params: Codable, Sendable {
+        public var sessionID: SessionID
+        public var model: ModelID
+
+        public init(sessionID: SessionID, model: ModelID) {
+            self.sessionID = sessionID
+            self.model = model
+        }
+    }
+
+    public typealias Result = SessionInfo
 }
 
 /// Stops the session's running turn, which then fails with `RPCError.cancelled`.

@@ -2,7 +2,7 @@ import Foundation
 import PecanSettings
 
 /// Version of the client/server wire protocol. Bump on changes older peers can't handle.
-public let pecanProtocolVersion = 2
+public let pecanProtocolVersion = 3
 
 /// A JSON-RPC 2.0 method with typed parameters and result.
 public protocol RPCMethod {
@@ -37,6 +37,7 @@ public struct RPCError: Error, Codable, Sendable, CustomStringConvertible {
     public static let contextExceeded = -32003
     public static let cancelled = -32004
     public static let generationFailed = -32005
+    public static let quotaExceeded = -32006
 
     public var description: String { "\(message) (\(code))" }
 }

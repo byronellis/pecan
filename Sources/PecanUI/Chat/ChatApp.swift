@@ -35,6 +35,7 @@ final class ChatApp {
     private var usage = TokenUsage.zero
     private var hint: (text: String, until: ContinuousClock.Instant)?
     private var lastInterrupt: ContinuousClock.Instant?
+    private var picker: ModelPicker?
     private var running = true
     private let events: AsyncStream<Event>
     private let sink: AsyncStream<Event>.Continuation
@@ -123,6 +124,10 @@ final class ChatApp {
     }
 
     private func handle(_ key: Key) {
+        if picker != nil {
+            handlePicker(key)
+            return
+        }
         switch key {
         case .enter:
             submit()
@@ -246,8 +251,12 @@ final class ChatApp {
         switch result {
         case .success(let response):
             usage = response.usage
+            session.model.quota = response.quota
         case .failure(let error as RPCError) where error.code == RPCError.cancelled:
             output.append(Style.muted + "⎿ interrupted" + Style.reset)
+        case .failure(let error as RPCError) where error.code == RPCError.quotaExceeded:
+            session.model.quota = QuotaStatus(state: .limitReached)
+            output.append(Style.error + "✗ \(error.message) · /model to switch models" + Style.reset)
         case .failure(let error):
             output.append(Style.error + "✗ \(error)" + Style.reset)
         }
@@ -267,6 +276,7 @@ final class ChatApp {
             running = false
         case "/help":
             screen.print([
+                Style.muted + "  /model   choose the model (or /model <id>)" + Style.reset,
                 Style.muted + "  /new     start a new session" + Style.reset,
                 Style.muted + "  /fork    continue in a copy of this session" + Style.reset,
                 Style.muted + "  /exit    quit (or ctrl-d)" + Style.reset,
@@ -274,9 +284,19 @@ final class ChatApp {
                 Style.muted + "  esc or ctrl-c stops a reply" + Style.reset,
                 "",
             ])
+        case "/model":
+            let argument = text.dropFirst(name.count).trimmingCharacters(in: .whitespaces)
+            if argument.isEmpty {
+                openModelPicker()
+            } else if argument == session.model.id {
+                showHint("already using \(session.model.name)")
+            } else {
+                switchModel(to: argument)
+            }
         case "/new":
+            let model = session.model.id
             replaceSession(announce: "new session") { rpc, _ in
-                try await rpc.call(OpenSession.self, .init())
+                try await rpc.call(OpenSession.self, .init(model: model))
             }
         case "/fork":
             replaceSession(announce: "forked") { rpc, current in
@@ -311,12 +331,61 @@ final class ChatApp {
         }
     }
 
+    // MARK: - Models
+
+    private func openModelPicker() {
+        let rpc = self.rpc
+        Task {
+            do {
+                let list = try await rpc.call(ListModels.self, Empty())
+                self.picker = ModelPicker(list, current: self.session.model.id)
+            } catch {
+                self.screen.print([Style.error + "✗ \(error)" + Style.reset, ""])
+            }
+            self.draw()
+        }
+    }
+
+    private func handlePicker(_ key: Key) {
+        switch key {
+        case .up, .control("p"): picker?.move(by: -1)
+        case .down, .control("n"): picker?.move(by: 1)
+        case .escape, .control("c"): picker = nil
+        case .enter:
+            if let choice = picker?.selection {
+                picker = nil
+                if choice.id != session.model.id { switchModel(to: choice.id) }
+            }
+        default: break
+        }
+    }
+
+    /// Continues this conversation on another model.
+    private func switchModel(to id: ModelID) {
+        guard turn == nil else {
+            showHint("wait for the reply to finish")
+            return
+        }
+        let rpc = self.rpc
+        let params = SetSessionModel.Params(sessionID: session.id, model: id)
+        Task {
+            do {
+                let info = try await rpc.call(SetSessionModel.self, params)
+                self.session = info
+                self.screen.print([Style.muted + "⎿ now using \(info.model.name) · \(info.model.details)" + Style.reset, ""])
+            } catch {
+                self.screen.print([Style.error + "✗ \(error)" + Style.reset, ""])
+            }
+            self.draw()
+        }
+    }
+
     // MARK: - Drawing
 
     private func printBanner() {
         let build = BuildInfo.current
         screen.print([
-            Style.accent + "pecan" + Style.reset + Style.muted + " \(build.version) · \(session.model.name) model · /help for help" + Style.reset,
+            Style.accent + "pecan" + Style.reset + Style.muted + " \(build.version) · \(session.model.name) · /help for help" + Style.reset,
             "",
         ])
     }
@@ -338,7 +407,8 @@ final class ChatApp {
             activity: activityLine(),
             queued: queued,
             status: statusLine(),
-            hint: hint?.text))
+            hint: hint?.text,
+            picker: picker?.rows(width: size.columns)))
         screen.draw(rows, cursor: cursor)
     }
 
@@ -350,7 +420,8 @@ final class ChatApp {
     }
 
     private func statusLine() -> String {
-        var parts = [session.model.name]
+        var parts = [session.model.id]
+        if let quota = session.model.quota { parts.append(quota.summary) }
         if session.kind != .main { parts.append("\(session.kind.rawValue) \(session.id.prefix(8))") }
         let used = usage.input + usage.output
         if used > 0 {
