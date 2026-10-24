@@ -12,15 +12,6 @@ import ArgumentParser
 import Synchronization
 
 
-func defaultConfigLocation() -> String {
-    if let env = ProcessInfo.processInfo.environment["PECAN_CONFIG"], !env.isEmpty {
-        return env
-    } else {
-        let home = FileManager.default.homeDirectoryForCurrentUser
-        return home.appendingPathComponent(".pecan/config.yaml").path
-    }
-}
-
 @main
 struct Pecan : AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -28,15 +19,6 @@ struct Pecan : AsyncParsableCommand {
         subcommands: [Agent.self, Server.self],
         defaultSubcommand: Agent.self)
 
-    
-    @Option(help:"Path to configuration file")
-    var configPath: String = defaultConfigLocation()
-    
-    private func configExists() -> Bool {
-        FileManager.default.fileExists(atPath: configPath)
-    }
-    
-    
 
     struct Agent : AsyncParsableCommand {
         static let configuration = CommandConfiguration(

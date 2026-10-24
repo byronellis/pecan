@@ -86,8 +86,6 @@ actor ChatSession {
             return error
         case is CancellationError:
             return RPCError(code: RPCError.cancelled, message: "turn cancelled")
-        case LanguageModelSession.GenerationError.exceededContextWindowSize:
-            return RPCError(code: RPCError.contextExceeded, message: "the conversation no longer fits the model's context window")
         case LanguageModelError.contextSizeExceeded:
             return RPCError(code: RPCError.contextExceeded, message: "the conversation no longer fits the model's context window")
         default:

@@ -19,19 +19,12 @@ let package = Package(
         .package(url: "https://github.com/tomsci/LuaSwift.git", revision: "985e19af1ae62639e54e4ce2a9f7712a29b5432c"),
         .package(url: "https://github.com/apple/swift-nio.git", from: "2.0.0"),
         .package(url: "https://github.com/apple/swift-markdown.git", from: "0.4.0"),
-        .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.3")),
-        .package(url: "https://github.com/huggingface/swift-huggingface", from: "0.9.0"),
-        .package(url: "https://github.com/huggingface/swift-transformers", from: "1.3.0"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.8.0"),
-        .package(url: "https://github.com/jpsim/Yams.git", from: "6.2.2"),
     ],
     targets: [
-        // MARK: - Settings store (providers, models, server state)
+        // MARK: - Build identity and per-channel paths
         .target(
             name: "PecanSettings",
-            dependencies: [
-                .product(name: "Yams", package: "Yams"),
-            ],
             path: "Sources/PecanSettings"
         ),
 
@@ -58,18 +51,13 @@ let package = Package(
             path: "Sources/PecanAgentCore"
         ),
 
-        // MARK: - Resident server (protocol host) and HTTP LLM proxy
+        // MARK: - Resident server: protocol host and model sessions
         .target(
             name: "PecanServer",
             dependencies: [
                 .product(name: "Logging", package: "swift-log"),
-                .product(name: "NIO", package: "swift-nio"),
-                .product(name: "NIOHTTP1", package: "swift-nio"),
-                .product(name: "MLXLLM", package: "mlx-swift-lm"),
-                .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
-                .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
-                .product(name: "HuggingFace", package: "swift-huggingface"),
-                .product(name: "Tokenizers", package: "swift-transformers"),
+                .product(name: "NIOCore", package: "swift-nio"),
+                .product(name: "NIOPosix", package: "swift-nio"),
                 "PecanSettings",
                 "PecanProtocol",
             ],
@@ -80,7 +68,6 @@ let package = Package(
         .executableTarget(
             name: "PecanUI",
             dependencies: [
-                .product(name: "Markdown", package: "swift-markdown"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Logging", package: "swift-log"),
                 "PecanSettings",

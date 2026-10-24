@@ -3,8 +3,7 @@
 ## Toolchain
 
 Requires macOS 27 and Swift 6.4 (`.swift-version` pins 6.4.1 for swiftly). Older toolchains
-can't read the macOS 27 SDK. MLX needs Xcode's Metal toolchain
-(`xcodebuild -downloadComponent MetalToolchain`).
+can't read the macOS 27 SDK.
 
 ## Build with `make`
 
@@ -53,9 +52,9 @@ emulator such as `pyte`; it can't be exercised from a plain pipe.
 
 | Target | Role |
 |---|---|
-| `PecanSettings` | Config (YAML), keychain, `BuildInfo`, `PecanPaths` |
+| `PecanSettings` | `BuildInfo`, `PecanPaths` |
 | `PecanProtocol` | JSON-RPC wire types, socket client, connect-or-start/upgrade logic (no MLX) |
-| `PecanServer` | `PecanServerHost` (resident server), HTTP LLM proxy, MLX |
+| `PecanServer` | `PecanServerHost` (resident server), FoundationModels sessions |
 | `PecanAgentCore` | Tools, hooks, Lua runtime, prompt composer |
 | `PecanUI` | `pecan` executable: ArgumentParser commands, inline terminal UI |
 
