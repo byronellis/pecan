@@ -1,8 +1,11 @@
 import Foundation
 
-// Sessions form trees: a main session at the root, with sub-sessions for delegated work, forks
-// that branch a copy of a session's history, and side conversations that share its history
-// without feeding back into it.
+// Sessions form trees: a main session at the root, with
+// - sub-sessions: delegated work that starts from a clean context and a task brief, and reports
+//   only a summary back into the parent's history, keeping the parent's context small;
+// - forks: a copy of the parent's history that continues as its own branch;
+// - side conversations: a temporary copy of the parent's history for an aside, closed without
+//   feeding anything back.
 
 public typealias SessionID = String
 
