@@ -16,7 +16,6 @@
 # A plain `swift build` still works; it produces an unversioned dev build.
 
 SHELL := /bin/bash
-.SHELLFLAGS := -euo pipefail -c
 
 VERSION := $(shell cat VERSION)
 GIT_HASH := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)$(shell git diff --quiet HEAD 2>/dev/null || echo -dirty)
@@ -36,9 +35,11 @@ dist: CONFIG := release
 dist: CHANNEL := release
 
 # The plist is a linker input SwiftPM does not track, so the recipe deletes the binary to force
-# a relink that picks up the new build number.
+# a relink that picks up the new build number. macOS ships GNU Make 3.81, which ignores
+# .SHELLFLAGS, so the recipe sets its own error handling.
 debug release dist:
-	@if [ "$(CHANNEL)" = release ]; then \
+	@set -euo pipefail; \
+	if [ "$(CHANNEL)" = release ]; then \
 		[ -n "$(BUILD_NUMBER)" ] || { echo "make dist requires BUILD_NUMBER (e.g. the CI run number)" >&2; exit 1; }; \
 		build="$(BUILD_NUMBER)"; \
 	else \
